@@ -498,9 +498,9 @@ function Invoke-DeviceLookup {
         $webSnippets = Search-DeviceWeb -HardwareId $Dev.InstanceId
     } catch {}
     
-    # 3. Gemini AI synthesis (Optional, if API key set)
+    # 3. Gemini AI synthesis (Optional, if API key is resolved)
     $geminiSummary = $null
-    if ($null -ne $env:GEMINI_API_KEY -and $webSnippets.Count -gt 0) {
+    if ($webSnippets.Count -gt 0) {
         $geminiSummary = Get-GeminiSummary -HardwareId $Dev.InstanceId -Snippets $webSnippets
     }
     
