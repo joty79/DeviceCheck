@@ -104,7 +104,7 @@ function Update-VisibleRows {
                     if ($d.SearchStatus -eq 'Searching') {
                         $rows.Add([PSCustomObject]@{
                             Type         = 'Status'
-                            Name         = if ($global:CurrentLoadingText) { $global:CurrentLoadingText } else { 'Searching databases & web...' }
+                            Name         = if ($script:CurrentLoadingText) { $script:CurrentLoadingText } else { 'Searching databases & web...' }
                             ParentIsLast = $isLast
                         })
                     }
@@ -143,8 +143,8 @@ function Render-Frame {
         $maxVisible = 12
     }
     
-    $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $visibleRows.Count - $maxVisible)))
-    $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $visibleRows.Count - 1)
+    $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $script:visibleRows.Count - $maxVisible)))
+    $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:visibleRows.Count - 1)
     
     Begin-SyncRender
     try { Clear-Host } catch {}
@@ -161,7 +161,7 @@ function Render-Frame {
     
     # Render visible rows
     for ($index = $viewTop; $index -le $viewBot; $index++) {
-        $row = $visibleRows[$index]
+        $row = $script:visibleRows[$index]
         $isSelected = ($index -eq $selectedIndex)
         
         if ($row.Type -eq 'Category') {
@@ -232,14 +232,14 @@ function Render-Frame {
     }
     
     # Scrolling indicators below
-    $belowCount = $visibleRows.Count - 1 - $viewBot
+    $belowCount = $script:visibleRows.Count - 1 - $viewBot
     $belowMessage = if ($belowCount -gt 0) { "  $($_C.Dim)$([char]0x2193) $belowCount more below$($_C.Reset)" } else { '' }
     Write-Host "$belowMessage$($_C.EraseLn)"
     
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     #  DETAILS INSPECTOR PANEL
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    $selectedRow = $visibleRows[$selectedIndex]
+    $selectedRow = $script:visibleRows[$selectedIndex]
     if ($selectedRow.Type -eq 'Device') {
         Write-UiSection -Title "Device Properties" -Icon ""
         Write-Host "  $($_C.Dim)FriendlyName :$($_C.Reset) $($_C.White)$($selectedRow.Ref.FriendlyName)$($_C.Reset)$($_C.EraseLn)"
@@ -424,7 +424,7 @@ function Invoke-DeviceLookup {
             $escapedQuery = [Uri]::EscapeDataString($query)
             $uri = "https://html.duckduckgo.com/html/?q=$escapedQuery"
             
-            $response = Invoke-WebRequest -Uri $uri -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 10
+            $response = Invoke-WebRequest -Uri $uri -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 15
             $content = $response.Content
             
             $matches = [regex]::Matches($content, '<a class="result__snippet"[^>]*>(.*?)</a>')
@@ -482,7 +482,7 @@ function Invoke-DeviceLookup {
                 $uri = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$resolvedApiKey"
                 
                 try {
-                    $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 10
+                    $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
                     if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
                         $geminiSummary = $response.candidates[0].content.parts[0].text.Trim()
                     } else {
@@ -538,14 +538,14 @@ function Invoke-DeviceLookup {
         $spText = $spinner[$spIndex]
         $spIndex = ($spIndex + 1) % $spinner.Count
         
-        $global:CurrentLoadingText = "Searching databases & web... $spText"
-        $global:visibleRows = Update-VisibleRows
+        $script:CurrentLoadingText = "Searching databases & web... $spText"
+        $script:visibleRows = Update-VisibleRows
         Render-Frame
         
         Start-Sleep -Milliseconds 150
     }
     
-    $global:CurrentLoadingText = $null
+    $script:CurrentLoadingText = $null
     
     # Retrieve results
     try {
@@ -557,7 +557,7 @@ function Invoke-DeviceLookup {
     }
     $ps.Dispose()
     
-    $global:visibleRows = Update-VisibleRows
+    $script:visibleRows = Update-VisibleRows
     Render-Frame
 }
 
@@ -573,7 +573,7 @@ try {
         Lock-ViewportToWindow
         
         # Calculate current visible rows
-        $visibleRows = Update-VisibleRows
+        $script:visibleRows = Update-VisibleRows
         
         # Clamp selected index to selectable types (Category / Device / Result)
         if ($visibleRows.Count -eq 0) {
