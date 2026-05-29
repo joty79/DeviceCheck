@@ -202,6 +202,16 @@ function Get-GeminiSummary {
         $apiKey = $env:GOOGLE_API_KEY
     }
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        try {
+            $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GOOGLE_API_KEY
+        } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        try {
+            $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GEMINI_API_KEY
+        } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
         return $null
     }
     
@@ -393,7 +403,25 @@ function Render-Frame {
         Write-UiSection -Title "Device Properties" -Icon ""
         Write-Host "  $($_C.Dim)FriendlyName :$($_C.Reset) $($_C.White)$($selectedRow.Ref.FriendlyName)$($_C.Reset)$($_C.EraseLn)"
         Write-Host "  $($_C.Dim)InstanceId   :$($_C.Reset) $($_C.White)$($selectedRow.Ref.InstanceId)$($_C.Reset)$($_C.EraseLn)"
-        Write-Host "  $($_C.Dim)Status       :$($_C.Reset) $($_C.White)$($selectedRow.Ref.Status) (ErrorCode: $($selectedRow.Ref.ConfigManagerErrorCode))$($_C.Reset)$($_C.EraseLn)"
+        
+        $errCode = $selectedRow.Ref.ConfigManagerErrorCode
+        $errDesc = switch ($errCode) {
+            0  { "Working properly" }
+            10 { "Device cannot start (CM_PROB_FAILED_START)" }
+            21 { "Device has been uninstalled (CM_PROB_WILL_BE_REMOVED)" }
+            22 { "Device is disabled (CM_PROB_DISABLED)" }
+            28 { "Drivers not installed (CM_PROB_FAILED_INSTALL)" }
+            43 { "Device reported problems (CM_PROB_FAILED_POST_START)" }
+            default { "Unknown problem status" }
+        }
+        
+        $statusText = if ($errCode -eq 0) {
+            "$($_C.OK)OK ($errDesc)$($_C.Reset)"
+        } else {
+            "$($_C.Fail)Error (Code ${errCode}: $errDesc)$($_C.Reset)"
+        }
+        
+        Write-Host "  $($_C.Dim)Status       :$($_C.Reset) $statusText$($_C.EraseLn)"
     }
     elseif ($selectedRow.Type -eq 'Result') {
         Write-UiSection -Title "Detailed Web Snippet" -Icon ""
