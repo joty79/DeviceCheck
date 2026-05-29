@@ -75,173 +75,6 @@ function Get-DeviceCategories {
     return $categories
 }
 
-# Perform local database lookup (usb.ids / pci.ids)
-function Get-LocalDeviceLookup {
-    param(
-        [string]$InstanceId
-    )
-    
-    $vendorId = $null
-    $deviceId = $null
-    $dbUrl = $null
-    $dbName = $null
-    
-    if ($InstanceId -match 'USB\\VID_([0-9a-fA-F]{4})&PID_([0-9a-fA-F]{4})') {
-        $vendorId = $Matches[1].ToLower()
-        $deviceId = $Matches[2].ToLower()
-        $dbUrl = "http://www.linux-usb.org/usb.ids"
-        $dbName = "usb.ids"
-    }
-    elseif ($InstanceId -match 'PCI\\VEN_([0-9a-fA-F]{4})&DEV_([0-9a-fA-F]{4})') {
-        $vendorId = $Matches[1].ToLower()
-        $deviceId = $Matches[2].ToLower()
-        $dbUrl = "https://pci-ids.ucw.cz/v2.2/pci.ids"
-        $dbName = "pci.ids"
-    }
-    else {
-        return $null
-    }
-    
-    $dbPath = Join-Path $env:TEMP $dbName
-    try {
-        if (-not (Test-Path $dbPath) -or (Get-Item $dbPath).LastWriteTime -lt (Get-Date).AddDays(-30)) {
-            Invoke-WebRequest -Uri $dbUrl -OutFile $dbPath -UserAgent "Mozilla/5.0" -TimeoutSec 15
-        }
-        
-        $vendorName = $null
-        $deviceName = $null
-        $foundVendor = $false
-        
-        foreach ($line in Get-Content $dbPath) {
-            if ($line.StartsWith("#") -or [string]::IsNullOrWhiteSpace($line)) { continue }
-            
-            # Vendor Match (starts with 4 hex, then space/tab, then name)
-            if ($line -match "^([0-9a-fA-F]{4})\s+(.+)$") {
-                if ($Matches[1].ToLower() -eq $vendorId) {
-                    $vendorName = $Matches[2].Trim()
-                    $foundVendor = $true
-                    continue
-                } else {
-                    $foundVendor = $false
-                }
-            }
-            
-            # Device Match (starts with tab, then 4 hex, then space/tab, then name)
-            if ($foundVendor -and $line -match "^\t([0-9a-fA-F]{4})\s+(.+)$") {
-                if ($Matches[1].ToLower() -eq $deviceId) {
-                    $deviceName = $Matches[2].Trim()
-                    break
-                }
-            }
-        }
-        
-        if ($vendorName) {
-            return [PSCustomObject]@{
-                Vendor = $vendorName
-                Device = if ($deviceName) { $deviceName } else { "Unknown Device" }
-            }
-        }
-    } catch {
-        # Silent fail on network/parse error
-    }
-    return $null
-}
-
-# Perform DuckDuckGo search for device details
-function Search-DeviceWeb {
-    param([string]$HardwareId)
-    
-    # Extract base VID/PID or VEN/DEV
-    $query = $HardwareId
-    if ($HardwareId -match '^([^\\]+\\[^\\]+)') {
-        $query = $Matches[1]
-    }
-    
-    $escapedQuery = [Uri]::EscapeDataString($query)
-    $uri = "https://html.duckduckgo.com/html/?q=$escapedQuery"
-    
-    $response = Invoke-WebRequest -Uri $uri -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 10
-    $content = $response.Content
-    
-    $matches = [regex]::Matches($content, '<a class="result__snippet"[^>]*>(.*?)</a>')
-    
-    $results = [System.Collections.Generic.List[string]]::new()
-    $seen = @{}
-    
-    foreach ($m in $matches) {
-        $text = $m.Groups[1].Value -replace '<[^>]+>', '' # Strip HTML tags
-        $text = $text -replace '&amp;', '&' -replace '&#92;', '\' -replace '&quot;', '"' -replace '&#x27;', "'" -replace '&lt;', '<' -replace '&gt;', '>'
-        $text = $text.Trim()
-        
-        if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -lt 10) { continue }
-        
-        # Limit duplicates or very similar snippets
-        $hash = $text.Substring(0, [Math]::Min(30, $text.Length))
-        if ($seen.ContainsKey($hash)) { continue }
-        $seen[$hash] = $true
-        
-        $results.Add($text)
-        if ($results.Count -eq 3) { break } # Capture top 3 snippets for AI synthesis
-    }
-    
-    if ($results.Count -eq 0) {
-        $results.Add("No Web search descriptions found.")
-    }
-    return $results
-}
-
-# Call Google Gemini API to synthesize snippets (Free Tier)
-function Get-GeminiSummary {
-    param(
-        [string]$HardwareId,
-        [string[]]$Snippets
-    )
-    
-    $apiKey = $env:GEMINI_API_KEY
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
-        $apiKey = $env:GOOGLE_API_KEY
-    }
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
-        try {
-            $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GOOGLE_API_KEY
-        } catch {}
-    }
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
-        try {
-            $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GEMINI_API_KEY
-        } catch {}
-    }
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
-        return $null
-    }
-    
-    $snippetsText = $Snippets -join "`n"
-    $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$HardwareId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n$snippetsText"
-    
-    $body = @{
-        contents = @(
-            @{
-                parts = @(
-                    @{ text = $prompt }
-                )
-            }
-        )
-    } | ConvertTo-Json -Depth 5
-    
-    $uri = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$apiKey"
-    
-    try {
-        $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 10
-        if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
-            $resultText = $response.candidates[0].content.parts[0].text
-            return $resultText.Trim()
-        }
-    } catch {
-        # Silent fallback
-    }
-    return $null
-}
-
 # Helper to generate visible rows list
 function Update-VisibleRows {
     $rows = [System.Collections.Generic.List[object]]::new()
@@ -271,7 +104,7 @@ function Update-VisibleRows {
                     if ($d.SearchStatus -eq 'Searching') {
                         $rows.Add([PSCustomObject]@{
                             Type         = 'Status'
-                            Name         = 'Searching databases & web...'
+                            Name         = if ($global:CurrentLoadingText) { $global:CurrentLoadingText } else { 'Searching databases & web...' }
                             ParentIsLast = $isLast
                         })
                     }
@@ -370,10 +203,18 @@ function Render-Frame {
             }
             
             # Highlight prefixes like [Local DB] or [Gemini AI] in gold, rest in white
-            if ($text -match '^(\[(Local DB|Gemini AI|Web Snippet)\])(.*)$') {
+            if ($text -match '^(\[(Local DB|Gemini AI|Gemini Error|Web Snippet)\])(.*)$') {
                 $tag = $Matches[1]
                 $rest = $Matches[3]
-                $tagColor = if ($tag -like '*Local*') { $_C.OK } elseif ($tag -like '*Gemini*') { $_C.Gold } else { $_C.Info }
+                $tagColor = if ($tag -like '*Local*') {
+                    $_C.OK
+                } elseif ($tag -like '*Error*') {
+                    $_C.Fail
+                } elseif ($tag -like '*Gemini*') {
+                    $_C.Gold
+                } else {
+                    $_C.Info
+                }
                 
                 if ($isSelected) {
                     Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $parentPrefix$branch$tag$rest $($_C.Reset)$($_C.EraseLn)"
@@ -424,9 +265,14 @@ function Render-Frame {
         Write-Host "  $($_C.Dim)Status       :$($_C.Reset) $statusText$($_C.EraseLn)"
     }
     elseif ($selectedRow.Type -eq 'Result') {
-        Write-UiSection -Title "Detailed Web Snippet" -Icon ""
-        # Clean prefix tag before printing
-        $cleanText = $selectedRow.Name -replace '^\[(Local DB|Gemini AI|Web Snippet)\]\s*', ''
+        # Select title prefix based on tag
+        $titleText = "Detailed Info"
+        if ($selectedRow.Name -match '^\[(Local DB|Gemini AI|Gemini Error|Web Snippet)\]') {
+            $titleText = $Matches[1]
+        }
+        Write-UiSection -Title $titleText -Icon ""
+        
+        $cleanText = $selectedRow.Name -replace '^\[(Local DB|Gemini AI|Gemini Error|Web Snippet)\]\s*', ''
         
         # Word wrap logic for console
         $w = (Get-UiWidth) - 4
@@ -443,11 +289,10 @@ function Render-Frame {
         }
         if ($currentLine) { $wrappedLines += $currentLine }
         
-        # Print top 2 wrapped lines to fit details box nicely
+        # Print top 3 wrapped lines to fit details box nicely
         for ($k = 0; $k -lt [Math]::Min(3, $wrappedLines.Count); $k++) {
             Write-Host "$($_C.White)$($wrappedLines[$k])$($_C.Reset)$($_C.EraseLn)"
         }
-        # Print blank line if description was short
         if ($wrappedLines.Count -eq 1) { Write-Host "$($_C.EraseLn)" }
         Write-Host "$($_C.EraseLn)"
     }
@@ -476,47 +321,242 @@ function Render-Frame {
     End-SyncRender
 }
 
-# Run full lookup pipeline for a device
+# Run full lookup pipeline for a device (Asynchronously with loading spinner)
 function Invoke-DeviceLookup {
     param($Dev)
     
     $Dev.SearchStatus = 'Searching'
-    $global:visibleRows = Update-VisibleRows
-    Render-Frame
     
-    $results = [System.Collections.Generic.List[string]]::new()
-    
-    # 1. Local Database Lookup (Instant & Offline)
-    $localInfo = Get-LocalDeviceLookup -InstanceId $Dev.InstanceId
-    if ($null -ne $localInfo) {
-        $results.Add("[Local DB] Vendor: $($localInfo.Vendor) | Device: $($localInfo.Device)")
+    # Resolve the API Key on the main thread first to pass it to the background thread
+    $apiKey = $env:GEMINI_API_KEY
+    if ([string]::IsNullOrWhiteSpace($apiKey)) { $apiKey = $env:GOOGLE_API_KEY }
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        try {
+            $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GOOGLE_API_KEY
+        } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        try {
+            $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GEMINI_API_KEY
+        } catch {}
     }
     
-    # 2. Web search snippets (DuckDuckGo HTML)
-    $webSnippets = @()
-    try {
-        $webSnippets = Search-DeviceWeb -HardwareId $Dev.InstanceId
-    } catch {}
-    
-    # 3. Gemini AI synthesis (Optional, if API key is resolved)
-    $geminiSummary = $null
-    if ($webSnippets.Count -gt 0) {
-        $geminiSummary = Get-GeminiSummary -HardwareId $Dev.InstanceId -Snippets $webSnippets
-    }
-    
-    if ($null -ne $geminiSummary) {
-        $results.Insert(0, "[Gemini AI] $geminiSummary")
+    # Start background execution
+    $ps = [PowerShell]::Create()
+    $null = $ps.AddScript({
+        param($InstanceId, $resolvedApiKey)
+        
+        # Define local helper functions inside the background thread
+        function Get-LocalDeviceLookup {
+            param([string]$InstId)
+            
+            $vendorId = $null
+            $deviceId = $null
+            $dbUrl = $null
+            $dbName = $null
+            
+            if ($InstId -match 'USB\\VID_([0-9a-fA-F]{4})&PID_([0-9a-fA-F]{4})') {
+                $vendorId = $Matches[1].ToLower()
+                $deviceId = $Matches[2].ToLower()
+                $dbUrl = "http://www.linux-usb.org/usb.ids"
+                $dbName = "usb.ids"
+            }
+            elseif ($InstId -match 'PCI\\VEN_([0-9a-fA-F]{4})&DEV_([0-9a-fA-F]{4})') {
+                $vendorId = $Matches[1].ToLower()
+                $deviceId = $Matches[2].ToLower()
+                $dbUrl = "https://pci-ids.ucw.cz/v2.2/pci.ids"
+                $dbName = "pci.ids"
+            }
+            else {
+                return $null
+            }
+            
+            # Use TEMP folder inside runspace context
+            $dbPath = Join-Path $env:TEMP $dbName
+            try {
+                if (-not (Test-Path $dbPath) -or (Get-Item $dbPath).LastWriteTime -lt (Get-Date).AddDays(-30)) {
+                    Invoke-WebRequest -Uri $dbUrl -OutFile $dbPath -UserAgent "Mozilla/5.0" -TimeoutSec 15
+                }
+                
+                $vendorName = $null
+                $deviceName = $null
+                $foundVendor = $false
+                
+                foreach ($line in Get-Content $dbPath) {
+                    if ($line.StartsWith("#") -or [string]::IsNullOrWhiteSpace($line)) { continue }
+                    
+                    if ($line -match "^([0-9a-fA-F]{4})\s+(.+)$") {
+                        if ($Matches[1].ToLower() -eq $vendorId) {
+                            $vendorName = $Matches[2].Trim()
+                            $foundVendor = $true
+                            continue
+                        } else {
+                            $foundVendor = $false
+                        }
+                    }
+                    
+                    if ($foundVendor -and $line -match "^\t([0-9a-fA-F]{4})\s+(.+)$") {
+                        if ($Matches[1].ToLower() -eq $deviceId) {
+                            $deviceName = $Matches[2].Trim()
+                            break
+                        }
+                    }
+                }
+                
+                if ($vendorName) {
+                    return [PSCustomObject]@{
+                        Vendor = $vendorName
+                        Device = if ($deviceName) { $deviceName } else { "Unknown Device" }
+                    }
+                }
+            } catch {}
+            return $null
+        }
+        
+        function Search-DeviceWeb {
+            param([string]$HwId)
+            
+            $query = $HwId
+            if ($HwId -match '^([^\\]+\\[^\\]+)') {
+                $query = $Matches[1]
+            }
+            
+            $escapedQuery = [Uri]::EscapeDataString($query)
+            $uri = "https://html.duckduckgo.com/html/?q=$escapedQuery"
+            
+            $response = Invoke-WebRequest -Uri $uri -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 10
+            $content = $response.Content
+            
+            $matches = [regex]::Matches($content, '<a class="result__snippet"[^>]*>(.*?)</a>')
+            
+            $results = [System.Collections.Generic.List[string]]::new()
+            $seen = @{}
+            
+            foreach ($m in $matches) {
+                $text = $m.Groups[1].Value -replace '<[^>]+>', ''
+                $text = $text -replace '&amp;', '&' -replace '&#92;', '\' -replace '&quot;', '"' -replace '&#x27;', "'" -replace '&lt;', '<' -replace '&gt;', '>'
+                $text = $text.Trim()
+                
+                if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -lt 10) { continue }
+                
+                $hash = $text.Substring(0, [Math]::Min(30, $text.Length))
+                if ($seen.ContainsKey($hash)) { continue }
+                $seen[$hash] = $true
+                
+                $results.Add($text)
+                if ($results.Count -eq 3) { break }
+            }
+            
+            if ($results.Count -eq 0) {
+                $results.Add("No Web search descriptions found.")
+            }
+            return $results
+        }
+        
+        # Pipeline Execution:
+        $results = [System.Collections.Generic.List[string]]::new()
+        
+        $localInfo = Get-LocalDeviceLookup -InstId $InstanceId
+        if ($null -ne $localInfo) {
+            $results.Add("[Local DB] Vendor: $($localInfo.Vendor) | Device: $($localInfo.Device)")
+        }
+        
+        $webSnippets = @()
+        try {
+            $webSnippets = Search-DeviceWeb -HwId $InstanceId
+        } catch {}
+        
+        $geminiSummary = $null
+        $geminiError = $null
+        
         if ($webSnippets.Count -gt 0) {
-            $results.Add("[Web Snippet] $($webSnippets[0])")
+            if ($resolvedApiKey) {
+                $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$InstanceId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($webSnippets -join "`n")
+                
+                $body = @{
+                    contents = @(
+                        @{ parts = @( @{ text = $prompt } ) }
+                    )
+                } | ConvertTo-Json -Depth 5
+                
+                $uri = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$resolvedApiKey"
+                
+                try {
+                    $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 10
+                    if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
+                        $geminiSummary = $response.candidates[0].content.parts[0].text.Trim()
+                    } else {
+                        $geminiError = "Empty response from Gemini API."
+                    }
+                } catch {
+                    $msg = $_.Exception.Message
+                    if ($_.Exception.Response) {
+                        $status = [int]$_.Exception.Response.StatusCode
+                        if ($status -eq 429) {
+                            $msg = "Rate limit exceeded (429 Too Many Requests)."
+                        } elseif ($status -eq 403) {
+                            $msg = "Access Forbidden (403). Check API Key validity."
+                        } elseif ($status -eq 404) {
+                            $msg = "Model/Endpoint not found (404)."
+                        }
+                    }
+                    $geminiError = $msg
+                }
+            } else {
+                $geminiError = "No API Key found (set GOOGLE_API_KEY)."
+            }
+        } else {
+            $geminiError = "No search snippets gathered to synthesize."
         }
-    } else {
-        foreach ($snip in $webSnippets) {
-            $results.Add("[Web Snippet] $snip")
+        
+        if ($null -ne $geminiSummary) {
+            $results.Insert(0, "[Gemini AI] $geminiSummary")
+            if ($webSnippets.Count -gt 0) {
+                $results.Add("[Web Snippet] $($webSnippets[0])")
+            }
+        } else {
+            if ($null -ne $geminiError) {
+                $results.Insert(0, "[Gemini Error] $geminiError")
+            }
+            foreach ($snip in $webSnippets) {
+                $results.Add("[Web Snippet] $snip")
+            }
         }
+        
+        return $results
+    })
+    $null = $ps.AddArgument($Dev.InstanceId)
+    $null = $ps.AddArgument($apiKey)
+    
+    $asyncResult = $ps.BeginInvoke()
+    
+    # Spinner animation loop on the main thread
+    $spinner = @('|', '/', '-', '\')
+    $spIndex = 0
+    
+    while (-not $asyncResult.IsCompleted) {
+        $spText = $spinner[$spIndex]
+        $spIndex = ($spIndex + 1) % $spinner.Count
+        
+        $global:CurrentLoadingText = "Searching databases & web... $spText"
+        $global:visibleRows = Update-VisibleRows
+        Render-Frame
+        
+        Start-Sleep -Milliseconds 150
     }
     
-    $Dev.SearchResults = $results
-    $Dev.SearchStatus = 'Done'
+    $global:CurrentLoadingText = $null
+    
+    # Retrieve results
+    try {
+        $results = $ps.EndInvoke($asyncResult)
+        $Dev.SearchResults = $results
+        $Dev.SearchStatus = 'Done'
+    } catch {
+        $Dev.SearchStatus = 'Error'
+    }
+    $ps.Dispose()
+    
     $global:visibleRows = Update-VisibleRows
     Render-Frame
 }
