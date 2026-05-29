@@ -75,6 +75,78 @@ function Get-DeviceCategories {
     return $categories
 }
 
+# Perform local database lookup (usb.ids / pci.ids)
+function Get-LocalDeviceLookup {
+    param(
+        [string]$InstanceId
+    )
+    
+    $vendorId = $null
+    $deviceId = $null
+    $dbUrl = $null
+    $dbName = $null
+    
+    if ($InstanceId -match 'USB\\VID_([0-9a-fA-F]{4})&PID_([0-9a-fA-F]{4})') {
+        $vendorId = $Matches[1].ToLower()
+        $deviceId = $Matches[2].ToLower()
+        $dbUrl = "http://www.linux-usb.org/usb.ids"
+        $dbName = "usb.ids"
+    }
+    elseif ($InstanceId -match 'PCI\\VEN_([0-9a-fA-F]{4})&DEV_([0-9a-fA-F]{4})') {
+        $vendorId = $Matches[1].ToLower()
+        $deviceId = $Matches[2].ToLower()
+        $dbUrl = "https://pci-ids.ucw.cz/v2.2/pci.ids"
+        $dbName = "pci.ids"
+    }
+    else {
+        return $null
+    }
+    
+    $dbPath = Join-Path $env:TEMP $dbName
+    try {
+        if (-not (Test-Path $dbPath) -or (Get-Item $dbPath).LastWriteTime -lt (Get-Date).AddDays(-30)) {
+            Invoke-WebRequest -Uri $dbUrl -OutFile $dbPath -UserAgent "Mozilla/5.0" -TimeoutSec 15
+        }
+        
+        $vendorName = $null
+        $deviceName = $null
+        $foundVendor = $false
+        
+        foreach ($line in Get-Content $dbPath) {
+            if ($line.StartsWith("#") -or [string]::IsNullOrWhiteSpace($line)) { continue }
+            
+            # Vendor Match (starts with 4 hex, then space/tab, then name)
+            if ($line -match "^([0-9a-fA-F]{4})\s+(.+)$") {
+                if ($Matches[1].ToLower() -eq $vendorId) {
+                    $vendorName = $Matches[2].Trim()
+                    $foundVendor = $true
+                    continue
+                } else {
+                    $foundVendor = $false
+                }
+            }
+            
+            # Device Match (starts with tab, then 4 hex, then space/tab, then name)
+            if ($foundVendor -and $line -match "^\t([0-9a-fA-F]{4})\s+(.+)$") {
+                if ($Matches[1].ToLower() -eq $deviceId) {
+                    $deviceName = $Matches[2].Trim()
+                    break
+                }
+            }
+        }
+        
+        if ($vendorName) {
+            return [PSCustomObject]@{
+                Vendor = $vendorName
+                Device = if ($deviceName) { $deviceName } else { "Unknown Device" }
+            }
+        }
+    } catch {
+        # Silent fail on network/parse error
+    }
+    return $null
+}
+
 # Perform DuckDuckGo search for device details
 function Search-DeviceWeb {
     param([string]$HardwareId)
@@ -109,13 +181,52 @@ function Search-DeviceWeb {
         $seen[$hash] = $true
         
         $results.Add($text)
-        if ($results.Count -eq 2) { break } # Keep only top 2 snippets
+        if ($results.Count -eq 3) { break } # Capture top 3 snippets for AI synthesis
     }
     
     if ($results.Count -eq 0) {
         $results.Add("No Web search descriptions found.")
     }
     return $results
+}
+
+# Call Google Gemini API to synthesize snippets (Free Tier)
+function Get-GeminiSummary {
+    param(
+        [string]$HardwareId,
+        [string[]]$Snippets
+    )
+    
+    $apiKey = $env:GEMINI_API_KEY
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        return $null
+    }
+    
+    $snippetsText = $Snippets -join "`n"
+    $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$HardwareId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n$snippetsText"
+    
+    $body = @{
+        contents = @(
+            @{
+                parts = @(
+                    @{ text = $prompt }
+                )
+            }
+        )
+    } | ConvertTo-Json -Depth 5
+    
+    $uri = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+    
+    try {
+        $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 10
+        if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
+            $resultText = $response.candidates[0].content.parts[0].text
+            return $resultText.Trim()
+        }
+    } catch {
+        # Silent fallback
+    }
+    return $null
 }
 
 # Helper to generate visible rows list
@@ -147,7 +258,7 @@ function Update-VisibleRows {
                     if ($d.SearchStatus -eq 'Searching') {
                         $rows.Add([PSCustomObject]@{
                             Type         = 'Status'
-                            Name         = 'Searching web...'
+                            Name         = 'Searching databases & web...'
                             ParentIsLast = $isLast
                         })
                     }
@@ -179,7 +290,6 @@ function Update-VisibleRows {
 
 # Render a single UI frame
 function Render-Frame {
-    # Calculate scrolling metrics
     try {
         $maxVisible = [Math]::Max(5, $Host.UI.RawUI.WindowSize.Height - 10)
     } catch {
@@ -245,7 +355,15 @@ function Render-Frame {
                 $text = $text.Substring(0, [Math]::Max(5, $maxTextLen - 3)) + "..."
             }
             
-            Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$($_C.White)$text$($_C.Reset)$($_C.EraseLn)"
+            # Highlight prefixes like [Local DB] or [Gemini AI] in gold, rest in white
+            if ($text -match '^(\[(Local DB|Gemini AI|Web Snippet)\])(.*)$') {
+                $tag = $Matches[1]
+                $rest = $Matches[3]
+                $tagColor = if ($tag -like '*Local*') { $_C.OK } elseif ($tag -like '*Gemini*') { $_C.Gold } else { $_C.Info }
+                Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$tagColor$tag$($_C.Reset)$($_C.White)$rest$($_C.Reset)$($_C.EraseLn)"
+            } else {
+                Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$($_C.White)$text$($_C.Reset)$($_C.EraseLn)"
+            }
         }
     }
     
@@ -262,7 +380,7 @@ function Render-Frame {
         New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'S' -Color $_C.Gold
-        New-UiShortcutSegment -Text ' = search web   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text ' = search   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'Q / Esc' -Color $_C.Fail
         New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
     )
@@ -270,6 +388,51 @@ function Render-Frame {
     Write-Host "$($_E)[J" -NoNewline
     
     End-SyncRender
+}
+
+# Run full lookup pipeline for a device
+function Invoke-DeviceLookup {
+    param($Dev)
+    
+    $Dev.SearchStatus = 'Searching'
+    $global:visibleRows = Update-VisibleRows
+    Render-Frame
+    
+    $results = [System.Collections.Generic.List[string]]::new()
+    
+    # 1. Local Database Lookup (Instant & Offline)
+    $localInfo = Get-LocalDeviceLookup -InstanceId $Dev.InstanceId
+    if ($null -ne $localInfo) {
+        $results.Add("[Local DB] Vendor: $($localInfo.Vendor) | Device: $($localInfo.Device)")
+    }
+    
+    # 2. Web search snippets (DuckDuckGo HTML)
+    $webSnippets = @()
+    try {
+        $webSnippets = Search-DeviceWeb -HardwareId $Dev.InstanceId
+    } catch {}
+    
+    # 3. Gemini AI synthesis (Optional, if API key set)
+    $geminiSummary = $null
+    if ($null -ne $env:GEMINI_API_KEY -and $webSnippets.Count -gt 0) {
+        $geminiSummary = Get-GeminiSummary -HardwareId $Dev.InstanceId -Snippets $webSnippets
+    }
+    
+    if ($null -ne $geminiSummary) {
+        $results.Insert(0, "[Gemini AI] $geminiSummary")
+        if ($webSnippets.Count -gt 0) {
+            $results.Add("[Web Snippet] $($webSnippets[0])")
+        }
+    } else {
+        foreach ($snip in $webSnippets) {
+            $results.Add("[Web Snippet] $snip")
+        }
+    }
+    
+    $Dev.SearchResults = $results
+    $Dev.SearchStatus = 'Done'
+    $global:visibleRows = Update-VisibleRows
+    Render-Frame
 }
 
 # Initial categories detection
@@ -305,7 +468,6 @@ try {
             'UpArrow' {
                 if ($selectedIndex -gt 0) {
                     $idx = $selectedIndex - 1
-                    # Skip non-selectable rows
                     while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Category', 'Device')) {
                         $idx--
                     }
@@ -317,7 +479,6 @@ try {
             'DownArrow' {
                 if ($selectedIndex -lt ($visibleRows.Count - 1)) {
                     $idx = $selectedIndex + 1
-                    # Skip non-selectable rows
                     while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Category', 'Device')) {
                         $idx++
                     }
@@ -381,23 +542,7 @@ try {
             'S' {
                 $currentRow = $visibleRows[$selectedIndex]
                 if ($currentRow.Type -eq 'Device') {
-                    $dev = $currentRow.Ref
-                    $dev.SearchStatus = 'Searching'
-                    
-                    # Force redraw for searching state
-                    $visibleRows = Update-VisibleRows
-                    Render-Frame
-                    
-                    try {
-                        $results = Search-DeviceWeb -HardwareId $dev.InstanceId
-                        $dev.SearchResults = $results
-                        $dev.SearchStatus = 'Done'
-                    } catch {
-                        $dev.SearchStatus = 'Error'
-                    }
-                    
-                    # Refresh rows
-                    $visibleRows = Update-VisibleRows
+                    Invoke-DeviceLookup -Dev $currentRow.Ref
                 }
             }
             'Escape' {
@@ -410,25 +555,11 @@ try {
                 continue
             }
             default {
-                # Handle lowercase 's' keypress as well
+                # Handle lowercase 's' keypress
                 if ($key.KeyChar -eq 's') {
                     $currentRow = $visibleRows[$selectedIndex]
                     if ($currentRow.Type -eq 'Device') {
-                        $dev = $currentRow.Ref
-                        $dev.SearchStatus = 'Searching'
-                        
-                        $visibleRows = Update-VisibleRows
-                        Render-Frame
-                        
-                        try {
-                            $results = Search-DeviceWeb -HardwareId $dev.InstanceId
-                            $dev.SearchResults = $results
-                            $dev.SearchStatus = 'Done'
-                        } catch {
-                            $dev.SearchStatus = 'Error'
-                        }
-                        
-                        $visibleRows = Update-VisibleRows
+                        Invoke-DeviceLookup -Dev $currentRow.Ref
                     }
                 }
             }
