@@ -294,9 +294,10 @@ function Update-VisibleRows {
 # Render a single UI frame
 function Render-Frame {
     try {
-        $maxVisible = [Math]::Max(5, $Host.UI.RawUI.WindowSize.Height - 10)
+        # Reduce window height dynamically to accommodate details panel
+        $maxVisible = [Math]::Max(4, $Host.UI.RawUI.WindowSize.Height - 16)
     } catch {
-        $maxVisible = 15
+        $maxVisible = 12
     }
     
     $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $visibleRows.Count - $maxVisible)))
@@ -363,9 +364,18 @@ function Render-Frame {
                 $tag = $Matches[1]
                 $rest = $Matches[3]
                 $tagColor = if ($tag -like '*Local*') { $_C.OK } elseif ($tag -like '*Gemini*') { $_C.Gold } else { $_C.Info }
-                Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$tagColor$tag$($_C.Reset)$($_C.White)$rest$($_C.Reset)$($_C.EraseLn)"
+                
+                if ($isSelected) {
+                    Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $parentPrefix$branch$tag$rest $($_C.Reset)$($_C.EraseLn)"
+                } else {
+                    Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$tagColor$tag$($_C.Reset)$($_C.White)$rest$($_C.Reset)$($_C.EraseLn)"
+                }
             } else {
-                Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$($_C.White)$text$($_C.Reset)$($_C.EraseLn)"
+                if ($isSelected) {
+                    Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $parentPrefix$branch$text $($_C.Reset)$($_C.EraseLn)"
+                } else {
+                    Write-Host "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$($_C.White)$text$($_C.Reset)$($_C.EraseLn)"
+                }
             }
         }
     }
@@ -374,7 +384,52 @@ function Render-Frame {
     $belowCount = $visibleRows.Count - 1 - $viewBot
     $belowMessage = if ($belowCount -gt 0) { "  $($_C.Dim)$([char]0x2193) $belowCount more below$($_C.Reset)" } else { '' }
     Write-Host "$belowMessage$($_C.EraseLn)"
-    Write-Host "$($_C.EraseLn)"
+    
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  DETAILS INSPECTOR PANEL
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    $selectedRow = $visibleRows[$selectedIndex]
+    if ($selectedRow.Type -eq 'Device') {
+        Write-UiSection -Title "Device Properties" -Icon ""
+        Write-Host "  $($_C.Dim)FriendlyName :$($_C.Reset) $($_C.White)$($selectedRow.Ref.FriendlyName)$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)InstanceId   :$($_C.Reset) $($_C.White)$($selectedRow.Ref.InstanceId)$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)Status       :$($_C.Reset) $($_C.White)$($selectedRow.Ref.Status) (ErrorCode: $($selectedRow.Ref.ConfigManagerErrorCode))$($_C.Reset)$($_C.EraseLn)"
+    }
+    elseif ($selectedRow.Type -eq 'Result') {
+        Write-UiSection -Title "Detailed Web Snippet" -Icon ""
+        # Clean prefix tag before printing
+        $cleanText = $selectedRow.Name -replace '^\[(Local DB|Gemini AI|Web Snippet)\]\s*', ''
+        
+        # Word wrap logic for console
+        $w = (Get-UiWidth) - 4
+        $wrappedLines = @()
+        $words = $cleanText -split ' '
+        $currentLine = "  "
+        foreach ($word in $words) {
+            if (($currentLine + $word).Length -gt $w) {
+                $wrappedLines += $currentLine
+                $currentLine = "  $word"
+            } else {
+                $currentLine = if ($currentLine -eq "  ") { "  $word" } else { "$currentLine $word" }
+            }
+        }
+        if ($currentLine) { $wrappedLines += $currentLine }
+        
+        # Print top 2 wrapped lines to fit details box nicely
+        for ($k = 0; $k -lt [Math]::Min(3, $wrappedLines.Count); $k++) {
+            Write-Host "$($_C.White)$($wrappedLines[$k])$($_C.Reset)$($_C.EraseLn)"
+        }
+        # Print blank line if description was short
+        if ($wrappedLines.Count -eq 1) { Write-Host "$($_C.EraseLn)" }
+        Write-Host "$($_C.EraseLn)"
+    }
+    else {
+        # Category or other type
+        Write-UiSection -Title "Category Info" -Icon ""
+        Write-Host "  $($_C.White)Group: $($selectedRow.Name)$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "$($_C.EraseLn)"
+        Write-Host "$($_C.EraseLn)"
+    }
     
     # Footer
     $segments = @(
@@ -452,12 +507,12 @@ try {
         # Calculate current visible rows
         $visibleRows = Update-VisibleRows
         
-        # Clamp selected index to selectable types (Category / Device)
+        # Clamp selected index to selectable types (Category / Device / Result)
         if ($visibleRows.Count -eq 0) {
             $selectedIndex = 0
         } else {
             $selectedIndex = [Math]::Max(0, [Math]::Min($selectedIndex, $visibleRows.Count - 1))
-            while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device')) {
+            while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
                 $selectedIndex--
             }
         }
@@ -471,10 +526,10 @@ try {
             'UpArrow' {
                 if ($selectedIndex -gt 0) {
                     $idx = $selectedIndex - 1
-                    while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Category', 'Device')) {
+                    while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Category', 'Device', 'Result')) {
                         $idx--
                     }
-                    if ($visibleRows[$idx].Type -in @('Category', 'Device')) {
+                    if ($visibleRows[$idx].Type -in @('Category', 'Device', 'Result')) {
                         $selectedIndex = $idx
                     }
                 }
@@ -482,23 +537,23 @@ try {
             'DownArrow' {
                 if ($selectedIndex -lt ($visibleRows.Count - 1)) {
                     $idx = $selectedIndex + 1
-                    while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Category', 'Device')) {
+                    while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Category', 'Device', 'Result')) {
                         $idx++
                     }
-                    if ($visibleRows[$idx].Type -in @('Category', 'Device')) {
+                    if ($visibleRows[$idx].Type -in @('Category', 'Device', 'Result')) {
                         $selectedIndex = $idx
                     }
                 }
             }
             'PageUp' {
                 $selectedIndex = [Math]::Max(0, $selectedIndex - 10)
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device')) {
+                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
                     $selectedIndex--
                 }
             }
             'PageDown' {
                 $selectedIndex = [Math]::Min($visibleRows.Count - 1, $selectedIndex + 10)
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device')) {
+                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
                     $selectedIndex--
                 }
             }
@@ -507,7 +562,7 @@ try {
             }
             'End' {
                 $selectedIndex = $visibleRows.Count - 1
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device')) {
+                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
                     $selectedIndex--
                 }
             }
