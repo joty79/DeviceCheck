@@ -199,6 +199,9 @@ function Get-GeminiSummary {
     
     $apiKey = $env:GEMINI_API_KEY
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        $apiKey = $env:GOOGLE_API_KEY
+    }
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
         return $null
     }
     
