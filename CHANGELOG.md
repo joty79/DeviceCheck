@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-05-30
+
+### Added
+- Modified Gemini and OpenRouter searches to run concurrently using separate PowerShell Runspaces instead of sequentially.
+- Implemented individual real-time spinners in the TUI tree for each model request.
+- Added dynamic model tags showing model names (`gemini-2.5-flash` and `nvidia/llama-3.1-nemotron-70b-instruct:free`).
+- Applied custom color highlights for model tags (Blue for Google Gemini, Green for Nvidia models).
+
 ## [0.1.2] - 2026-05-30
 
 ### Added

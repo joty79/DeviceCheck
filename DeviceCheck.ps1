@@ -202,18 +202,21 @@ function Render-Frame {
                 $text = $text.Substring(0, [Math]::Max(5, $maxTextLen - 3)) + "..."
             }
             
-            # Highlight prefixes like [Local DB] or [Gemini AI] in gold, rest in white
-            if ($text -match '^(\[(Local DB|Gemini AI|OpenRouter AI|Gemini Error|OpenRouter Error|Web Snippet)\])(.*)$') {
+            # Highlight prefixes like [Local DB] or [Gemini: ...] or [OpenRouter: ...]
+            if ($text -match '^(\[([^\]]+)\])(.*)$') {
                 $tag = $Matches[1]
+                $tagName = $Matches[2]
                 $rest = $Matches[3]
-                $tagColor = if ($tag -like '*Local*') {
-                    $_C.OK
-                } elseif ($tag -like '*Error*') {
+                $tagColor = if ($tagName -like '*Error*') {
                     $_C.Fail
-                } elseif ($tag -like '*Gemini*') {
+                } elseif ($tagName -like '*Gemini*') {
+                    $_C.Info    # Blue for Gemini
+                } elseif ($tagName -like '*nvidia*' -or $tagName -like '*nemotron*') {
+                    $_C.OK      # Green for Nvidia/Nemotron
+                } elseif ($tagName -like '*Local*') {
                     $_C.Gold
-                } elseif ($tag -like '*OpenRouter*') {
-                    $_C.Info
+                } elseif ($tagName -like '*Web*') {
+                    $_C.Warn
                 } else {
                     $_C.Info
                 }
@@ -269,12 +272,12 @@ function Render-Frame {
     elseif ($selectedRow.Type -eq 'Result') {
         # Select title prefix based on tag
         $titleText = "Detailed Info"
-        if ($selectedRow.Name -match '^\[(Local DB|Gemini AI|Gemini Error|Web Snippet)\]') {
+        if ($selectedRow.Name -match '^\[([^\]]+)\]') {
             $titleText = $Matches[1]
         }
         Write-UiSection -Title $titleText -Icon ""
         
-        $cleanText = $selectedRow.Name -replace '^\[(Local DB|Gemini AI|Gemini Error|Web Snippet)\]\s*', ''
+        $cleanText = $selectedRow.Name -replace '^\[[^\]]+\]\s*', ''
         
         # Word wrap logic for console
         $w = (Get-UiWidth) - 4
@@ -327,7 +330,11 @@ function Render-Frame {
 function Invoke-DeviceLookup {
     param($Dev)
     
-    $Dev.SearchStatus = 'Searching'
+    $Dev.SearchStatus = 'Done' # Set to Done immediately so we can render individual progress!
+    $Dev.SearchResults = [System.Collections.Generic.List[string]]::new()
+    
+    $geminiModel = "gemini-2.5-flash"
+    $openRouterModel = "nvidia/llama-3.1-nemotron-70b-instruct:free"
     
     # Resolve the API Key on the main thread first to pass it to the background thread
     $apiKey = $env:GEMINI_API_KEY
@@ -350,10 +357,30 @@ function Invoke-DeviceLookup {
         } catch {}
     }
     
-    # Start background execution
-    $ps = [PowerShell]::Create()
-    $null = $ps.AddScript({
-        param($InstanceId, $resolvedApiKey, $resolvedOpenRouterKey)
+    # Initialize states: 'Searching', 'Waiting', 'Done', 'Error', 'None'
+    $localState = 'Searching'
+    $webState = 'Searching'
+    $geminiState = if ($apiKey) { 'Waiting' } else { 'None' }
+    $openRouterState = if ($openRouterKey) { 'Waiting' } else { 'None' }
+    
+    $localVal = $null
+    $webVal = $null
+    $webSnippets = @()
+    $geminiVal = $null
+    $openRouterVal = $null
+    
+    # Pre-populate search rows showing status
+    $newResults = [System.Collections.Generic.List[string]]::new()
+    if ($geminiState -eq 'Waiting') { $newResults.Add("[Gemini: $geminiModel] (Waiting for web search...)") }
+    if ($openRouterState -eq 'Waiting') { $newResults.Add("[OpenRouter: $openRouterModel] (Waiting for web search...)") }
+    if ($localState -eq 'Searching') { $newResults.Add("[Local DB] (Searching...)") }
+    if ($webState -eq 'Searching') { $newResults.Add("[Web Snippet] (Searching...)") }
+    $Dev.SearchResults = $newResults
+    
+    # 1. Start background execution for Web and Local Search
+    $psWeb = [PowerShell]::Create()
+    $null = $psWeb.AddScript({
+        param($InstanceId)
         
         # Define local helper functions inside the background thread
         function Get-LocalDeviceLookup {
@@ -462,161 +489,310 @@ function Invoke-DeviceLookup {
             return $results
         }
         
-        # Pipeline Execution:
-        $results = [System.Collections.Generic.List[string]]::new()
-        
+        # Local lookup execution
         $localInfo = Get-LocalDeviceLookup -InstId $InstanceId
         if ($null -ne $localInfo) {
-            $results.Add("[Local DB] Vendor: $($localInfo.Vendor) | Device: $($localInfo.Device)")
+            Write-Output ([PSCustomObject]@{ Source = 'Local'; Result = "[Local DB] Vendor: $($localInfo.Vendor) | Device: $($localInfo.Device)" })
         }
         
+        # Web lookup execution
         $webSnippets = @()
         try {
             $webSnippets = Search-DeviceWeb -HwId $InstanceId
-        } catch {}
-        
-        $geminiSummary = $null
-        $geminiError = $null
-        
-        $openRouterSummary = $null
-        $openRouterError = $null
-        
-        if ($webSnippets.Count -gt 0) {
-            $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$InstanceId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($webSnippets -join "`n")
-            
-            # 1. Query Google Gemini API if key is available
-            if ($resolvedApiKey) {
-                $body = @{
-                    contents = @(
-                        @{ parts = @( @{ text = $prompt } ) }
-                    )
-                } | ConvertTo-Json -Depth 5
-                
-                $uri = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$resolvedApiKey"
-                
-                try {
-                    $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
-                    if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
-                        $geminiSummary = $response.candidates[0].content.parts[0].text.Trim()
-                    } else {
-                        $geminiError = "Empty response from Gemini API."
-                    }
-                } catch {
-                    $msg = $_.Exception.Message
-                    if ($_.Exception.Response) {
-                        $status = [int]$_.Exception.Response.StatusCode
-                        if ($status -eq 429) {
-                            $msg = "Rate limit exceeded (429 Too Many Requests)."
-                        } elseif ($status -eq 403) {
-                            $msg = "Access Forbidden (403). Check API Key validity."
-                        } elseif ($status -eq 404) {
-                            $msg = "Model/Endpoint not found (404)."
-                        }
-                    }
-                    $geminiError = $msg
-                }
+            if ($webSnippets.Count -gt 0) {
+                Write-Output ([PSCustomObject]@{ Source = 'Web'; Snippets = $webSnippets; Result = $webSnippets[0] })
             } else {
-                $geminiError = "No Gemini API Key found (set GOOGLE_API_KEY)."
+                Write-Output ([PSCustomObject]@{ Source = 'Web'; Snippets = @(); Result = $null })
             }
-            
-            # 2. Query OpenRouter API if key is available
-            if ($resolvedOpenRouterKey) {
-                $orBody = @{
-                    model = "openrouter/free"
-                    messages = @(
-                        @{ role = "user"; content = $prompt }
-                    )
-                } | ConvertTo-Json -Depth 5
-                
-                $headers = @{
-                    "Authorization" = "Bearer $resolvedOpenRouterKey"
-                    "HTTP-Referer"  = "https://github.com/joty79/DeviceCheck"
-                    "X-Title"       = "DeviceCheck Manager"
-                }
-                
-                try {
-                    $response = Invoke-RestMethod -Uri "https://openrouter.ai/api/v1/chat/completions" `
-                        -Method Post `
-                        -Headers $headers `
-                        -ContentType "application/json" `
-                        -Body $orBody `
-                        -TimeoutSec 30
-                    
-                    if ($response -and $response.choices -and $response.choices[0].message.content) {
-                        $openRouterSummary = $response.choices[0].message.content.Trim()
-                    } else {
-                        $openRouterError = "Empty response from OpenRouter API."
-                    }
-                } catch {
-                    $openRouterError = $_.Exception.Message
-                }
-            } else {
-                $openRouterError = "No OpenRouter API Key found (set OPENROUTER_API_KEY)."
-            }
-        } else {
-            $geminiError = "No search snippets gathered to synthesize."
-            $openRouterError = "No search snippets gathered to synthesize."
+        } catch {
+            Write-Output ([PSCustomObject]@{ Source = 'Web'; Snippets = @(); Result = $null })
         }
-        
-        # Add Google Gemini result or error if resolvedApiKey was set
-        if ($resolvedApiKey) {
-            if ($null -ne $geminiSummary) {
-                $results.Insert(0, "[Gemini AI] $geminiSummary")
-            } else {
-                $results.Insert(0, "[Gemini Error] $geminiError")
-            }
-        }
-        
-        # Add OpenRouter result or error if resolvedOpenRouterKey was set
-        if ($resolvedOpenRouterKey) {
-            if ($null -ne $openRouterSummary) {
-                $idx = if ($resolvedApiKey) { 1 } else { 0 }
-                $results.Insert($idx, "[OpenRouter AI] $openRouterSummary")
-            } else {
-                $idx = if ($resolvedApiKey) { 1 } else { 0 }
-                $results.Insert($idx, "[OpenRouter Error] $openRouterError")
-            }
-        }
-        
-        # Add one web snippet for reference if available
-        if ($webSnippets.Count -gt 0) {
-            $results.Add("[Web Snippet] $($webSnippets[0])")
-        }
-        
-        return $results
+        return $null
     })
-    $null = $ps.AddArgument($Dev.InstanceId)
-    $null = $ps.AddArgument($apiKey)
-    $null = $ps.AddArgument($openRouterKey)
+    $null = $psWeb.AddArgument($Dev.InstanceId)
     
-    $asyncResult = $ps.BeginInvoke()
+    $outputWeb = [System.Management.Automation.PSDataCollection[PSObject]]::new()
+    $asyncWeb = $psWeb.BeginInvoke($outputWeb)
+    
+    $psGemini = $null
+    $asyncGemini = $null
+    $outputGemini = $null
+    $geminiStarted = $false
+    
+    $psOpenRouter = $null
+    $asyncOpenRouter = $null
+    $outputOpenRouter = $null
+    $openRouterStarted = $false
     
     # Spinner animation loop on the main thread
     $spinner = @('|', '/', '-', '\')
     $spIndex = 0
     
-    while (-not $asyncResult.IsCompleted) {
-        $spText = $spinner[$spIndex]
-        $spIndex = ($spIndex + 1) % $spinner.Count
-        
-        $script:CurrentLoadingText = "Searching databases & web... $spText"
-        $script:visibleRows = Update-VisibleRows
-        Render-Frame
-        
-        Start-Sleep -Milliseconds 150
-    }
-    
-    $script:CurrentLoadingText = $null
-    
-    # Retrieve results
     try {
-        $results = $ps.EndInvoke($asyncResult)
-        $Dev.SearchResults = $results
-        $Dev.SearchStatus = 'Done'
+        while (
+            $null -ne $psWeb -or
+            $null -ne $psGemini -or
+            $null -ne $psOpenRouter -or
+            $geminiState -eq 'Waiting' -or
+            $openRouterState -eq 'Waiting'
+        ) {
+            $spChar = $spinner[$spIndex]
+            $spIndex = ($spIndex + 1) % $spinner.Count
+            
+            # 1. Process Web / Local Runspace Output
+            if ($null -ne $psWeb) {
+                while ($outputWeb.Count -gt 0) {
+                    $data = $outputWeb[0]
+                    $outputWeb.RemoveAt(0)
+                    if ($null -ne $data) {
+                        if ($data.Source -eq 'Local') {
+                            $localVal = $data.Result
+                            $localState = 'Done'
+                        }
+                        elseif ($data.Source -eq 'Web') {
+                            $webVal = $data.Result
+                            if ($data.Snippets) {
+                                $webSnippets = $data.Snippets
+                            }
+                            $webState = 'Done'
+                        }
+                    }
+                }
+                
+                if ($asyncWeb.IsCompleted) {
+                    $webState = 'Done'
+                    if ($localState -eq 'Searching') { $localState = 'Done' }
+                    try {
+                        $null = $psWeb.EndInvoke($asyncWeb)
+                    } catch {}
+                    $psWeb.Dispose()
+                    $psWeb = $null
+                    $asyncWeb = $null
+                }
+            }
+            
+            # 2. Trigger AI Runspaces if Web search is Done and keys are available
+            if ($webState -eq 'Done') {
+                $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$($Dev.InstanceId)'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($webSnippets -join "`n")
+                
+                # Start Gemini
+                if ($geminiState -eq 'Waiting' -and -not $geminiStarted) {
+                    $geminiStarted = $true
+                    $geminiState = 'Searching'
+                    
+                    $psGemini = [PowerShell]::Create()
+                    $null = $psGemini.AddScript({
+                        param($PromptText, $resolvedApiKey, $resolvedModelName)
+                        $body = @{
+                            contents = @(
+                                @{ parts = @( @{ text = $PromptText } ) }
+                            )
+                        } | ConvertTo-Json -Depth 5
+                        
+                        $uri = "https://generativelanguage.googleapis.com/v1beta/models/$($resolvedModelName):generateContent?key=$resolvedApiKey"
+                        
+                        try {
+                            $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
+                            if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
+                                $geminiSummary = $response.candidates[0].content.parts[0].text.Trim()
+                                return [PSCustomObject]@{ Status = 'Done'; Result = $geminiSummary }
+                            } else {
+                                return [PSCustomObject]@{ Status = 'Error'; Result = "Empty response from Gemini API." }
+                            }
+                        } catch {
+                            $msg = $_.Exception.Message
+                            if ($_.Exception.Response) {
+                                $status = [int]$_.Exception.Response.StatusCode
+                                if ($status -eq 429) {
+                                    $msg = "Rate limit exceeded (429 Too Many Requests)."
+                                } elseif ($status -eq 403) {
+                                    $msg = "Access Forbidden (403). Check API Key validity."
+                                } elseif ($status -eq 404) {
+                                    $msg = "Model/Endpoint not found (404)."
+                                }
+                            }
+                            return [PSCustomObject]@{ Status = 'Error'; Result = $msg }
+                        }
+                    })
+                    $null = $psGemini.AddArgument($prompt)
+                    $null = $psGemini.AddArgument($apiKey)
+                    $null = $psGemini.AddArgument($geminiModel)
+                    
+                    $outputGemini = [System.Management.Automation.PSDataCollection[PSObject]]::new()
+                    $asyncGemini = $psGemini.BeginInvoke($outputGemini)
+                }
+                
+                # Start OpenRouter
+                if ($openRouterState -eq 'Waiting' -and -not $openRouterStarted) {
+                    $openRouterStarted = $true
+                    $openRouterState = 'Searching'
+                    
+                    $psOpenRouter = [PowerShell]::Create()
+                    $null = $psOpenRouter.AddScript({
+                        param($PromptText, $resolvedOpenRouterKey, $resolvedModelName)
+                        $orBody = @{
+                            model = $resolvedModelName
+                            messages = @(
+                                @{ role = "user"; content = $PromptText }
+                            )
+                        } | ConvertTo-Json -Depth 5
+                        
+                        $headers = @{
+                            "Authorization" = "Bearer $resolvedOpenRouterKey"
+                            "HTTP-Referer"  = "https://github.com/joty79/DeviceCheck"
+                            "X-Title"       = "DeviceCheck Manager"
+                        }
+                        
+                        try {
+                            $response = Invoke-RestMethod -Uri "https://openrouter.ai/api/v1/chat/completions" `
+                                -Method Post `
+                                -Headers $headers `
+                                -ContentType "application/json" `
+                                -Body $orBody `
+                                -TimeoutSec 30
+                            
+                            if ($response -and $response.choices -and $response.choices[0].message.content) {
+                                $openRouterSummary = $response.choices[0].message.content.Trim()
+                                return [PSCustomObject]@{ Status = 'Done'; Result = $openRouterSummary }
+                            } else {
+                                return [PSCustomObject]@{ Status = 'Error'; Result = "Empty response from OpenRouter API." }
+                            }
+                        } catch {
+                            return [PSCustomObject]@{ Status = 'Error'; Result = $_.Exception.Message }
+                        }
+                    })
+                    $null = $psOpenRouter.AddArgument($prompt)
+                    $null = $psOpenRouter.AddArgument($openRouterKey)
+                    $null = $psOpenRouter.AddArgument($openRouterModel)
+                    
+                    $outputOpenRouter = [System.Management.Automation.PSDataCollection[PSObject]]::new()
+                    $asyncOpenRouter = $psOpenRouter.BeginInvoke($outputOpenRouter)
+                }
+                
+                # If both were not configured, ensure state doesn't stay Waiting
+                if ($geminiState -eq 'Waiting') { $geminiState = 'None' }
+                if ($openRouterState -eq 'Waiting') { $openRouterState = 'None' }
+            }
+            
+            # 3. Process Gemini Output
+            if ($null -ne $psGemini) {
+                while ($outputGemini.Count -gt 0) {
+                    $data = $outputGemini[0]
+                    $outputGemini.RemoveAt(0)
+                    if ($null -ne $data) {
+                        $geminiState = $data.Status
+                        $geminiVal = $data.Result
+                    }
+                }
+                
+                if ($asyncGemini.IsCompleted) {
+                    try {
+                        $resList = $psGemini.EndInvoke($asyncGemini)
+                        if ($geminiState -eq 'Searching') {
+                            if ($resList.Count -gt 0 -and $null -ne $resList[0]) {
+                                $geminiState = $resList[0].Status
+                                $geminiVal = $resList[0].Result
+                            } else {
+                                $geminiState = 'Error'
+                                $geminiVal = 'Empty response from Gemini API.'
+                            }
+                        }
+                    } catch {
+                        $geminiState = 'Error'
+                        $geminiVal = $_.Exception.Message
+                    }
+                    $psGemini.Dispose()
+                    $psGemini = $null
+                    $asyncGemini = $null
+                }
+            }
+            
+            # 4. Process OpenRouter Output
+            if ($null -ne $psOpenRouter) {
+                while ($outputOpenRouter.Count -gt 0) {
+                    $data = $outputOpenRouter[0]
+                    $outputOpenRouter.RemoveAt(0)
+                    if ($null -ne $data) {
+                        $openRouterState = $data.Status
+                        $openRouterVal = $data.Result
+                    }
+                }
+                
+                if ($asyncOpenRouter.IsCompleted) {
+                    try {
+                        $resList = $psOpenRouter.EndInvoke($asyncOpenRouter)
+                        if ($openRouterState -eq 'Searching') {
+                            if ($resList.Count -gt 0 -and $null -ne $resList[0]) {
+                                $openRouterState = $resList[0].Status
+                                $openRouterVal = $resList[0].Result
+                            } else {
+                                $openRouterState = 'Error'
+                                $openRouterVal = 'Empty response from OpenRouter API.'
+                            }
+                        }
+                    } catch {
+                        $openRouterState = 'Error'
+                        $openRouterVal = $_.Exception.Message
+                    }
+                    $psOpenRouter.Dispose()
+                    $psOpenRouter = $null
+                    $asyncOpenRouter = $null
+                }
+            }
+            
+            # Rebuild the visible search result rows
+            $newResults = [System.Collections.Generic.List[string]]::new()
+            
+            # Gemini display
+            if ($geminiState -eq 'Waiting') {
+                $newResults.Add("[Gemini: $geminiModel] (Waiting for web search...)")
+            } elseif ($geminiState -eq 'Searching') {
+                $newResults.Add("[Gemini: $geminiModel] (Searching... $spChar)")
+            } elseif ($geminiState -eq 'Done') {
+                $newResults.Add("[Gemini: $geminiModel] $geminiVal")
+            } elseif ($geminiState -eq 'Error') {
+                $newResults.Add("[Gemini Error] $geminiVal")
+            }
+            
+            # OpenRouter display
+            if ($openRouterState -eq 'Waiting') {
+                $newResults.Add("[OpenRouter: $openRouterModel] (Waiting for web search...)")
+            } elseif ($openRouterState -eq 'Searching') {
+                $newResults.Add("[OpenRouter: $openRouterModel] (Searching... $spChar)")
+            } elseif ($openRouterState -eq 'Done') {
+                $newResults.Add("[OpenRouter: $openRouterModel] $openRouterVal")
+            } elseif ($openRouterState -eq 'Error') {
+                $newResults.Add("[OpenRouter Error] $openRouterVal")
+            }
+            
+            # Local DB display
+            if ($localState -eq 'Searching') {
+                $newResults.Add("[Local DB] (Searching... $spChar)")
+            } elseif ($localState -eq 'Done' -and $localVal) {
+                $newResults.Add($localVal)
+            }
+            
+            # Web Snippet display
+            if ($webState -eq 'Searching') {
+                $newResults.Add("[Web Snippet] (Searching... $spChar)")
+            } elseif ($webState -eq 'Done' -and $webVal) {
+                $newResults.Add("[Web Snippet] $webVal")
+            }
+            
+            $Dev.SearchResults = $newResults
+            $script:visibleRows = Update-VisibleRows
+            Render-Frame
+            
+            Start-Sleep -Milliseconds 150
+        }
     } catch {
         $Dev.SearchStatus = 'Error'
+    } finally {
+        # Safe cleanup in case of exceptions or early exit
+        if ($null -ne $psWeb) { try { $psWeb.Dispose() } catch {} }
+        if ($null -ne $psGemini) { try { $psGemini.Dispose() } catch {} }
+        if ($null -ne $psOpenRouter) { try { $psOpenRouter.Dispose() } catch {} }
     }
-    $ps.Dispose()
     
     $script:visibleRows = Update-VisibleRows
     Render-Frame
