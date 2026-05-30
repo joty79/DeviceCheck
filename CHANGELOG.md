@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-30
+
+### Added
+- Added OpenRouter API integration as a backup fallback path. If the primary Google Gemini API call fails (or if the key is missing), and `OPENROUTER_API_KEY` is present in the environment/registry, the script queries `google/gemini-2.5-flash:free` via OpenRouter and prefixes the result with `[Gemini AI] (Backup)`.
+
 ## [0.1.1] - 2026-05-29
 
 ### Fixed

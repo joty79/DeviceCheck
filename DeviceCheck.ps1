@@ -341,10 +341,17 @@ function Invoke-DeviceLookup {
         } catch {}
     }
     
+    $openRouterKey = $env:OPENROUTER_API_KEY
+    if ([string]::IsNullOrWhiteSpace($openRouterKey)) {
+        try {
+            $openRouterKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).OPENROUTER_API_KEY
+        } catch {}
+    }
+    
     # Start background execution
     $ps = [PowerShell]::Create()
     $null = $ps.AddScript({
-        param($InstanceId, $resolvedApiKey)
+        param($InstanceId, $resolvedApiKey, $resolvedOpenRouterKey)
         
         # Define local helper functions inside the background thread
         function Get-LocalDeviceLookup {
@@ -468,11 +475,13 @@ function Invoke-DeviceLookup {
         
         $geminiSummary = $null
         $geminiError = $null
+        $usedBackup = $false
         
         if ($webSnippets.Count -gt 0) {
+            $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$InstanceId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($webSnippets -join "`n")
+            
+            # 1. Try Google Gemini API first if key is available
             if ($resolvedApiKey) {
-                $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$InstanceId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($webSnippets -join "`n")
-                
                 $body = @{
                     contents = @(
                         @{ parts = @( @{ text = $prompt } ) }
@@ -503,14 +512,50 @@ function Invoke-DeviceLookup {
                     $geminiError = $msg
                 }
             } else {
-                $geminiError = "No API Key found (set GOOGLE_API_KEY)."
+                $geminiError = "No Gemini API Key found (set GOOGLE_API_KEY)."
+            }
+            
+            # 2. Try OpenRouter backup if Gemini failed or key was missing, and OpenRouter key is available
+            if ([string]::IsNullOrWhiteSpace($geminiSummary) -and $resolvedOpenRouterKey) {
+                $orBody = @{
+                    model = "google/gemini-2.5-flash:free"
+                    messages = @(
+                        @{ role = "user"; content = $prompt }
+                    )
+                } | ConvertTo-Json -Depth 5
+                
+                $headers = @{
+                    "Authorization" = "Bearer $resolvedOpenRouterKey"
+                    "HTTP-Referer"  = "https://github.com/joty79/DeviceCheck"
+                    "X-Title"       = "DeviceCheck Manager"
+                }
+                
+                try {
+                    $response = Invoke-RestMethod -Uri "https://openrouter.ai/api/v1/chat/completions" `
+                        -Method Post `
+                        -Headers $headers `
+                        -ContentType "application/json" `
+                        -Body $orBody `
+                        -TimeoutSec 30
+                    
+                    if ($response -and $response.choices -and $response.choices[0].message.content) {
+                        $geminiSummary = $response.choices[0].message.content.Trim()
+                        $geminiError = $null
+                        $usedBackup = $true
+                    } else {
+                        $geminiError = "Empty response from OpenRouter API."
+                    }
+                } catch {
+                    $geminiError = "OpenRouter backup failed: " + $_.Exception.Message
+                }
             }
         } else {
             $geminiError = "No search snippets gathered to synthesize."
         }
         
         if ($null -ne $geminiSummary) {
-            $results.Insert(0, "[Gemini AI] $geminiSummary")
+            $prefix = if ($usedBackup) { "[Gemini AI] (Backup)" } else { "[Gemini AI]" }
+            $results.Insert(0, "$prefix $geminiSummary")
             if ($webSnippets.Count -gt 0) {
                 $results.Add("[Web Snippet] $($webSnippets[0])")
             }
@@ -527,6 +572,7 @@ function Invoke-DeviceLookup {
     })
     $null = $ps.AddArgument($Dev.InstanceId)
     $null = $ps.AddArgument($apiKey)
+    $null = $ps.AddArgument($openRouterKey)
     
     $asyncResult = $ps.BeginInvoke()
     
