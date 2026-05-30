@@ -19,6 +19,10 @@ Initialize-TuiHost
 Write-Host "Caching system device classes..." -ForegroundColor Cyan
 $classMap = @{}
 $script:ActiveSearches = [ordered]@{}
+$script:EvidenceBatchQueue = [System.Collections.Generic.Queue[object]]::new()
+$script:EvidenceBatchQueuedIds = [System.Collections.Generic.HashSet[string]]::new()
+$script:EvidenceBatchState = $null
+$script:EvidenceBatchMaxConcurrent = 4
 $script:RootExpanded = $true
 $script:DeviceCheckCacheRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'DeviceCheck'
 if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {
@@ -357,6 +361,53 @@ function Get-CompactSystemStatus {
     return $text
 }
 
+function Get-ActiveEvidenceBatchCount {
+    if ($null -eq $script:EvidenceBatchState) { return 0 }
+
+    $batchId = $script:EvidenceBatchState.BatchId
+    return @(
+        $script:ActiveSearches.Values | Where-Object {
+            (Get-NotePropertyValue -Object $_ -Name 'EvidenceBatchId') -eq $batchId
+        }
+    ).Count
+}
+
+function Get-EvidenceBatchStatusText {
+    if ($null -eq $script:EvidenceBatchState) { return '' }
+
+    $state = $script:EvidenceBatchState
+    $activeCount = Get-ActiveEvidenceBatchCount
+    $queuedCount = $script:EvidenceBatchQueue.Count
+    $total = [Math]::Max(1, [int]$state.Total)
+    $completed = [Math]::Min([int]$state.Completed, $total)
+    $elapsed = [int]((Get-Date) - $state.StartedAt).TotalSeconds
+    $barWidth = 18
+    $filled = [Math]::Min($barWidth, [int][Math]::Floor(($completed / $total) * $barWidth))
+    $bar = ('#' * $filled) + ('-' * ($barWidth - $filled))
+
+    if ($queuedCount -eq 0 -and $activeCount -eq 0 -and $completed -ge $total) {
+        return "Evidence complete: $($state.Label) [$bar] $completed/$total | ${elapsed}s"
+    }
+
+    return "Evidence scan: $($state.Label) [$bar] $completed/$total | active $activeCount | queued $queuedCount | ${elapsed}s"
+}
+
+function Complete-EvidenceBatchIfFinished {
+    if ($null -eq $script:EvidenceBatchState) { return }
+    if ($script:EvidenceBatchQueue.Count -gt 0) { return }
+    if ((Get-ActiveEvidenceBatchCount) -gt 0) { return }
+
+    $state = $script:EvidenceBatchState
+    $total = [Math]::Max(0, [int]$state.Total)
+    if ([int]$state.Completed -lt $total) { return }
+
+    $elapsed = [int]((Get-Date) - $state.StartedAt).TotalSeconds
+    $errorText = if ([int]$state.Errors -gt 0) { " | $($state.Errors) errors" } else { '' }
+    $script:SystemScanMessage = "Evidence scan complete: $($state.Label) | $($state.Completed)/$total devices | ${elapsed}s$errorText | $(Get-Date -Format 'HH:mm:ss')"
+    $script:EvidenceBatchState = $null
+    $script:EvidenceBatchQueuedIds.Clear()
+}
+
 function Wrap-PlainText {
     param(
         [AllowEmptyString()][string]$Text,
@@ -430,6 +481,7 @@ function Get-DeviceCategories {
             IsProblem              = ($dev.ConfigManagerErrorCode -ne 0)
             SearchStatus           = $null      # $null, 'Searching', 'Done', 'Error'
             SearchResults          = @()        # Array of strings
+            EvidenceCached         = (Test-Path -LiteralPath (Get-DeviceEvidenceCachePath -InstanceId $dev.InstanceId))
         }
 
         if (-not $grouped.ContainsKey($className)) {
@@ -705,15 +757,20 @@ function Get-DetailDisplayLines {
             ).Count
             $cachedEvidenceCount = @(
                 $allDevices | Where-Object {
-                    Test-Path -LiteralPath (Get-DeviceEvidenceCachePath -InstanceId $_.InstanceId)
+                    [bool](Get-NotePropertyValue -Object $_ -Name 'EvidenceCached')
                 }
             ).Count
-            $evidenceText = if ($activeEvidenceCount -gt 0) {
-                "$activeEvidenceCount scanning / $cachedEvidenceCount cached"
+            $queuedEvidenceCount = @(
+                $allDevices | Where-Object {
+                    $script:EvidenceBatchQueuedIds.Contains($_.InstanceId)
+                }
+            ).Count
+            $evidenceText = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) {
+                "$activeEvidenceCount scanning / $queuedEvidenceCount queued / $cachedEvidenceCount cached"
             } else {
                 "$cachedEvidenceCount cached"
             }
-            $evidenceColor = if ($activeEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
+            $evidenceColor = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
             $lines.Add((New-KeyValueLine -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor))
         }
     }
@@ -801,15 +858,20 @@ function Get-DetailDisplayLines {
             ).Count
             $cachedEvidenceCount = @(
                 $categoryDevices | Where-Object {
-                    Test-Path -LiteralPath (Get-DeviceEvidenceCachePath -InstanceId $_.InstanceId)
+                    [bool](Get-NotePropertyValue -Object $_ -Name 'EvidenceCached')
                 }
             ).Count
-            $evidenceText = if ($activeEvidenceCount -gt 0) {
-                "$activeEvidenceCount scanning / $cachedEvidenceCount cached"
+            $queuedEvidenceCount = @(
+                $categoryDevices | Where-Object {
+                    $script:EvidenceBatchQueuedIds.Contains($_.InstanceId)
+                }
+            ).Count
+            $evidenceText = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) {
+                "$activeEvidenceCount scanning / $queuedEvidenceCount queued / $cachedEvidenceCount cached"
             } else {
                 "$cachedEvidenceCount cached"
             }
-            $evidenceColor = if ($activeEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
+            $evidenceColor = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
             $lines.Add((New-KeyValueLine -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor))
         }
     }
@@ -1101,8 +1163,9 @@ function Render-Frame {
     try { $windowHeight = $Host.UI.RawUI.WindowSize.Height } catch { $windowHeight = 32 }
 
     $useDualPane = ($uiWidth -ge 136)
+    $batchStatus = Get-EvidenceBatchStatusText
     $footerHeight = 1
-    $headerReserve = 7
+    $headerReserve = if ([string]::IsNullOrWhiteSpace($batchStatus)) { 7 } else { 8 }
     $availableRows = [Math]::Max(8, $windowHeight - $headerReserve - $footerHeight)
 
     if ($useDualPane) {
@@ -1128,6 +1191,9 @@ function Render-Frame {
     $statusWidth = [Math]::Max(10, $uiWidth - 2)
     $compactStatus = Get-CompactSystemStatus -StatusText $script:SystemScanMessage
     Write-Host "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
+    if (-not [string]::IsNullOrWhiteSpace($batchStatus)) {
+        Write-Host "  $($_C.Warn)$(Format-UiValue -Text $batchStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
+    }
 
     if ($useDualPane) {
         $leftTitle = New-SectionLine -Title 'Device Connection Tree' -Width $leftWidth
@@ -1222,7 +1288,8 @@ function Start-DeviceLookup {
     param(
         $Dev,
         [switch]$EvidenceOnly,
-        [switch]$ForceEvidenceRefresh
+        [switch]$ForceEvidenceRefresh,
+        [string]$EvidenceBatchId
     )
 
     $instanceId = $Dev.InstanceId
@@ -1612,6 +1679,7 @@ function Start-DeviceLookup {
         OpenRouterState    = $openRouterState
         EvidenceState      = $evidenceState
         EvidenceOnly       = [bool]$EvidenceOnly
+        EvidenceBatchId    = $EvidenceBatchId
 
         LocalVal           = $null
         WebVal             = $null
@@ -1635,22 +1703,76 @@ function Start-DeviceEvidenceBatchScan {
     if ($null -eq $Devices -or $Devices.Count -eq 0) { return }
 
     $devices = @($Devices)
-    $startedCount = 0
+    if ([string]::IsNullOrWhiteSpace($Label)) { $Label = 'selected group' }
+
+    if ($null -eq $script:EvidenceBatchState -or (
+            $script:EvidenceBatchQueue.Count -eq 0 -and
+            (Get-ActiveEvidenceBatchCount) -eq 0
+        )) {
+        $script:EvidenceBatchQueue.Clear()
+        $script:EvidenceBatchQueuedIds.Clear()
+        $script:EvidenceBatchState = [pscustomobject]@{
+            BatchId        = [guid]::NewGuid().ToString('n')
+            Label          = $Label
+            Total          = 0
+            Started        = 0
+            Completed      = 0
+            Errors         = 0
+            AlreadyRunning = 0
+            AlreadyQueued  = 0
+            StartedAt      = Get-Date
+        }
+    }
+
+    $batchId = $script:EvidenceBatchState.BatchId
+    $queuedCount = 0
     $alreadyRunningCount = 0
+    $alreadyQueuedCount = 0
 
     foreach ($device in $devices) {
         if ($script:ActiveSearches.Contains($device.InstanceId)) {
             $alreadyRunningCount++
             continue
         }
+        if ($script:EvidenceBatchQueuedIds.Contains($device.InstanceId)) {
+            $alreadyQueuedCount++
+            continue
+        }
 
-        Start-DeviceLookup -Dev $device -EvidenceOnly -ForceEvidenceRefresh
-        $startedCount++
+        $script:EvidenceBatchQueue.Enqueue([pscustomobject]@{
+                Device  = $device
+                BatchId = $batchId
+            })
+        $null = $script:EvidenceBatchQueuedIds.Add($device.InstanceId)
+        $queuedCount++
     }
 
-    if ([string]::IsNullOrWhiteSpace($Label)) { $Label = 'selected group' }
-    $parts = @("Evidence scan: $Label", "$startedCount started", "$alreadyRunningCount already running", "$($devices.Count) devices", (Get-Date -Format 'HH:mm:ss'))
+    $script:EvidenceBatchState.Total += $queuedCount
+    $script:EvidenceBatchState.AlreadyRunning += $alreadyRunningCount
+    $script:EvidenceBatchState.AlreadyQueued += $alreadyQueuedCount
+
+    Start-PendingEvidenceBatchScans
+
+    $parts = @("Evidence scan queued: $Label", "$queuedCount queued", "$alreadyRunningCount already running", "$alreadyQueuedCount already queued", "$($devices.Count) selected", (Get-Date -Format 'HH:mm:ss'))
     $script:SystemScanMessage = ($parts -join ' | ')
+}
+
+function Start-PendingEvidenceBatchScans {
+    if ($null -eq $script:EvidenceBatchState) { return }
+
+    while ($script:EvidenceBatchQueue.Count -gt 0 -and (Get-ActiveEvidenceBatchCount) -lt $script:EvidenceBatchMaxConcurrent) {
+        $queueItem = $script:EvidenceBatchQueue.Dequeue()
+        $device = $queueItem.Device
+        $script:EvidenceBatchQueuedIds.Remove($device.InstanceId) | Out-Null
+
+        if ($script:ActiveSearches.Contains($device.InstanceId)) {
+            $script:EvidenceBatchState.AlreadyRunning++
+            continue
+        }
+
+        Start-DeviceLookup -Dev $device -EvidenceOnly -ForceEvidenceRefresh -EvidenceBatchId $queueItem.BatchId
+        $script:EvidenceBatchState.Started++
+    }
 }
 
 function Start-CategoryEvidenceScan {
@@ -2089,8 +2211,22 @@ function Update-ActiveSearches {
     }
 
     foreach ($id in $completedIds) {
+        $completedSearch = $script:ActiveSearches[$id]
+        if ($completedSearch.EvidenceState -eq 'Done' -and $completedSearch.EvidencePath) {
+            $completedSearch.Device.EvidenceCached = $true
+        }
+        $completedBatchId = Get-NotePropertyValue -Object $completedSearch -Name 'EvidenceBatchId'
+        if ($null -ne $script:EvidenceBatchState -and $completedBatchId -eq $script:EvidenceBatchState.BatchId) {
+            $script:EvidenceBatchState.Completed++
+            if ($completedSearch.EvidenceState -eq 'Error') {
+                $script:EvidenceBatchState.Errors++
+            }
+        }
         $script:ActiveSearches.Remove($id)
     }
+
+    Start-PendingEvidenceBatchScans
+    Complete-EvidenceBatchIfFinished
 }
 
 # Override Read-ConsoleKey to support background search ticks & smooth rendering
@@ -2107,8 +2243,8 @@ function Read-ConsoleKey {
                 }
             }
 
-            # Update active background searches and redraw
-            if ($script:ActiveSearches.Count -gt 0) {
+            # Update active/pending background searches and redraw
+            if ($script:ActiveSearches.Count -gt 0 -or $script:EvidenceBatchQueue.Count -gt 0) {
                 Update-ActiveSearches
                 $script:visibleRows = Update-VisibleRows
                 if ($script:visibleRows.Count -gt 0) {
@@ -2338,6 +2474,8 @@ finally {
             Stop-DeviceLookup -InstanceId $id
         }
     }
+    if ($null -ne $script:EvidenceBatchQueue) { $script:EvidenceBatchQueue.Clear() }
+    if ($null -ne $script:EvidenceBatchQueuedIds) { $script:EvidenceBatchQueuedIds.Clear() }
     # Restore Host Settings
     Restore-TuiHost
     Write-Host 'DeviceCheck closed.'

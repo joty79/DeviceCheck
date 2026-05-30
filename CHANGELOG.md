@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added responsive dual-pane rendering for wide terminals, with the Device Manager-style tree on the left and selected details/evidence on the right.
 - Added ANSI-aware truncation/padding helpers so status lines and panes stay inside the header width instead of overflowing horizontally.
+- Added a live evidence-scan progress line showing completed, active, queued, and elapsed work for root/category batch scans.
 - Added Device Manager-style `+` and `-` expand/collapse shortcuts; on the computer root they expand/collapse every category.
 - Added root-level `E` evidence scans so pressing `E` on the computer root scans all present devices locally.
 - Added category-level `E` evidence scans so pressing `E` on a group scans all devices in that group locally.
@@ -27,11 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented the snapshot in `PROJECT_RULES.md`, including the distinction between text-out model quotas and tool-specific grounding quotas.
 - Added a repository `.gitattributes` file to keep PowerShell, Markdown, JSON, and YAML files on LF line endings while preserving CRLF for Windows launcher/integration files.
 
+### Changed
+- Throttled root/category evidence scans to a small queued batch instead of starting every device runspace at once.
+- Optimized root/category evidence counters to use in-memory cache flags instead of filesystem checks on every render.
+
 ### Fixed
 - Fixed selected-device detail rendering when cached evidence is missing optional properties such as `DEVPKEY_Device_Service`.
 - Balanced wide dual-pane rendering so the device tree and details pane split the terminal width near the middle.
 - Removed evidence-cache status/path rows from the left device tree; selected-device evidence state now stays in the details pane.
 - Fixed category-level evidence scans crashing under `Set-StrictMode` when a category has no optional `DisplayName` property.
+- Fixed completed evidence batch progress staying visible and continuing to increase elapsed time after all devices finished.
 
 ## [0.1.7] - 2026-05-30
 

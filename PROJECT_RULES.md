@@ -153,3 +153,24 @@ Root cause: The `E` hotkey handled category/device/result rows, but skipped root
 Guardrail/rule: `E` should scale by selection scope: root scans all present devices, category scans that group, device scans only the selected device. Already-running device scans should be skipped, not toggled off, by scoped batch scans.
 Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation; `git diff --check`; static root/category/device hotkey checks.
+
+Date: 2026-05-30
+Problem: Root-level `E` evidence scans made the UI lag because the app started one runspace per present device at once.
+Root cause: The batch scan helper directly called `Start-DeviceLookup` for every selected device without throttling.
+Guardrail/rule: Root/category evidence scans must use a throttled queue (`EvidenceBatchMaxConcurrent`) and a visible progress line. Do not start hundreds of evidence runspaces in one frame.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; `git diff --check`; static evidence batch queue/progress checks.
+
+Date: 2026-05-30
+Problem: Evidence batch scans reached `195/195` but the progress line stayed visible and elapsed time kept increasing.
+Root cause: Completed batch state was never cleared after queue and active batch searches reached zero.
+Guardrail/rule: When a throttled evidence batch finishes, move the final result into the normal status line and clear `EvidenceBatchState`/queued IDs so progress rendering stops.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; strict-mode batch completion smoke; `git diff --check`.
+
+Date: 2026-05-30
+Problem: The UI could still feel laggy after large evidence scans even when the batch was complete.
+Root cause: Root/category detail panels counted cached evidence with `Test-Path` across many devices on every render.
+Guardrail/rule: Avoid filesystem work inside per-frame render paths. Track device evidence cache presence in memory and update the flag when an evidence scan completes.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; `git diff --check`; static render-path filesystem check review.
