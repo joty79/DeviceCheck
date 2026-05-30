@@ -518,7 +518,7 @@ function Invoke-DeviceLookup {
             # 2. Try OpenRouter backup if Gemini failed or key was missing, and OpenRouter key is available
             if ([string]::IsNullOrWhiteSpace($geminiSummary) -and $resolvedOpenRouterKey) {
                 $orBody = @{
-                    model = "google/gemini-2.5-flash:free"
+                    model = "openrouter/free"
                     messages = @(
                         @{ role = "user"; content = $prompt }
                     )
