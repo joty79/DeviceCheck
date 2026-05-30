@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2026-05-30
 
 ### Added
-- Added OpenRouter API integration as a backup fallback path. If the primary Google Gemini API call fails (or if the key is missing), and `OPENROUTER_API_KEY` is present in the environment/registry, the script queries `google/gemini-2.5-flash:free` via OpenRouter and prefixes the result with `[Gemini AI] (Backup)`.
+- Added OpenRouter API integration to run side-by-side with the primary Google Gemini API. If both `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) and `OPENROUTER_API_KEY` are present, the script queries both APIs sequentially, displays both summaries in the TUI tree under `[Gemini AI]` and `[OpenRouter AI]`, and provides distinct error reporting for each path.
 
 ## [0.1.1] - 2026-05-29
 

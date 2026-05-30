@@ -203,7 +203,7 @@ function Render-Frame {
             }
             
             # Highlight prefixes like [Local DB] or [Gemini AI] in gold, rest in white
-            if ($text -match '^(\[(Local DB|Gemini AI|Gemini Error|Web Snippet)\])(.*)$') {
+            if ($text -match '^(\[(Local DB|Gemini AI|OpenRouter AI|Gemini Error|OpenRouter Error|Web Snippet)\])(.*)$') {
                 $tag = $Matches[1]
                 $rest = $Matches[3]
                 $tagColor = if ($tag -like '*Local*') {
@@ -212,6 +212,8 @@ function Render-Frame {
                     $_C.Fail
                 } elseif ($tag -like '*Gemini*') {
                     $_C.Gold
+                } elseif ($tag -like '*OpenRouter*') {
+                    $_C.Info
                 } else {
                     $_C.Info
                 }
@@ -475,12 +477,14 @@ function Invoke-DeviceLookup {
         
         $geminiSummary = $null
         $geminiError = $null
-        $usedBackup = $false
+        
+        $openRouterSummary = $null
+        $openRouterError = $null
         
         if ($webSnippets.Count -gt 0) {
             $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$InstanceId'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($webSnippets -join "`n")
             
-            # 1. Try Google Gemini API first if key is available
+            # 1. Query Google Gemini API if key is available
             if ($resolvedApiKey) {
                 $body = @{
                     contents = @(
@@ -515,8 +519,8 @@ function Invoke-DeviceLookup {
                 $geminiError = "No Gemini API Key found (set GOOGLE_API_KEY)."
             }
             
-            # 2. Try OpenRouter backup if Gemini failed or key was missing, and OpenRouter key is available
-            if ([string]::IsNullOrWhiteSpace($geminiSummary) -and $resolvedOpenRouterKey) {
+            # 2. Query OpenRouter API if key is available
+            if ($resolvedOpenRouterKey) {
                 $orBody = @{
                     model = "openrouter/free"
                     messages = @(
@@ -539,33 +543,44 @@ function Invoke-DeviceLookup {
                         -TimeoutSec 30
                     
                     if ($response -and $response.choices -and $response.choices[0].message.content) {
-                        $geminiSummary = $response.choices[0].message.content.Trim()
-                        $geminiError = $null
-                        $usedBackup = $true
+                        $openRouterSummary = $response.choices[0].message.content.Trim()
                     } else {
-                        $geminiError = "Empty response from OpenRouter API."
+                        $openRouterError = "Empty response from OpenRouter API."
                     }
                 } catch {
-                    $geminiError = "OpenRouter backup failed: " + $_.Exception.Message
+                    $openRouterError = $_.Exception.Message
                 }
+            } else {
+                $openRouterError = "No OpenRouter API Key found (set OPENROUTER_API_KEY)."
             }
         } else {
             $geminiError = "No search snippets gathered to synthesize."
+            $openRouterError = "No search snippets gathered to synthesize."
         }
         
-        if ($null -ne $geminiSummary) {
-            $prefix = if ($usedBackup) { "[Gemini AI] (Backup)" } else { "[Gemini AI]" }
-            $results.Insert(0, "$prefix $geminiSummary")
-            if ($webSnippets.Count -gt 0) {
-                $results.Add("[Web Snippet] $($webSnippets[0])")
-            }
-        } else {
-            if ($null -ne $geminiError) {
+        # Add Google Gemini result or error if resolvedApiKey was set
+        if ($resolvedApiKey) {
+            if ($null -ne $geminiSummary) {
+                $results.Insert(0, "[Gemini AI] $geminiSummary")
+            } else {
                 $results.Insert(0, "[Gemini Error] $geminiError")
             }
-            foreach ($snip in $webSnippets) {
-                $results.Add("[Web Snippet] $snip")
+        }
+        
+        # Add OpenRouter result or error if resolvedOpenRouterKey was set
+        if ($resolvedOpenRouterKey) {
+            if ($null -ne $openRouterSummary) {
+                $idx = if ($resolvedApiKey) { 1 } else { 0 }
+                $results.Insert($idx, "[OpenRouter AI] $openRouterSummary")
+            } else {
+                $idx = if ($resolvedApiKey) { 1 } else { 0 }
+                $results.Insert($idx, "[OpenRouter Error] $openRouterError")
             }
+        }
+        
+        # Add one web snippet for reference if available
+        if ($webSnippets.Count -gt 0) {
+            $results.Add("[Web Snippet] $($webSnippets[0])")
         }
         
         return $results
