@@ -83,7 +83,7 @@ function Restore-TuiHost {
 }
 
 function Get-UiWidth {
-    try { [Math]::Min(100, $Host.UI.RawUI.WindowSize.Width - 2) }
+    try { [Math]::Max(60, $Host.UI.RawUI.WindowSize.Width - 2) }
     catch { 80 }
 }
 

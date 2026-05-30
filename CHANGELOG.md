@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-05-30
+
+### Added
+- Added responsive dual-pane rendering for wide terminals, with the Device Manager-style tree on the left and selected details/evidence on the right.
+- Added ANSI-aware truncation/padding helpers so status lines and panes stay inside the header width instead of overflowing horizontally.
+- Added Device Manager-style `+` and `-` expand/collapse shortcuts; on the computer root they expand/collapse every category.
+- Added root-level `E` evidence scans so pressing `E` on the computer root scans all present devices locally.
+- Added category-level `E` evidence scans so pressing `E` on a group scans all devices in that group locally.
+- Added `R` system scan and `E` selected-device evidence scan hotkeys, keeping `S` for selected-device evidence refresh plus web/AI lookup.
+- Added visible running/complete status for `R` system scans, including present-device/category counts and elapsed milliseconds.
+- Added a Device Manager-style computer root row using the Windows system name.
+- Added Device Manager-style category display names while preserving internal PnP class keys for logic.
+- Added a human-readable system summary from System Information fields instead of showing the cache/database machine hash in the header.
+- Added an always-visible selected-device evidence summary in the details panel when cached evidence exists.
+- Added a stable machine evidence ID and selected-device JSON evidence cache under `%LOCALAPPDATA%\DeviceCheck\machines\<machineId>\devices\`.
+- Added local evidence collection for selected devices, including PnP properties, signed driver data, and `pnputil /enum-devices /ids /relations /drivers` output.
+- Included local machine/device evidence in the Gemini/OpenRouter prompt before web snippets so AI summaries are grounded in local facts first.
+- Display all collected DuckDuckGo web snippets in the TUI as numbered evidence rows instead of showing only the first snippet.
+- Added canonical CSV and Markdown extracts for the Google AI Studio free-tier RPM/TPM/RPD limit data.
+- Documented the snapshot in `PROJECT_RULES.md`, including the distinction between text-out model quotas and tool-specific grounding quotas.
+- Added a repository `.gitattributes` file to keep PowerShell, Markdown, JSON, and YAML files on LF line endings while preserving CRLF for Windows launcher/integration files.
+
+### Fixed
+- Fixed selected-device detail rendering when cached evidence is missing optional properties such as `DEVPKEY_Device_Service`.
+- Balanced wide dual-pane rendering so the device tree and details pane split the terminal width near the middle.
+- Removed evidence-cache status/path rows from the left device tree; selected-device evidence state now stays in the details pane.
+- Fixed category-level evidence scans crashing under `Set-StrictMode` when a category has no optional `DisplayName` property.
+
+## [0.1.7] - 2026-05-30
+
+### Changed
+- Switched default Google Gemini model from `gemini-3.5-flash` to `gemini-3.1-flash-lite` during quota testing, with quota interpretation documented in `PROJECT_RULES.md` because tool-specific grounding quotas are separate from normal text-out `generateContent` quotas.
+
+## [0.1.6] - 2026-05-30
+
+### Changed
+- Updated the default Google Gemini model from `gemini-2.5-flash` to the newly released `gemini-3.5-flash` for better reasoning and performance in device information extraction.
+
 ## [0.1.5] - 2026-05-30
 
 ### Fixed

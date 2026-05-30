@@ -32,7 +32,7 @@
 
 ### The Solution
 
-A fast, keyboard-driven console interface that groups all present hardware by their device class and lists them in an expandable/collapsible tree using PowerShell and low-level WMI/CIM properties.
+A fast, keyboard-driven console interface that groups all present hardware by their device class and lists them in an expandable/collapsible tree using PowerShell and low-level WMI/CIM properties. On wide terminals, the app uses a dual-pane layout with the Device Manager-style tree on the left and selected device/system details on the right.
 
 ```
 +------------------------------------------+
@@ -50,6 +50,15 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 # Run the interactive TUI
 .\DeviceCheck.ps1
 ```
+
+| Key | Action |
+|-----|--------|
+| `R` | Rescan machine evidence and the full present PnP device tree; shows running/complete counts |
+| `E` | Collect local evidence for the selected device; on a category, scan that group; on the computer root, scan all present devices |
+| `S` | Refresh selected-device evidence, then run web/AI lookup |
+| `+` | Expand the selected category; on the computer root, expand every category |
+| `-` | Collapse the selected category; on the computer root, collapse every category |
+| `Q` / `Esc` | Exit |
 
 ---
 
@@ -78,7 +87,13 @@ cd DeviceCheck
 
 ```
 DeviceCheck/
+├── data/
+│   └── google-ai-studio-rate-limits-only free.csv  # Local model quota reference
+├── docs/
+│   └── google-ai-studio-rate-limits-only-free.md   # Human-readable quota table
+├── .gitattributes        # Repository line-ending policy
 ├── DeviceCheck.ps1         # Main interactive TUI script
+├── PROJECT_RULES.md        # Project-specific implementation memory
 ├── PS_UI_Blueprint.psm1    # TUI synchronized rendering engine
 ├── README.md               # You are here
 └── CHANGELOG.md            # Project version history
@@ -96,9 +111,30 @@ It queries the low-level **DEVPKEY_Device_Parent** property using `Get-PnpDevice
 </details>
 
 <details>
+<summary><b>Why do category names match Device Manager?</b></summary>
+
+DeviceCheck keeps the internal Plug and Play setup class key for logic, but renders common classes with **Device Manager display names** such as `Human Interface Devices`, `Network adapters`, and `Universal Serial Bus controllers`. The top row uses the Windows system name, matching Device Manager's computer root.
+
+</details>
+
+<details>
 <summary><b>How does it avoid console flickering?</b></summary>
 
 It uses **Windows Terminal Synchronized Output (ANSI ESC `[?2026h` / `[?2026l`)** to write the entire viewport frame atomically, preventing rendering tears and visual jitter during scrolling.
+
+</details>
+
+<details>
+<summary><b>How does the dual-pane layout work?</b></summary>
+
+DeviceCheck renders both panes inside one terminal window rather than requiring a Windows Terminal split. Wide terminals show the device tree on the left and selected details on the right; narrow terminals fall back to the stacked layout.
+
+</details>
+
+<details>
+<summary><b>Where does selected-device evidence get cached?</b></summary>
+
+DeviceCheck creates a stable machine ID from SMBIOS/CIM system fields and saves selected-device evidence under `%LOCALAPPDATA%\DeviceCheck\machines\<machineId>\devices\`. Press `E` on a device to collect local evidence only, press `E` on a category to scan every device in that group, press `E` on the computer root to scan all present devices, or press `S` to refresh selected-device evidence before web/AI lookup. The cache stores PnP properties, signed driver data, and `pnputil` output so repeated investigation can reuse local evidence before spending AI/web calls.
 
 </details>
 

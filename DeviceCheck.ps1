@@ -19,6 +19,376 @@ Initialize-TuiHost
 Write-Host "Caching system device classes..." -ForegroundColor Cyan
 $classMap = @{}
 $script:ActiveSearches = [ordered]@{}
+$script:RootExpanded = $true
+$script:DeviceCheckCacheRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'DeviceCheck'
+if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {
+    $script:DeviceCheckCacheRoot = Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
+}
+
+$deviceManagerClassNames = @{
+    AudioEndpoint     = 'Audio inputs and outputs'
+    Computer          = 'Computer'
+    DiskDrive         = 'Disk drives'
+    Display           = 'Display adapters'
+    Firmware          = 'Firmware'
+    HDC               = 'IDE ATA/ATAPI controllers'
+    HIDClass          = 'Human Interface Devices'
+    Keyboard          = 'Keyboards'
+    MEDIA             = 'Sound, video and game controllers'
+    Monitor           = 'Monitors'
+    Mouse             = 'Mice and other pointing devices'
+    Net               = 'Network adapters'
+    PrintQueue        = 'Print queues'
+    Processor         = 'Processors'
+    SCSIAdapter       = 'Storage controllers'
+    SecurityDevices   = 'Security devices'
+    SoftwareComponent = 'Software components'
+    SoftwareDevice    = 'Software devices'
+    System            = 'System devices'
+    USB               = 'Universal Serial Bus controllers'
+    Volume            = 'Storage volumes'
+}
+
+function New-DeviceCheckHash {
+    param([AllowEmptyString()][string]$Text)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        $hashBytes = $sha.ComputeHash($bytes)
+        return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 24)
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-ObjectPropertyValue {
+    param(
+        $Object,
+        [string]$PropertyName
+    )
+
+    if ($null -eq $Object) { return $null }
+    try {
+        return $Object.$PropertyName
+    } catch {
+        return $null
+    }
+}
+
+function ConvertTo-PlainEvidenceValue {
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [array]) {
+        return @($Value | ForEach-Object { if ($null -eq $_) { $null } else { $_.ToString() } })
+    }
+    return $Value.ToString()
+}
+
+function Get-CimFirstOrNull {
+    param([string]$ClassName)
+
+    try {
+        return Get-CimInstance -ClassName $ClassName -ErrorAction Stop | Select-Object -First 1
+    } catch {
+        return $null
+    }
+}
+
+function Get-DeviceManagerClassName {
+    param([AllowEmptyString()][string]$ClassName)
+
+    if ([string]::IsNullOrWhiteSpace($ClassName)) { return 'Other devices' }
+    if ($deviceManagerClassNames.ContainsKey($ClassName)) {
+        return $deviceManagerClassNames[$ClassName]
+    }
+    return $ClassName
+}
+
+function Get-MachineEvidence {
+    $computerSystem = Get-CimFirstOrNull -ClassName 'Win32_ComputerSystem'
+    $computerProduct = Get-CimFirstOrNull -ClassName 'Win32_ComputerSystemProduct'
+    $baseBoard = Get-CimFirstOrNull -ClassName 'Win32_BaseBoard'
+    $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
+    $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
+    $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+
+    $fingerprintParts = @(
+        (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Manufacturer')
+        (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Model')
+        (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'Vendor')
+        (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'Name')
+        (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'UUID')
+        (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'IdentifyingNumber')
+        (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'Manufacturer')
+        (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'Product')
+        (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'SerialNumber')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.ToString().Trim() }
+
+    if (@($fingerprintParts).Count -eq 0) {
+        $fingerprintParts = @($env:COMPUTERNAME)
+    }
+
+    $machineId = New-DeviceCheckHash -Text (($fingerprintParts -join '|').ToLowerInvariant())
+
+    return [PSCustomObject]@{
+        SchemaVersion         = 1
+        MachineId             = $machineId
+        CapturedAt            = (Get-Date).ToString('o')
+        ComputerSystem        = [PSCustomObject]@{
+            Manufacturer = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Manufacturer')
+            Model        = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Model')
+            Name         = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Name')
+            SystemType   = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'SystemType')
+        }
+        ComputerSystemProduct = [PSCustomObject]@{
+            Vendor            = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'Vendor')
+            Name              = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'Name')
+            Version           = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'Version')
+            IdentifyingNumber = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'IdentifyingNumber')
+            UUID              = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'UUID')
+            SKUNumber         = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'SKUNumber')
+        }
+        BaseBoard             = [PSCustomObject]@{
+            Manufacturer = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'Manufacturer')
+            Product      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'Product')
+            Version      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'Version')
+            SerialNumber = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'SerialNumber')
+        }
+        BIOS                  = [PSCustomObject]@{
+            Manufacturer      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $bios -PropertyName 'Manufacturer')
+            SMBIOSBIOSVersion = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $bios -PropertyName 'SMBIOSBIOSVersion')
+            ReleaseDate       = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $bios -PropertyName 'ReleaseDate')
+        }
+        Processor             = [PSCustomObject]@{
+            Name                      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $processor -PropertyName 'Name')
+            NumberOfCores             = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $processor -PropertyName 'NumberOfCores')
+            NumberOfLogicalProcessors = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $processor -PropertyName 'NumberOfLogicalProcessors')
+            MaxClockSpeed             = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $processor -PropertyName 'MaxClockSpeed')
+        }
+        OperatingSystem       = [PSCustomObject]@{
+            Caption        = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $operatingSystem -PropertyName 'Caption')
+            Version        = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $operatingSystem -PropertyName 'Version')
+            BuildNumber    = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $operatingSystem -PropertyName 'BuildNumber')
+            OSArchitecture = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $operatingSystem -PropertyName 'OSArchitecture')
+        }
+    }
+}
+
+function Get-MachineDisplayName {
+    param($MachineEvidence)
+
+    $name = $MachineEvidence.ComputerSystem.Name
+    if ([string]::IsNullOrWhiteSpace($name)) { $name = $env:COMPUTERNAME }
+    if ([string]::IsNullOrWhiteSpace($name)) { return 'Computer' }
+    return $name.ToUpperInvariant()
+}
+
+function Get-MachineSummary {
+    param(
+        $MachineEvidence,
+        [int]$DeviceCount = 0,
+        [int]$CategoryCount = 0,
+        [Nullable[int]]$ElapsedMs = $null
+    )
+
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $systemName = Get-MachineDisplayName -MachineEvidence $MachineEvidence
+    $parts.Add($systemName)
+
+    $systemMakerModel = (@(
+            $MachineEvidence.ComputerSystem.Manufacturer
+            $MachineEvidence.ComputerSystem.Model
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' '
+    if (-not [string]::IsNullOrWhiteSpace($systemMakerModel)) { $parts.Add($systemMakerModel) }
+
+    if (-not [string]::IsNullOrWhiteSpace($MachineEvidence.BaseBoard.Product)) {
+        $parts.Add("Board $($MachineEvidence.BaseBoard.Product)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($MachineEvidence.Processor.Name)) {
+        $parts.Add($MachineEvidence.Processor.Name.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($MachineEvidence.OperatingSystem.Caption)) {
+        $parts.Add($MachineEvidence.OperatingSystem.Caption)
+    }
+    if ($DeviceCount -gt 0 -or $CategoryCount -gt 0) {
+        $parts.Add("$DeviceCount devices / $CategoryCount categories")
+    }
+    if ($null -ne $ElapsedMs) {
+        $parts.Add("${ElapsedMs}ms")
+    }
+
+    return ($parts -join ' | ')
+}
+
+$script:MachineEvidence = Get-MachineEvidence
+$script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
+try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
+$script:SystemScanMessage = "System: $(Get-MachineSummary -MachineEvidence $script:MachineEvidence)"
+
+function Get-DeviceEvidenceCachePath {
+    param([string]$InstanceId)
+
+    $deviceHash = New-DeviceCheckHash -Text $InstanceId
+    return (Join-Path -Path $script:MachineCacheRoot -ChildPath "devices\$deviceHash.json")
+}
+
+function Read-CachedDeviceEvidence {
+    param([string]$InstanceId)
+
+    $cachePath = Get-DeviceEvidenceCachePath -InstanceId $InstanceId
+    if (-not (Test-Path -LiteralPath $cachePath)) { return $null }
+
+    try {
+        return (Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Format-UiValue {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$MaxLength = 90
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '-' }
+    $MaxLength = [Math]::Max(8, $MaxLength)
+    if ($Text.Length -le $MaxLength) { return $Text }
+    return ($Text.Substring(0, [Math]::Max(5, $MaxLength - 3)) + '...')
+}
+
+function Remove-AnsiSequence {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return '' }
+    return [regex]::Replace($Text, "$([char]27)\[[0-9;?]*[A-Za-z]", '')
+}
+
+function Get-PrintableLength {
+    param([AllowEmptyString()][string]$Text)
+
+    return (Remove-AnsiSequence -Text $Text).Length
+}
+
+function Get-NotePropertyValue {
+    param(
+        $Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Format-PlainToWidth {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$Width
+    )
+
+    $Width = [Math]::Max(1, $Width)
+    if ([string]::IsNullOrEmpty($Text)) { return (' ' * $Width) }
+    if ($Text.Length -gt $Width) {
+        if ($Width -le 1) { return $Text.Substring(0, 1) }
+        return ($Text.Substring(0, [Math]::Max(1, $Width - 1)) + [char]0x2026)
+    }
+    return $Text.PadRight($Width)
+}
+
+function Format-AnsiToWidth {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$Width
+    )
+
+    $Width = [Math]::Max(1, $Width)
+    $printableLength = Get-PrintableLength -Text $Text
+    if ($printableLength -gt $Width) {
+        return (Format-PlainToWidth -Text (Remove-AnsiSequence -Text $Text) -Width $Width)
+    }
+    return ($Text + (' ' * ($Width - $printableLength)))
+}
+
+function New-SelectedLine {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$Width
+    )
+
+    return "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)$(Format-PlainToWidth -Text (Remove-AnsiSequence -Text $Text) -Width $Width)$($_C.Reset)"
+}
+
+function New-SectionLine {
+    param(
+        [string]$Title,
+        [int]$Width
+    )
+
+    $prefix = " $Title "
+    $line = [string]::new([char]0x2500, [Math]::Max(0, $Width - $prefix.Length))
+    return "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
+}
+
+function New-KeyValueLine {
+    param(
+        [string]$Key,
+        [AllowEmptyString()][string]$Value,
+        [int]$Width,
+        [string]$ValueColor = $null
+    )
+
+    if (-not $ValueColor) { $ValueColor = $_C.White }
+    $keyText = Format-PlainToWidth -Text $Key -Width 13
+    $valueWidth = [Math]::Max(8, $Width - 17)
+    $valueText = Format-UiValue -Text $Value -MaxLength $valueWidth
+    return " $($_C.Dim)$keyText :$($_C.Reset) $ValueColor$valueText$($_C.Reset)"
+}
+
+function Get-CompactSystemStatus {
+    param([AllowEmptyString()][string]$StatusText)
+
+    if ([string]::IsNullOrWhiteSpace($StatusText)) { return '' }
+    $text = $StatusText -replace '^System scan complete:\s*', ''
+    $text = $text -replace '\s*\|\s*\d+ms(?=\s*\|)', ''
+    return $text
+}
+
+function Wrap-PlainText {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$Width,
+        [int]$MaxLines = 6
+    )
+
+    $Width = [Math]::Max(8, $Width)
+    $words = (Remove-AnsiSequence -Text $Text) -split '\s+'
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $current = ''
+
+    foreach ($word in $words) {
+        if ([string]::IsNullOrWhiteSpace($word)) { continue }
+        $candidate = if ($current) { "$current $word" } else { $word }
+        if ($candidate.Length -gt $Width) {
+            if ($current) { $lines.Add($current) }
+            $current = $word
+            if ($current.Length -gt $Width) {
+                $lines.Add((Format-PlainToWidth -Text $current -Width $Width).TrimEnd())
+                $current = ''
+            }
+        } else {
+            $current = $candidate
+        }
+        if ($lines.Count -ge $MaxLines) { break }
+    }
+
+    if ($current -and $lines.Count -lt $MaxLines) { $lines.Add($current) }
+    return $lines
+}
+
 try {
     Get-ChildItem -Path "HKLM:\System\CurrentControlSet\Control\Class" -ErrorAction SilentlyContinue | ForEach-Object {
         $g = $_.PSChildName.ToLower()
@@ -34,34 +404,40 @@ try {
 
 # Load PnP devices and build categories
 function Get-DeviceCategories {
-    Write-Host "Detecting connected PnP hardware..." -ForegroundColor Cyan
+    param([switch]$Quiet)
+
+    if (-not $Quiet) {
+        Write-Host "Detecting connected PnP hardware..." -ForegroundColor Cyan
+    }
     $pnpDevices = Get-PnpDevice -PresentOnly
-    
+
     $grouped = @{}
     foreach ($dev in $pnpDevices) {
         $guid = if ($dev.ClassGuid) { $dev.ClassGuid.ToLower() } else { "" }
-        $className = if ($classMap.ContainsKey($guid)) { $classMap[$guid] } else { $dev.Class }
+        $classKey = if (-not [string]::IsNullOrWhiteSpace($dev.Class)) { $dev.Class } elseif ($classMap.ContainsKey($guid)) { $classMap[$guid] } else { 'Other devices' }
+        $className = Get-DeviceManagerClassName -ClassName $classKey
         if ([string]::IsNullOrWhiteSpace($className)) {
-            $className = "Other Devices"
+            $className = "Other devices"
         }
-        
+
         $devInfo = [PSCustomObject]@{
             InstanceId             = $dev.InstanceId
             FriendlyName           = $dev.FriendlyName
             Class                  = $className
+            ClassKey               = $classKey
             Status                 = $dev.Status
             ConfigManagerErrorCode = $dev.ConfigManagerErrorCode
             IsProblem              = ($dev.ConfigManagerErrorCode -ne 0)
             SearchStatus           = $null      # $null, 'Searching', 'Done', 'Error'
             SearchResults          = @()        # Array of strings
         }
-        
+
         if (-not $grouped.ContainsKey($className)) {
             $grouped[$className] = [System.Collections.Generic.List[object]]::new()
         }
         $grouped[$className].Add($devInfo)
     }
-    
+
     # Create sorted Category objects
     $categories = [System.Collections.Generic.List[object]]::new()
     foreach ($key in ($grouped.Keys | Sort-Object)) {
@@ -76,9 +452,39 @@ function Get-DeviceCategories {
     return $categories
 }
 
+function Invoke-SystemScan {
+    param([switch]$Quiet)
+
+    $scanStarted = Get-Date
+    $script:MachineEvidence = Get-MachineEvidence
+    $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
+    try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
+
+    $script:categories = Get-DeviceCategories -Quiet:$Quiet
+    $deviceCount = 0
+    foreach ($category in $script:categories) {
+        $deviceCount += @($category.Devices).Count
+    }
+
+    $elapsedMs = [int]((Get-Date) - $scanStarted).TotalMilliseconds
+    $summary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount @($script:categories).Count -ElapsedMs $elapsedMs
+    $script:SystemScanMessage = "System scan complete: $summary | $(Get-Date -Format 'HH:mm:ss')"
+}
+
 # Helper to generate visible rows list
 function Update-VisibleRows {
     $rows = [System.Collections.Generic.List[object]]::new()
+    $rows.Add([PSCustomObject]@{
+        Type       = 'Root'
+        Name       = Get-MachineDisplayName -MachineEvidence $script:MachineEvidence
+        IsExpanded = $script:RootExpanded
+        Ref        = $script:MachineEvidence
+    })
+
+    if (-not $script:RootExpanded) {
+        return $rows
+    }
+
     foreach ($cat in $categories) {
         $rows.Add([PSCustomObject]@{
             Type       = 'Category'
@@ -99,7 +505,7 @@ function Update-VisibleRows {
                     IsProblem = $d.IsProblem
                     Ref       = $d
                 })
-                
+
                 # Check search result sub-nodes
                 if ($null -ne $d.SearchStatus) {
                     if ($d.SearchStatus -eq 'Searching') {
@@ -138,82 +544,369 @@ function Update-VisibleRows {
     return $rows
 }
 
-# Render a single UI frame
-function Render-Frame {
+function Get-DeviceProblemDescription {
+    param([int]$ErrorCode)
+
+    switch ($ErrorCode) {
+        0  { "Working properly" }
+        10 { "Device cannot start (CM_PROB_FAILED_START)" }
+        21 { "Device has been uninstalled (CM_PROB_WILL_BE_REMOVED)" }
+        22 { "Device is disabled (CM_PROB_DISABLED)" }
+        28 { "Drivers not installed (CM_PROB_FAILED_INSTALL)" }
+        43 { "Device reported problems (CM_PROB_FAILED_POST_START)" }
+        default { "Unknown problem status" }
+    }
+}
+
+function Set-AllCategoriesExpanded {
+    param([bool]$Expanded)
+
+    $script:RootExpanded = $Expanded
+    foreach ($category in $script:categories) {
+        $category.IsExpanded = $Expanded
+    }
+}
+
+function Expand-SelectedNode {
+    param($Row)
+
+    if ($null -eq $Row) { return }
+    if ($Row.Type -eq 'Root') {
+        Set-AllCategoriesExpanded -Expanded $true
+    } elseif ($Row.Type -eq 'Category') {
+        $Row.Ref.IsExpanded = $true
+    }
+}
+
+function Collapse-SelectedNode {
+    param($Row)
+
+    if ($null -eq $Row) { return }
+    if ($Row.Type -eq 'Root') {
+        Set-AllCategoriesExpanded -Expanded $false
+    } elseif ($Row.Type -eq 'Category') {
+        $Row.Ref.IsExpanded = $false
+    } elseif ($Row.Type -eq 'Device') {
+        $parentCatName = $Row.Class
+        $parentIndex = -1
+        for ($j = 0; $j -lt $script:visibleRows.Count; $j++) {
+            if ($script:visibleRows[$j].Type -eq 'Category' -and $script:visibleRows[$j].Name -eq $parentCatName) {
+                $parentIndex = $j
+                break
+            }
+        }
+        if ($parentIndex -ne -1) {
+            $script:selectedIndex = $parentIndex
+            $script:visibleRows[$parentIndex].Ref.IsExpanded = $false
+        }
+    }
+}
+
+function Get-TreeDisplayLine {
+    param(
+        [Parameter(Mandatory)]$Row,
+        [bool]$IsSelected,
+        [int]$Width
+    )
+
+    $plainText = ''
+    $ansiText = ''
+
+    if ($Row.Type -eq 'Root') {
+        $icon = if ($Row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 }
+        $plainText = " $icon  $($Row.Name)"
+        $ansiText = "$($_C.White)$plainText$($_C.Reset)"
+    }
+    elseif ($Row.Type -eq 'Category') {
+        $icon = if ($Row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 }
+        $plainText = "   $icon  $($Row.Name)"
+        $ansiText = "$($_C.White)$plainText$($_C.Reset)"
+    }
+    elseif ($Row.Type -eq 'Device') {
+        $branch = if ($Row.IsLast) { "└── " } else { "├── " }
+        $warning = if ($Row.IsProblem) { "[!] " } else { "" }
+        $plainText = "       $branch$warning$($Row.Name) [$($Row.Class)]"
+        if ($Row.IsProblem) {
+            $ansiText = "$($_C.Dim)       $branch$($_C.Reset)$($_C.Warn)[!] $($_C.Reset)$($_C.White)$($Row.Name) $($_C.Dim)[$($Row.Class)]$($_C.Reset)"
+        } else {
+            $ansiText = "$($_C.Dim)       $branch$($_C.Reset)$($_C.White)$($Row.Name) $($_C.Dim)[$($Row.Class)]$($_C.Reset)"
+        }
+    }
+    elseif ($Row.Type -eq 'Status') {
+        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       │    " }
+        $plainText = "$parentPrefix└── [$($Row.Name)]"
+        $ansiText = "$($_C.Dim)$parentPrefix└── $($_C.Reset)$($_C.Warn)[$($Row.Name)]$($_C.Reset)"
+    }
+    elseif ($Row.Type -eq 'Result') {
+        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       │    " }
+        $text = [string]$Row.Name
+        $isSubResult = $text.StartsWith('  ')
+        if ($isSubResult) {
+            $text = $text.Substring(2)
+            $branch = if ($Row.IsLastResult) { "    └── " } else { "│   └── " }
+        } else {
+            $branch = if ($Row.IsLastResult) { "└── " } else { "├── " }
+        }
+
+        $plainText = "$parentPrefix$branch$text"
+        if ($text -match '^(\[([^\]]+)\])(.*)$') {
+            $tag = $Matches[1]
+            $tagName = $Matches[2]
+            $rest = $Matches[3]
+            $tagColor = if ($tagName -like '*Error*') {
+                $_C.Fail
+            } elseif ($tagName -like '*Gemini*') {
+                $_C.Info
+            } elseif ($tagName -like '*nvidia*' -or $tagName -like '*nemotron*') {
+                $_C.OK
+            } elseif ($tagName -like '*Local*') {
+                $_C.Gold
+            } elseif ($tagName -like '*Web*') {
+                $_C.Warn
+            } else {
+                $_C.Info
+            }
+            $ansiText = "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$tagColor$tag$($_C.Reset)$($_C.White)$rest$($_C.Reset)"
+        } else {
+            $ansiText = "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$($_C.White)$text$($_C.Reset)"
+        }
+    }
+
+    if ($IsSelected) { return New-SelectedLine -Text $plainText -Width $Width }
+    return Format-AnsiToWidth -Text $ansiText -Width $Width
+}
+
+function Get-DetailDisplayLines {
+    param(
+        [Parameter(Mandatory)]$SelectedRow,
+        [int]$Width,
+        [int]$MaxLines
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    if ($SelectedRow.Type -eq 'Root') {
+        $machine = $SelectedRow.Ref
+        $lines.Add((New-SectionLine -Title 'Computer Info' -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'System Name' -Value (Get-MachineDisplayName -MachineEvidence $machine) -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'OS' -Value "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'System' -Value "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'BaseBoard' -Value "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'Processor' -Value $machine.Processor.Name -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'BIOS' -Value "$($machine.BIOS.Manufacturer) $($machine.BIOS.SMBIOSBIOSVersion)" -Width $Width))
+
+        $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
+        if ($allDevices.Count -gt 0) {
+            $activeEvidenceCount = @(
+                $allDevices | Where-Object {
+                    $script:ActiveSearches.Contains($_.InstanceId) -and
+                    $script:ActiveSearches[$_.InstanceId].EvidenceState -eq 'Searching'
+                }
+            ).Count
+            $cachedEvidenceCount = @(
+                $allDevices | Where-Object {
+                    Test-Path -LiteralPath (Get-DeviceEvidenceCachePath -InstanceId $_.InstanceId)
+                }
+            ).Count
+            $evidenceText = if ($activeEvidenceCount -gt 0) {
+                "$activeEvidenceCount scanning / $cachedEvidenceCount cached"
+            } else {
+                "$cachedEvidenceCount cached"
+            }
+            $evidenceColor = if ($activeEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
+            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor))
+        }
+    }
+    elseif ($SelectedRow.Type -eq 'Device') {
+        $lines.Add((New-SectionLine -Title 'Device Properties' -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'FriendlyName' -Value $SelectedRow.Ref.FriendlyName -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'InstanceId' -Value $SelectedRow.Ref.InstanceId -Width $Width))
+
+        $errCode = [int]$SelectedRow.Ref.ConfigManagerErrorCode
+        $errDesc = Get-DeviceProblemDescription -ErrorCode $errCode
+        $statusColor = if ($errCode -eq 0) { $_C.OK } else { $_C.Fail }
+        $statusValue = if ($errCode -eq 0) { "OK ($errDesc)" } else { "Error (Code ${errCode}: $errDesc)" }
+        $lines.Add((New-KeyValueLine -Key 'Status' -Value $statusValue -Width $Width -ValueColor $statusColor))
+
+        $activeSearch = if ($script:ActiveSearches.Contains($SelectedRow.Ref.InstanceId)) { $script:ActiveSearches[$SelectedRow.Ref.InstanceId] } else { $null }
+        if ($null -ne $activeSearch -and $activeSearch.EvidenceState -eq 'Searching') {
+            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value 'Collecting local evidence...' -Width $Width -ValueColor $_C.Warn))
+        } elseif ($null -ne $activeSearch -and $activeSearch.EvidenceState -eq 'Error') {
+            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value "Error: $($activeSearch.EvidenceVal)" -Width $Width -ValueColor $_C.Fail))
+        }
+
+        $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $SelectedRow.Ref.InstanceId
+        if ($null -ne $cachedEvidence) {
+            $capturedText = if ($cachedEvidence.CapturedAt) { $cachedEvidence.CapturedAt } else { 'unknown time' }
+            if ($null -eq $activeSearch -or $activeSearch.EvidenceState -ne 'Searching') {
+                $lines.Add((New-KeyValueLine -Key 'Evidence' -Value "Cached ($capturedText)" -Width $Width -ValueColor $_C.OK))
+            }
+
+            $importantProperties = $cachedEvidence.ImportantProperties
+            $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
+            if ($hardwareIds) {
+                $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
+                $lines.Add((New-KeyValueLine -Key 'HardwareId' -Value $firstHardwareId -Width $Width))
+            }
+
+            $manufacturer = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer'
+            if ($manufacturer) {
+                $lines.Add((New-KeyValueLine -Key 'Manufacturer' -Value $manufacturer -Width $Width))
+            }
+
+            $compatibleIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_CompatibleIds'
+            if ($compatibleIds) {
+                $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
+                $lines.Add((New-KeyValueLine -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width))
+            }
+
+            $service = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Service'
+            if ($service) {
+                $lines.Add((New-KeyValueLine -Key 'Service' -Value $service -Width $Width))
+            }
+
+            if ($cachedEvidence.SignedDriver) {
+                $driver = $cachedEvidence.SignedDriver
+                $driverText = "$($driver.DriverProviderName) $($driver.DriverVersion) ($($driver.InfName))"
+                $lines.Add((New-KeyValueLine -Key 'Driver' -Value $driverText -Width $Width))
+            }
+
+            $cachePath = Get-DeviceEvidenceCachePath -InstanceId $SelectedRow.Ref.InstanceId
+            $lines.Add((New-KeyValueLine -Key 'Cache' -Value $cachePath -Width $Width))
+        } elseif ($null -eq $activeSearch) {
+            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value 'Not scanned yet. Press E for local evidence or S for search.' -Width $Width -ValueColor $_C.Warn))
+        }
+    }
+    elseif ($SelectedRow.Type -eq 'Result') {
+        $titleText = 'Detailed Info'
+        if ($SelectedRow.Name -match '^\[([^\]]+)\]') { $titleText = $Matches[1] }
+        $lines.Add((New-SectionLine -Title $titleText -Width $Width))
+        $cleanText = ([string]$SelectedRow.Name -replace '^\[[^\]]+\]\s*', '').Trim()
+        foreach ($line in (Wrap-PlainText -Text $cleanText -Width ([Math]::Max(8, $Width - 2)) -MaxLines ([Math]::Max(3, $MaxLines - 2)))) {
+            $lines.Add("$($_C.White)  $(Format-PlainToWidth -Text $line -Width ([Math]::Max(1, $Width - 2)))$($_C.Reset)")
+        }
+    }
+    else {
+        $lines.Add((New-SectionLine -Title 'Category Info' -Width $Width))
+        $lines.Add((New-KeyValueLine -Key 'Group' -Value $SelectedRow.Name -Width $Width))
+        if ($SelectedRow.Type -eq 'Category' -and $SelectedRow.Ref.Devices) {
+            $categoryDevices = @($SelectedRow.Ref.Devices)
+            $lines.Add((New-KeyValueLine -Key 'Devices' -Value ([string]$categoryDevices.Count) -Width $Width))
+
+            $activeEvidenceCount = @(
+                $categoryDevices | Where-Object {
+                    $script:ActiveSearches.Contains($_.InstanceId) -and
+                    $script:ActiveSearches[$_.InstanceId].EvidenceState -eq 'Searching'
+                }
+            ).Count
+            $cachedEvidenceCount = @(
+                $categoryDevices | Where-Object {
+                    Test-Path -LiteralPath (Get-DeviceEvidenceCachePath -InstanceId $_.InstanceId)
+                }
+            ).Count
+            $evidenceText = if ($activeEvidenceCount -gt 0) {
+                "$activeEvidenceCount scanning / $cachedEvidenceCount cached"
+            } else {
+                "$cachedEvidenceCount cached"
+            }
+            $evidenceColor = if ($activeEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
+            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor))
+        }
+    }
+
+    while ($lines.Count -lt $MaxLines) {
+        $lines.Add('')
+    }
+    return @($lines | Select-Object -First $MaxLines)
+}
+
+# Legacy stacked renderer retained temporarily while the responsive renderer settles.
+function Render-FrameLegacy {
     try {
         # Reduce window height dynamically to accommodate details panel
-        $maxVisible = [Math]::Max(4, $Host.UI.RawUI.WindowSize.Height - 16)
+        $maxVisible = [Math]::Max(4, $Host.UI.RawUI.WindowSize.Height - 21)
     } catch {
         $maxVisible = 12
     }
-    
+
     $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $script:visibleRows.Count - $maxVisible)))
     $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:visibleRows.Count - 1)
-    
+
     Begin-SyncRender
     try { Clear-Host } catch {}
-    
+
     # Header
-    Write-UiBanner -Title "DeviceCheck Manager" -Subtitle "Highlight a device and press 'S' to search for drivers/details on the web."
+    Write-UiBanner -Title "DeviceCheck Manager" -Subtitle "R rescans the present PnP device tree. E scans selected device locally. S adds web/AI."
+    Write-Host "  $($_C.Dim)$($script:SystemScanMessage)$($_C.Reset)$($_C.EraseLn)"
     Write-UiSection -Title "Device Connection Tree"
     Write-Host ''
-    
+
     # Scrolling indicators above
     $aboveCount = $viewTop
     $aboveMessage = if ($aboveCount -gt 0) { "  $($_C.Dim)$([char]0x2191) $aboveCount more above$($_C.Reset)" } else { '' }
     Write-Host "$aboveMessage$($_C.EraseLn)"
-    
+
     # Render visible rows
     for ($index = $viewTop; $index -le $viewBot; $index++) {
         $row = $script:visibleRows[$index]
         $isSelected = ($index -eq $selectedIndex)
-        
-        if ($row.Type -eq 'Category') {
-            $icon = if ($row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 } # Down or Right arrow
+
+        if ($row.Type -eq 'Root') {
+            $icon = if ($row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 }
             $displayText = " $icon  $($row.Name)"
-            
+
             if ($isSelected) {
                 Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $displayText $($_C.Reset)$($_C.EraseLn)"
             } else {
-                Write-Host "    $($_C.White)$displayText$($_C.Reset)$($_C.EraseLn)"
+                Write-Host "  $($_C.White)$displayText$($_C.Reset)$($_C.EraseLn)"
+            }
+        }
+        elseif ($row.Type -eq 'Category') {
+            $icon = if ($row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 } # Down or Right arrow
+            $displayText = "   $icon  $($row.Name)"
+
+            if ($isSelected) {
+                Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $displayText $($_C.Reset)$($_C.EraseLn)"
+            } else {
+                Write-Host "  $($_C.White)$displayText$($_C.Reset)$($_C.EraseLn)"
             }
         }
         elseif ($row.Type -eq 'Device') {
             $branch = if ($row.IsLast) { "└── " } else { "├── " }
             $warningIcon = if ($row.IsProblem) { "$($_C.Warn)[!]$($_C.Reset) " } else { "" }
-            $displayText = "     $branch$warningIcon$($row.Name) [$($row.Class)]"
-            
+            $displayText = "       $branch$warningIcon$($row.Name) [$($row.Class)]"
+
             if ($isSelected) {
                 $cleanWarning = if ($row.IsProblem) { "[!] " } else { "" }
-                $cleanText = "     $branch$cleanWarning$($row.Name) [$($row.Class)]"
+                $cleanText = "       $branch$cleanWarning$($row.Name) [$($row.Class)]"
                 Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $cleanText $($_C.Reset)$($_C.EraseLn)"
             } else {
-                Write-Host "$($_C.Dim)     $branch$($_C.Reset)$warningIcon$($_C.White)$($row.Name) $($_C.Dim)[$($row.Class)]$($_C.Reset)$($_C.EraseLn)"
+                Write-Host "$($_C.Dim)       $branch$($_C.Reset)$warningIcon$($_C.White)$($row.Name) $($_C.Dim)[$($row.Class)]$($_C.Reset)$($_C.EraseLn)"
             }
         }
         elseif ($row.Type -eq 'Status') {
-            $parentPrefix = if ($row.ParentIsLast) { "          " } else { "     │    " }
+            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       │    " }
             Write-Host "$($_C.Dim)$parentPrefix└── $($_C.Reset)$($_C.Warn)[$($row.Name)]$($_C.Reset)$($_C.EraseLn)"
         }
         elseif ($row.Type -eq 'Result') {
-            $parentPrefix = if ($row.ParentIsLast) { "          " } else { "     │    " }
-            
+            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       │    " }
+
             $text = $row.Name
             $isSubResult = $text.StartsWith("  ")
-            
+
             if ($isSubResult) {
                 $text = $text.Substring(2)
                 $branch = if ($row.IsLastResult) { "    └── " } else { "│   └── " }
             } else {
                 $branch = if ($row.IsLastResult) { "└── " } else { "├── " }
             }
-            
+
             # Truncate result text to console width dynamically
             $maxTextLen = (Get-UiWidth) - $parentPrefix.Length - $branch.Length - 10
             if ($text.Length -gt $maxTextLen) {
                 $text = $text.Substring(0, [Math]::Max(5, $maxTextLen - 3)) + "..."
             }
-            
+
             # Highlight prefixes like [Local DB] or [Gemini: ...] or [OpenRouter: ...]
             if ($text -match '^(\[([^\]]+)\])(.*)$') {
                 $tag = $Matches[1]
@@ -232,9 +925,9 @@ function Render-Frame {
                 } else {
                     $_C.Info
                 }
-                
+
                 $useSameColorForRest = ($tagName -like '*Gemini*' -or $tagName -like '*OpenRouter*' -or $tagName -like '*nvidia*' -or $tagName -like '*nemotron*')
-                
+
                 if ($isSelected) {
                     Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $parentPrefix$branch$tag$rest $($_C.Reset)$($_C.EraseLn)"
                 } else {
@@ -253,21 +946,31 @@ function Render-Frame {
             }
         }
     }
-    
+
     # Scrolling indicators below
     $belowCount = $script:visibleRows.Count - 1 - $viewBot
     $belowMessage = if ($belowCount -gt 0) { "  $($_C.Dim)$([char]0x2193) $belowCount more below$($_C.Reset)" } else { '' }
     Write-Host "$belowMessage$($_C.EraseLn)"
-    
+
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     #  DETAILS INSPECTOR PANEL
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     $selectedRow = $script:visibleRows[$selectedIndex]
-    if ($selectedRow.Type -eq 'Device') {
+    if ($selectedRow.Type -eq 'Root') {
+        $machine = $selectedRow.Ref
+        Write-UiSection -Title "Computer Info" -Icon ""
+        Write-Host "  $($_C.Dim)System Name  :$($_C.Reset) $($_C.White)$(Get-MachineDisplayName -MachineEvidence $machine)$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)OS           :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)System       :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)BaseBoard    :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)Processor    :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $machine.Processor.Name -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        Write-Host "  $($_C.Dim)BIOS         :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.BIOS.Manufacturer) $($machine.BIOS.SMBIOSBIOSVersion)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+    }
+    elseif ($selectedRow.Type -eq 'Device') {
         Write-UiSection -Title "Device Properties" -Icon ""
         Write-Host "  $($_C.Dim)FriendlyName :$($_C.Reset) $($_C.White)$($selectedRow.Ref.FriendlyName)$($_C.Reset)$($_C.EraseLn)"
         Write-Host "  $($_C.Dim)InstanceId   :$($_C.Reset) $($_C.White)$($selectedRow.Ref.InstanceId)$($_C.Reset)$($_C.EraseLn)"
-        
+
         $errCode = $selectedRow.Ref.ConfigManagerErrorCode
         $errDesc = switch ($errCode) {
             0  { "Working properly" }
@@ -278,14 +981,53 @@ function Render-Frame {
             43 { "Device reported problems (CM_PROB_FAILED_POST_START)" }
             default { "Unknown problem status" }
         }
-        
+
         $statusText = if ($errCode -eq 0) {
             "$($_C.OK)OK ($errDesc)$($_C.Reset)"
         } else {
             "$($_C.Fail)Error (Code ${errCode}: $errDesc)$($_C.Reset)"
         }
-        
+
         Write-Host "  $($_C.Dim)Status       :$($_C.Reset) $statusText$($_C.EraseLn)"
+
+        $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $selectedRow.Ref.InstanceId
+        if ($null -ne $cachedEvidence) {
+            $capturedText = if ($cachedEvidence.CapturedAt) { $cachedEvidence.CapturedAt } else { 'unknown time' }
+            Write-Host "  $($_C.Dim)Evidence     :$($_C.Reset) $($_C.OK)Cached ($capturedText)$($_C.Reset)$($_C.EraseLn)"
+
+            $hardwareIds = $cachedEvidence.ImportantProperties.DEVPKEY_Device_HardwareIds
+            if ($hardwareIds) {
+                $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
+                Write-Host "  $($_C.Dim)HardwareId   :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstHardwareId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            }
+
+            $manufacturer = $cachedEvidence.ImportantProperties.DEVPKEY_Device_Manufacturer
+            if ($manufacturer) {
+                Write-Host "  $($_C.Dim)Manufacturer :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $manufacturer -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            }
+
+            $compatibleIds = $cachedEvidence.ImportantProperties.DEVPKEY_Device_CompatibleIds
+            if ($compatibleIds) {
+                $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
+                Write-Host "  $($_C.Dim)CompatibleId :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstCompatibleId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            }
+
+            $service = $cachedEvidence.ImportantProperties.DEVPKEY_Device_Service
+            if ($service) {
+                Write-Host "  $($_C.Dim)Service      :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $service -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            }
+
+            if ($cachedEvidence.SignedDriver) {
+                $driver = $cachedEvidence.SignedDriver
+                $driverText = "$($driver.DriverProviderName) $($driver.DriverVersion) ($($driver.InfName))"
+                Write-Host "  $($_C.Dim)Driver       :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $driverText -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            }
+
+            $cachePath = Get-DeviceEvidenceCachePath -InstanceId $selectedRow.Ref.InstanceId
+            Write-Host "  $($_C.Dim)Cache        :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $cachePath -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        } else {
+            Write-Host "  $($_C.Dim)Evidence     :$($_C.Reset) $($_C.Warn)Not scanned yet. Press E for local evidence or S for search.$($_C.Reset)$($_C.EraseLn)"
+        }
     }
     elseif ($selectedRow.Type -eq 'Result') {
         # Select title prefix based on tag
@@ -294,9 +1036,9 @@ function Render-Frame {
             $titleText = $Matches[1]
         }
         Write-UiSection -Title $titleText -Icon ""
-        
+
         $cleanText = ($selectedRow.Name -replace '^\[[^\]]+\]\s*', '').Trim()
-        
+
         # Word wrap logic for console
         $w = (Get-UiWidth) - 4
         $wrappedLines = @()
@@ -311,7 +1053,7 @@ function Render-Frame {
             }
         }
         if ($currentLine) { $wrappedLines += $currentLine }
-        
+
         # Print top 3 wrapped lines to fit details box nicely
         for ($k = 0; $k -lt [Math]::Min(3, $wrappedLines.Count); $k++) {
             Write-Host "$($_C.White)$($wrappedLines[$k])$($_C.Reset)$($_C.EraseLn)"
@@ -323,42 +1065,177 @@ function Render-Frame {
         # Category or other type
         Write-UiSection -Title "Category Info" -Icon ""
         Write-Host "  $($_C.White)Group: $($selectedRow.Name)$($_C.Reset)$($_C.EraseLn)"
+        if ($selectedRow.Type -eq 'Category' -and $selectedRow.Ref.Devices) {
+            Write-Host "  $($_C.Dim)Devices: $(@($selectedRow.Ref.Devices).Count)$($_C.Reset)$($_C.EraseLn)"
+        } else {
+            Write-Host "$($_C.EraseLn)"
+        }
+        Write-Host "$($_C.EraseLn)"
         Write-Host "$($_C.EraseLn)"
         Write-Host "$($_C.EraseLn)"
     }
-    
+
     # Footer
     $segments = @(
         New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
+        New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'R' -Color $_C.Info
+        New-UiShortcutSegment -Text ' = system scan   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'E' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = evidence   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'S' -Color $_C.Gold
-        New-UiShortcutSegment -Text ' = search   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text ' = web/AI   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'Q / Esc' -Color $_C.Fail
         New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
     )
     Write-UiShortcutSegments -Segments $segments
     Write-Host "$($_E)[J" -NoNewline
-    
+
     End-SyncRender
+}
+
+function Render-Frame {
+    $uiWidth = Get-UiWidth
+    try { $windowHeight = $Host.UI.RawUI.WindowSize.Height } catch { $windowHeight = 32 }
+
+    $useDualPane = ($uiWidth -ge 136)
+    $footerHeight = 1
+    $headerReserve = 7
+    $availableRows = [Math]::Max(8, $windowHeight - $headerReserve - $footerHeight)
+
+    if ($useDualPane) {
+        $dividerWidth = 3
+        $availablePaneWidth = [Math]::Max(80, $uiWidth - $dividerWidth)
+        $leftWidth = [int][Math]::Floor($availablePaneWidth / 2)
+        $rightWidth = $availablePaneWidth - $leftWidth
+        $maxVisible = $availableRows
+    } else {
+        $leftWidth = $uiWidth
+        $rightWidth = $uiWidth
+        $maxVisible = [Math]::Max(4, $windowHeight - 22)
+    }
+
+    $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $script:visibleRows.Count - $maxVisible)))
+    $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:visibleRows.Count - 1)
+    $selectedRow = if ($script:visibleRows.Count -gt 0) { $script:visibleRows[$selectedIndex] } else { $null }
+
+    Begin-SyncRender
+    try { Clear-Host } catch {}
+
+    Write-UiBanner -Title 'DeviceCheck Manager' -Subtitle 'R rescans devices. E scans selected device locally. S adds web/AI.'
+    $statusWidth = [Math]::Max(10, $uiWidth - 2)
+    $compactStatus = Get-CompactSystemStatus -StatusText $script:SystemScanMessage
+    Write-Host "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
+
+    if ($useDualPane) {
+        $leftTitle = New-SectionLine -Title 'Device Connection Tree' -Width $leftWidth
+        $rightTitle = New-SectionLine -Title 'Selected Details' -Width $rightWidth
+        Write-Host "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) │ $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
+
+        $treeLines = [System.Collections.Generic.List[string]]::new()
+        $aboveCount = $viewTop
+        $aboveMessage = if ($aboveCount -gt 0) { "$([char]0x2191) $aboveCount more above" } else { '' }
+        $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)")
+
+        for ($index = $viewTop; $index -le $viewBot; $index++) {
+            $row = $script:visibleRows[$index]
+            $treeLines.Add((Get-TreeDisplayLine -Row $row -IsSelected:($index -eq $selectedIndex) -Width $leftWidth))
+        }
+
+        $belowCount = $script:visibleRows.Count - 1 - $viewBot
+        $belowMessage = if ($belowCount -gt 0) { "$([char]0x2193) $belowCount more below" } else { '' }
+        $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)")
+
+        $detailLines = if ($null -ne $selectedRow) {
+            Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines $treeLines.Count
+        } else {
+            @((New-SectionLine -Title 'Selected Details' -Width $rightWidth))
+        }
+
+        $lineCount = [Math]::Max($treeLines.Count, $detailLines.Count)
+        for ($i = 0; $i -lt $lineCount; $i++) {
+            $leftLine = if ($i -lt $treeLines.Count) { $treeLines[$i] } else { '' }
+            $rightLine = if ($i -lt $detailLines.Count) { $detailLines[$i] } else { '' }
+            Write-Host "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) │ $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
+        }
+    } else {
+        Write-UiSection -Title 'Device Connection Tree'
+        Write-Host ''
+
+        $aboveCount = $viewTop
+        $aboveMessage = if ($aboveCount -gt 0) { "  $([char]0x2191) $aboveCount more above" } else { '' }
+        Write-Host "$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
+
+        for ($index = $viewTop; $index -le $viewBot; $index++) {
+            $row = $script:visibleRows[$index]
+            Write-Host "$(Get-TreeDisplayLine -Row $row -IsSelected:($index -eq $selectedIndex) -Width $leftWidth)$($_C.EraseLn)"
+        }
+
+        $belowCount = $script:visibleRows.Count - 1 - $viewBot
+        $belowMessage = if ($belowCount -gt 0) { "  $([char]0x2193) $belowCount more below" } else { '' }
+        Write-Host "$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
+
+        if ($null -ne $selectedRow) {
+            foreach ($line in (Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines 11)) {
+                Write-Host "$(Format-AnsiToWidth -Text $line -Width $rightWidth)$($_C.EraseLn)"
+            }
+        }
+    }
+
+    $segments = @(
+        New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+        New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'R' -Color $_C.Info
+        New-UiShortcutSegment -Text ' = system scan   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'E' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = evidence   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'S' -Color $_C.Gold
+        New-UiShortcutSegment -Text ' = web/AI   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'Q / Esc' -Color $_C.Fail
+        New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
+    )
+    Write-UiShortcutSegments -Segments $segments -Width $uiWidth
+    Write-Host "$($_E)[J" -NoNewline
+
+    End-SyncRender
+}
+
+function Invoke-SystemScanWithFeedback {
+    param([switch]$Quiet)
+
+    $script:SystemScanMessage = "System scan running: reading $(Get-MachineDisplayName -MachineEvidence $script:MachineEvidence) and present PnP device tree... | $(Get-Date -Format 'HH:mm:ss')"
+    if ($script:visibleRows -and $script:visibleRows.Count -gt 0) {
+        Render-Frame
+    }
+
+    Invoke-SystemScan -Quiet:$Quiet
+    $script:selectedIndex = 0
+    $script:visibleRows = Update-VisibleRows
 }
 
 # Start background lookup pipeline for a device (Asynchronous, non-blocking)
 function Start-DeviceLookup {
-    param($Dev)
-    
+    param(
+        $Dev,
+        [switch]$EvidenceOnly,
+        [switch]$ForceEvidenceRefresh
+    )
+
     $instanceId = $Dev.InstanceId
-    
+
     # If already searching, toggle to cancel/stop it
     if ($script:ActiveSearches.Contains($instanceId)) {
         Stop-DeviceLookup -InstanceId $instanceId
         return
     }
-    
-    $geminiModel = "gemini-2.5-flash"
+
+    $geminiModel = "gemini-3.1-flash-lite"
     $openRouterModel = "nvidia/nemotron-3-super-120b-a12b:free"
-    
+
     # Resolve API keys
     $apiKey = $env:GEMINI_API_KEY
     if ([string]::IsNullOrWhiteSpace($apiKey)) { $apiKey = $env:GOOGLE_API_KEY }
@@ -368,18 +1245,19 @@ function Start-DeviceLookup {
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         try { $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GEMINI_API_KEY } catch {}
     }
-    
+
     $openRouterKey = $env:OPENROUTER_API_KEY
     if ([string]::IsNullOrWhiteSpace($openRouterKey)) {
         try { $openRouterKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).OPENROUTER_API_KEY } catch {}
     }
-    
+
     # Initialize search states
-    $localState = 'Searching'
-    $webState = 'Searching'
-    $geminiState = if ($apiKey) { 'Waiting' } else { 'None' }
-    $openRouterState = if ($openRouterKey) { 'Waiting' } else { 'None' }
-    
+    $evidenceState = 'Searching'
+    $localState = if ($EvidenceOnly) { 'None' } else { 'Searching' }
+    $webState = if ($EvidenceOnly) { 'None' } else { 'Searching' }
+    $geminiState = if ((-not $EvidenceOnly) -and $apiKey) { 'Waiting' } else { 'None' }
+    $openRouterState = if ((-not $EvidenceOnly) -and $openRouterKey) { 'Waiting' } else { 'None' }
+
     # Pre-populate search rows
     $Dev.SearchStatus = 'Done'
     $newResults = [System.Collections.Generic.List[string]]::new()
@@ -387,21 +1265,180 @@ function Start-DeviceLookup {
     if ($openRouterState -eq 'Waiting') { $newResults.Add("[OpenRouter: $openRouterModel] (Waiting for web search...)") }
     if ($webState -eq 'Searching') { $newResults.Add("[Web Snippet] (Searching...)") }
     $Dev.SearchResults = $newResults
-    
+
     # Start background runspace for Web and Local Search
     $psWeb = [PowerShell]::Create()
     $null = $psWeb.AddScript({
-        param($InstanceId)
+        param($DeviceBasics, $MachineEvidence, [string]$MachineCacheRoot, [bool]$EvidenceOnly, [bool]$ForceEvidenceRefresh)
         $ProgressPreference = 'SilentlyContinue'
         try {
+            $InstanceId = $DeviceBasics.InstanceId
+
+            function New-DeviceCheckHash {
+                param([AllowEmptyString()][string]$Text)
+
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+                    $hashBytes = $sha.ComputeHash($bytes)
+                    return (($hashBytes | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 24)
+                } finally {
+                    $sha.Dispose()
+                }
+            }
+
+            function ConvertTo-PlainEvidenceValue {
+                param($Value)
+
+                if ($null -eq $Value) { return $null }
+                if ($Value -is [array]) {
+                    return @($Value | ForEach-Object { if ($null -eq $_) { $null } else { $_.ToString() } })
+                }
+                return $Value.ToString()
+            }
+
+            function Get-DeviceEvidence {
+                param($DeviceBasics, $MachineEvidence, [string]$MachineCacheRoot, [bool]$ForceEvidenceRefresh)
+
+                $deviceHash = New-DeviceCheckHash -Text $DeviceBasics.InstanceId
+                $devicesRoot = Join-Path -Path $MachineCacheRoot -ChildPath 'devices'
+                $cachePath = Join-Path -Path $devicesRoot -ChildPath "$deviceHash.json"
+
+                if ((-not $ForceEvidenceRefresh) -and (Test-Path -LiteralPath $cachePath)) {
+                    try {
+                        $cachedEvidence = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+                        return [PSCustomObject]@{
+                            Source   = 'Evidence'
+                            Status   = 'Done'
+                            Result   = "[Evidence Cache] Loaded local evidence: $cachePath"
+                            Path     = $cachePath
+                            Evidence = $cachedEvidence
+                        }
+                    } catch {}
+                }
+
+                $propertyRows = @()
+                $propertyError = $null
+                try {
+                    $propertyRows = @(
+                        Get-PnpDeviceProperty -InstanceId $DeviceBasics.InstanceId -ErrorAction Stop |
+                            Sort-Object KeyName |
+                            ForEach-Object {
+                                [PSCustomObject]@{
+                                    KeyName = $_.KeyName
+                                    Type    = if ($null -eq $_.Type) { $null } else { $_.Type.ToString() }
+                                    Data    = ConvertTo-PlainEvidenceValue $_.Data
+                                }
+                            }
+                    )
+                } catch {
+                    $propertyError = $_.Exception.Message
+                }
+
+                $importantData = [ordered]@{}
+                $importantKeys = @(
+                    'DEVPKEY_Device_DeviceDesc',
+                    'DEVPKEY_Device_BusReportedDeviceDesc',
+                    'DEVPKEY_Device_HardwareIds',
+                    'DEVPKEY_Device_CompatibleIds',
+                    'DEVPKEY_Device_Manufacturer',
+                    'DEVPKEY_Device_Service',
+                    'DEVPKEY_Device_Class',
+                    'DEVPKEY_Device_ClassGuid',
+                    'DEVPKEY_Device_Driver',
+                    'DEVPKEY_Device_DriverInfPath',
+                    'DEVPKEY_Device_DriverVersion',
+                    'DEVPKEY_Device_ProblemCode',
+                    'DEVPKEY_Device_Parent',
+                    'DEVPKEY_Device_LocationPaths',
+                    'DEVPKEY_Device_ContainerId'
+                )
+
+                foreach ($importantKey in $importantKeys) {
+                    $match = $propertyRows | Where-Object { $_.KeyName -eq $importantKey } | Select-Object -First 1
+                    if ($null -ne $match) {
+                        $importantData[$importantKey] = $match.Data
+                    }
+                }
+
+                $signedDriver = $null
+                $signedDriverError = $null
+                try {
+                    $driver = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop |
+                        Where-Object { $_.DeviceID -eq $DeviceBasics.InstanceId } |
+                        Select-Object -First 1
+                    if ($null -ne $driver) {
+                        $signedDriver = [PSCustomObject]@{
+                            DeviceName         = ConvertTo-PlainEvidenceValue $driver.DeviceName
+                            Manufacturer       = ConvertTo-PlainEvidenceValue $driver.Manufacturer
+                            DriverProviderName = ConvertTo-PlainEvidenceValue $driver.DriverProviderName
+                            DriverVersion      = ConvertTo-PlainEvidenceValue $driver.DriverVersion
+                            DriverDate         = ConvertTo-PlainEvidenceValue $driver.DriverDate
+                            InfName            = ConvertTo-PlainEvidenceValue $driver.InfName
+                            HardwareID         = ConvertTo-PlainEvidenceValue $driver.HardwareID
+                            CompatID           = ConvertTo-PlainEvidenceValue $driver.CompatID
+                        }
+                    }
+                } catch {
+                    $signedDriverError = $_.Exception.Message
+                }
+
+                $pnputilOutput = $null
+                $pnputilError = $null
+                try {
+                    $pnputilArgs = @('/enum-devices', '/instanceid', $DeviceBasics.InstanceId, '/ids', '/relations', '/drivers')
+                    $pnputilOutput = (& pnputil.exe @pnputilArgs 2>&1) -join "`n"
+                } catch {
+                    $pnputilError = $_.Exception.Message
+                }
+
+                $evidence = [PSCustomObject]@{
+                    SchemaVersion        = 1
+                    CapturedAt           = (Get-Date).ToString('o')
+                    Machine              = $MachineEvidence
+                    Device               = $DeviceBasics
+                    DeviceHash           = $deviceHash
+                    ImportantProperties  = [PSCustomObject]$importantData
+                    PnpProperties        = $propertyRows
+                    PnpPropertyError     = $propertyError
+                    SignedDriver         = $signedDriver
+                    SignedDriverError    = $signedDriverError
+                    PnPUtil              = [PSCustomObject]@{
+                        Command = "pnputil.exe /enum-devices /instanceid `"$($DeviceBasics.InstanceId)`" /ids /relations /drivers"
+                        Output  = $pnputilOutput
+                        Error   = $pnputilError
+                    }
+                }
+
+                try {
+                    $null = New-Item -ItemType Directory -Path $devicesRoot -Force
+                    $evidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $cachePath -Encoding UTF8
+                    return [PSCustomObject]@{
+                        Source   = 'Evidence'
+                        Status   = 'Done'
+                        Result   = "[Evidence Cache] Saved local evidence: $cachePath"
+                        Path     = $cachePath
+                        Evidence = $evidence
+                    }
+                } catch {
+                    return [PSCustomObject]@{
+                        Source   = 'Evidence'
+                        Status   = 'Error'
+                        Result   = "Failed to save local evidence: $($_.Exception.Message)"
+                        Path     = $cachePath
+                        Evidence = $evidence
+                    }
+                }
+            }
+
             function Get-LocalDeviceLookup {
                 param([string]$InstId)
-                
+
                 $vendorId = $null
                 $deviceId = $null
                 $dbUrl = $null
                 $dbName = $null
-                
+
                 if ($InstId -match 'USB\\VID_([0-9a-fA-F]{4})&PID_([0-9a-fA-F]{4})') {
                     $vendorId = $Matches[1].ToLower()
                     $deviceId = $Matches[2].ToLower()
@@ -417,20 +1454,20 @@ function Start-DeviceLookup {
                 else {
                     return $null
                 }
-                
+
                 $dbPath = Join-Path $env:TEMP $dbName
                 try {
                     if (-not (Test-Path $dbPath) -or (Get-Item $dbPath).LastWriteTime -lt (Get-Date).AddDays(-30)) {
                         Invoke-WebRequest -Uri $dbUrl -OutFile $dbPath -UserAgent "Mozilla/5.0" -TimeoutSec 15 -UseBasicParsing
                     }
-                    
+
                     $vendorName = $null
                     $deviceName = $null
                     $foundVendor = $false
-                    
+
                     foreach ($line in Get-Content $dbPath) {
                         if ($line.StartsWith("#") -or [string]::IsNullOrWhiteSpace($line)) { continue }
-                        
+
                         if ($line -match "^([0-9a-fA-F]{4})\s+(.+)$") {
                             if ($Matches[1].ToLower() -eq $vendorId) {
                                 $vendorName = $Matches[2].Trim()
@@ -440,7 +1477,7 @@ function Start-DeviceLookup {
                                 $foundVendor = $false
                             }
                         }
-                        
+
                         if ($foundVendor -and $line -match "^\t([0-9a-fA-F]{4})\s+(.+)$") {
                             if ($Matches[1].ToLower() -eq $deviceId) {
                                 $deviceName = $Matches[2].Trim()
@@ -448,7 +1485,7 @@ function Start-DeviceLookup {
                             }
                         }
                     }
-                    
+
                     if ($vendorName) {
                         return [PSCustomObject]@{
                             Vendor = $vendorName
@@ -458,54 +1495,60 @@ function Start-DeviceLookup {
                 } catch {}
                 return $null
             }
-            
+
             function Search-DeviceWeb {
                 param([string]$HwId)
-                
+
                 $query = $HwId
                 if ($HwId -match '^([^\\]+\\[^\\]+)') {
                     $query = $Matches[1]
                 }
-                
+
                 $escapedQuery = [Uri]::EscapeDataString($query)
                 $uri = "https://html.duckduckgo.com/html/?q=$escapedQuery"
-                
+
                 $response = Invoke-WebRequest -Uri $uri -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 15 -UseBasicParsing
                 $content = $response.Content
-                
+
                 $matches = [regex]::Matches($content, '<a class="result__snippet"[^>]*>(.*?)</a>')
-                
+
                 $results = [System.Collections.Generic.List[string]]::new()
                 $seen = @{}
-                
+
                 foreach ($m in $matches) {
                     $text = $m.Groups[1].Value -replace '<[^>]+>', ''
                     $text = $text -replace '&amp;', '&' -replace '&#92;', '\' -replace '&quot;', '"' -replace '&#x27;', "'" -replace '&lt;', '<' -replace '&gt;', '>'
                     $text = $text.Trim()
-                    
+
                     if ([string]::IsNullOrWhiteSpace($text) -or $text.Length -lt 10) { continue }
-                    
+
                     $hash = $text.Substring(0, [Math]::Min(30, $text.Length))
                     if ($seen.ContainsKey($hash)) { continue }
                     $seen[$hash] = $true
-                    
+
                     $results.Add($text)
                     if ($results.Count -eq 3) { break }
                 }
-                
+
                 if ($results.Count -eq 0) {
                     $results.Add("No Web search descriptions found.")
                 }
                 return $results
             }
-            
+
+            Write-Output (Get-DeviceEvidence -DeviceBasics $DeviceBasics -MachineEvidence $MachineEvidence -MachineCacheRoot $MachineCacheRoot -ForceEvidenceRefresh $ForceEvidenceRefresh)
+
+            if ($EvidenceOnly) {
+                return $null
+            }
+
             $localInfo = Get-LocalDeviceLookup -InstId $InstanceId
             if ($null -ne $localInfo) {
                 Write-Output ([PSCustomObject]@{ Source = 'Local'; Status = 'Done'; Result = "[Local DB] Vendor: $($localInfo.Vendor) | Device: $($localInfo.Device)" })
             } else {
                 Write-Output ([PSCustomObject]@{ Source = 'Local'; Status = 'Done'; Result = $null })
             }
-            
+
             $webSnippets = @()
             try {
                 $webSnippets = Search-DeviceWeb -HwId $InstanceId
@@ -522,20 +1565,31 @@ function Start-DeviceLookup {
         }
         return $null
     })
-    $null = $psWeb.AddArgument($Dev.InstanceId)
-    
+    $deviceBasics = [PSCustomObject]@{
+        InstanceId             = $Dev.InstanceId
+        FriendlyName           = $Dev.FriendlyName
+        Class                  = $Dev.Class
+        Status                 = $Dev.Status
+        ConfigManagerErrorCode = $Dev.ConfigManagerErrorCode
+    }
+    $null = $psWeb.AddArgument($deviceBasics)
+    $null = $psWeb.AddArgument($script:MachineEvidence)
+    $null = $psWeb.AddArgument($script:MachineCacheRoot)
+    $null = $psWeb.AddArgument([bool]$EvidenceOnly)
+    $null = $psWeb.AddArgument([bool]$ForceEvidenceRefresh)
+
     $outputWeb = [System.Management.Automation.PSDataCollection[PSObject]]::new()
     $asyncWeb = $psWeb.BeginInvoke($outputWeb)
-    
+
     # Register active search
     $script:ActiveSearches[$instanceId] = [pscustomobject]@{
         Device             = $Dev
         StartTime          = (Get-Date)
-        
+
         PsWeb              = $psWeb
         AsyncWeb           = $asyncWeb
         OutputWeb          = $outputWeb
-        
+
         PsGemini           = $null
         AsyncGemini        = $null
         OutputGemini       = $null
@@ -543,7 +1597,7 @@ function Start-DeviceLookup {
         GeminiApiKey       = $apiKey
         GeminiModel        = $geminiModel
         GeminiDuration     = $null
-        
+
         PsOpenRouter       = $null
         AsyncOpenRouter    = $null
         OutputOpenRouter   = $null
@@ -551,37 +1605,84 @@ function Start-DeviceLookup {
         OpenRouterApiKey   = $openRouterKey
         OpenRouterModel    = $openRouterModel
         OpenRouterDuration = $null
-        
+
         LocalState         = $localState
         WebState           = $webState
         GeminiState        = $geminiState
         OpenRouterState    = $openRouterState
-        
+        EvidenceState      = $evidenceState
+        EvidenceOnly       = [bool]$EvidenceOnly
+
         LocalVal           = $null
         WebVal             = $null
         WebSnippets        = @()
         GeminiVal          = $null
         OpenRouterVal      = $null
-        
+        EvidenceVal        = $null
+        EvidencePath       = $null
+        DeviceEvidence     = $null
+
         SpinnerIndex       = 0
     }
+}
+
+function Start-DeviceEvidenceBatchScan {
+    param(
+        [array]$Devices,
+        [string]$Label
+    )
+
+    if ($null -eq $Devices -or $Devices.Count -eq 0) { return }
+
+    $devices = @($Devices)
+    $startedCount = 0
+    $alreadyRunningCount = 0
+
+    foreach ($device in $devices) {
+        if ($script:ActiveSearches.Contains($device.InstanceId)) {
+            $alreadyRunningCount++
+            continue
+        }
+
+        Start-DeviceLookup -Dev $device -EvidenceOnly -ForceEvidenceRefresh
+        $startedCount++
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Label)) { $Label = 'selected group' }
+    $parts = @("Evidence scan: $Label", "$startedCount started", "$alreadyRunningCount already running", "$($devices.Count) devices", (Get-Date -Format 'HH:mm:ss'))
+    $script:SystemScanMessage = ($parts -join ' | ')
+}
+
+function Start-CategoryEvidenceScan {
+    param($Category)
+
+    if ($null -eq $Category -or -not $Category.Devices) { return }
+
+    $categoryDisplayName = Get-NotePropertyValue -Object $Category -Name 'DisplayName'
+    $categoryName = if (-not [string]::IsNullOrWhiteSpace($categoryDisplayName)) { $categoryDisplayName } else { $Category.Name }
+    Start-DeviceEvidenceBatchScan -Devices @($Category.Devices) -Label $categoryName
+}
+
+function Start-AllEvidenceScan {
+    $devices = @($script:categories | ForEach-Object { @($_.Devices) })
+    Start-DeviceEvidenceBatchScan -Devices $devices -Label (Get-MachineDisplayName -MachineEvidence $script:MachineEvidence)
 }
 
 # Stop and cleanup an active device lookup (Cancellation)
 function Stop-DeviceLookup {
     param([string]$InstanceId)
-    
+
     if (-not $script:ActiveSearches.Contains($InstanceId)) { return }
     $search = $script:ActiveSearches[$InstanceId]
-    
+
     # Safely stop and dispose runspaces
     if ($null -ne $search.PsWeb) { try { $search.PsWeb.Stop(); $search.PsWeb.Dispose() } catch {} }
     if ($null -ne $search.PsGemini) { try { $search.PsGemini.Stop(); $search.PsGemini.Dispose() } catch {} }
     if ($null -ne $search.PsOpenRouter) { try { $search.PsOpenRouter.Stop(); $search.PsOpenRouter.Dispose() } catch {} }
-    
+
     # Finalize search results with cancelled messages in split format
     $newResults = [System.Collections.Generic.List[string]]::new()
-    
+
     if ($search.GeminiState -in @('Searching', 'Waiting')) {
         $newResults.Add("[Gemini Error] (Cancelled)")
         $newResults.Add("  Cancelled by user.")
@@ -594,7 +1695,7 @@ function Stop-DeviceLookup {
         $newResults.Add("[Gemini Error] (Failed$durationStr)")
         $newResults.Add("  $($search.GeminiVal)")
     }
-    
+
     if ($search.OpenRouterState -in @('Searching', 'Waiting')) {
         $newResults.Add("[OpenRouter Error] (Cancelled)")
         $newResults.Add("  Cancelled by user.")
@@ -607,20 +1708,25 @@ function Stop-DeviceLookup {
         $newResults.Add("[OpenRouter Error] (Failed$durationStr)")
         $newResults.Add("  $($search.OpenRouterVal)")
     }
-    
+
     if ($search.LocalVal) {
         $newResults.Add($search.LocalVal)
     }
-    
+
     if ($search.WebState -eq 'Searching') {
         $newResults.Add("[Web Snippet Error] (Cancelled)")
         $newResults.Add("  Cancelled by user.")
+    } elseif ($search.WebSnippets -and $search.WebSnippets.Count -gt 0) {
+        for ($snippetIndex = 0; $snippetIndex -lt $search.WebSnippets.Count; $snippetIndex++) {
+            $snippetNumber = $snippetIndex + 1
+            $newResults.Add("[Web Snippet $snippetNumber/$($search.WebSnippets.Count)] $($search.WebSnippets[$snippetIndex])")
+        }
     } elseif ($search.WebVal) {
-        $newResults.Add("[Web Snippet] $($search.WebVal)")
+        $newResults.Add("[Web Snippet 1/1] $($search.WebVal)")
     }
-    
+
     $search.Device.SearchResults = $newResults
-    
+
     # Remove from active searches
     $script:ActiveSearches.Remove($InstanceId)
 }
@@ -628,15 +1734,15 @@ function Stop-DeviceLookup {
 # Update all active background lookups (Invoked inside key polling)
 function Update-ActiveSearches {
     $completedIds = [System.Collections.Generic.List[string]]::new()
-    
+
     foreach ($instanceId in @($script:ActiveSearches.Keys)) {
         $search = $script:ActiveSearches[$instanceId]
-        
+
         $spinner = @('|', '/', '-', '\')
         $search.SpinnerIndex = ($search.SpinnerIndex + 1) % $spinner.Count
         $spChar = $spinner[$search.SpinnerIndex]
         $elapsed = [int]((Get-Date) - $search.StartTime).TotalSeconds
-        
+
         # 1. Process Web/Local Search
         if ($null -ne $search.PsWeb) {
             while ($search.OutputWeb.Count -gt 0) {
@@ -647,6 +1753,12 @@ function Update-ActiveSearches {
                         $search.LocalVal = $data.Result
                         $search.LocalState = $data.Status
                     }
+                    elseif ($data.Source -eq 'Evidence') {
+                        $search.EvidenceVal = $data.Result
+                        $search.EvidenceState = $data.Status
+                        $search.EvidencePath = $data.Path
+                        $search.DeviceEvidence = $data.Evidence
+                    }
                     elseif ($data.Source -eq 'Web') {
                         $search.WebVal = $data.Result
                         $search.WebState = $data.Status
@@ -656,7 +1768,7 @@ function Update-ActiveSearches {
                     }
                 }
             }
-            
+
             if ($search.AsyncWeb.IsCompleted) {
                 try {
                     $resList = $search.PsWeb.EndInvoke($search.AsyncWeb)
@@ -665,6 +1777,12 @@ function Update-ActiveSearches {
                             if ($data.Source -eq 'Local') {
                                 $search.LocalVal = $data.Result
                                 $search.LocalState = $data.Status
+                            }
+                            elseif ($data.Source -eq 'Evidence') {
+                                $search.EvidenceVal = $data.Result
+                                $search.EvidenceState = $data.Status
+                                $search.EvidencePath = $data.Path
+                                $search.DeviceEvidence = $data.Evidence
                             }
                             elseif ($data.Source -eq 'Web') {
                                 $search.WebVal = $data.Result
@@ -681,23 +1799,59 @@ function Update-ActiveSearches {
                 }
                 if ($search.WebState -eq 'Searching') { $search.WebState = 'Done' }
                 if ($search.LocalState -eq 'Searching') { $search.LocalState = 'Done' }
+                if ($search.EvidenceState -eq 'Searching') { $search.EvidenceState = 'Done' }
                 try { $search.PsWeb.Dispose() } catch {}
                 $search.PsWeb = $null
                 $search.AsyncWeb = $null
             }
         }
-        
+
         # 2. Trigger AI Runspaces if Web search finished and AI not started yet
-        if (($search.WebState -eq 'Done' -or $search.WebState -eq 'Error') -and 
+        if (($search.WebState -eq 'Done' -or $search.WebState -eq 'Error') -and
             -not $search.GeminiStarted -and -not $search.OpenRouterStarted) {
-            
-            $prompt = "You are a hardware expert. Below are search snippets for Hardware ID '$($search.Device.InstanceId)'. Synthesize them into a single concise line (max 90 chars) specifying the exact manufacturer, model, and likely driver/troubleshooting tip. Do not use markdown, bolding, or lists. Keep it brief.`nSnippets:`n" + ($search.WebSnippets -join "`n")
-            
+
+            $evidenceLines = [System.Collections.Generic.List[string]]::new()
+            if ($search.DeviceEvidence) {
+                try {
+                    $machine = $search.DeviceEvidence.Machine
+                    $evidenceLines.Add("System: $($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model); Board: $($machine.BaseBoard.Product); BIOS: $($machine.BIOS.SMBIOSBIOSVersion); OS: $($machine.OperatingSystem.Caption) $($machine.OperatingSystem.OSArchitecture)")
+                } catch {}
+                try {
+                    $evidenceLines.Add("Device: $($search.DeviceEvidence.Device.FriendlyName); InstanceId: $($search.DeviceEvidence.Device.InstanceId); Class: $($search.DeviceEvidence.Device.Class); Status: $($search.DeviceEvidence.Device.Status); ProblemCode: $($search.DeviceEvidence.Device.ConfigManagerErrorCode)")
+                } catch {}
+                try {
+                    $importantProperties = $search.DeviceEvidence.ImportantProperties
+                    $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
+                    if ($hardwareIds) { $evidenceLines.Add("HardwareIds: $($hardwareIds -join '; ')") }
+                } catch {}
+                try {
+                    $importantProperties = $search.DeviceEvidence.ImportantProperties
+                    $compatibleIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_CompatibleIds'
+                    if ($compatibleIds) { $evidenceLines.Add("CompatibleIds: $($compatibleIds -join '; ')") }
+                } catch {}
+                try {
+                    $importantProperties = $search.DeviceEvidence.ImportantProperties
+                    $service = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Service'
+                    if ($service) { $evidenceLines.Add("Service: $service") }
+                } catch {}
+                try {
+                    if ($search.DeviceEvidence.SignedDriver) {
+                        $driver = $search.DeviceEvidence.SignedDriver
+                        $evidenceLines.Add("InstalledDriver: $($driver.DriverProviderName); $($driver.DriverVersion); INF: $($driver.InfName)")
+                    }
+                } catch {}
+            }
+            if ($evidenceLines.Count -eq 0) {
+                $evidenceLines.Add("Local evidence unavailable.")
+            }
+
+            $prompt = "You are a hardware expert. Use local Windows evidence first and web snippets second. For Hardware ID '$($search.Device.InstanceId)', synthesize a single concise line (max 90 chars) with likely manufacturer/model and driver/troubleshooting tip. Do not use markdown, bolding, or lists. Use 'likely' if evidence is weak.`nLocal evidence:`n" + ($evidenceLines -join "`n") + "`nSnippets:`n" + ($search.WebSnippets -join "`n")
+
             # Start Gemini
             if ($search.GeminiState -eq 'Waiting') {
                 $search.GeminiStarted = $true
                 $search.GeminiState = 'Searching'
-                
+
                 $psGem = [PowerShell]::Create()
                 $null = $psGem.AddScript({
                     param($PromptText, $resolvedApiKey, $resolvedModelName)
@@ -707,9 +1861,9 @@ function Update-ActiveSearches {
                             @{ parts = @( @{ text = $PromptText } ) }
                         )
                     } | ConvertTo-Json -Depth 5
-                    
+
                     $uri = "https://generativelanguage.googleapis.com/v1beta/models/$($resolvedModelName):generateContent?key=$resolvedApiKey"
-                    
+
                     try {
                         $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
                         if ($response -and $response.candidates -and $response.candidates[0].content.parts[0].text) {
@@ -736,17 +1890,17 @@ function Update-ActiveSearches {
                 $null = $psGem.AddArgument($prompt)
                 $null = $psGem.AddArgument($search.GeminiApiKey)
                 $null = $psGem.AddArgument($search.GeminiModel)
-                
+
                 $search.OutputGemini = [System.Management.Automation.PSDataCollection[PSObject]]::new()
                 $search.AsyncGemini = $psGem.BeginInvoke($search.OutputGemini)
                 $search.PsGemini = $psGem
             }
-            
+
             # Start OpenRouter
             if ($search.OpenRouterState -eq 'Waiting') {
                 $search.OpenRouterStarted = $true
                 $search.OpenRouterState = 'Searching'
-                
+
                 $psOR = [PowerShell]::Create()
                 $null = $psOR.AddScript({
                     param($PromptText, $resolvedOpenRouterKey, $resolvedModelName)
@@ -757,13 +1911,13 @@ function Update-ActiveSearches {
                             @{ role = "user"; content = $PromptText }
                         )
                     } | ConvertTo-Json -Depth 5
-                    
+
                     $headers = @{
                         "Authorization" = "Bearer $resolvedOpenRouterKey"
                         "HTTP-Referer"  = "https://github.com/joty79/DeviceCheck"
                         "X-Title"       = "DeviceCheck Manager"
                     }
-                    
+
                     try {
                         $response = Invoke-RestMethod -Uri "https://openrouter.ai/api/v1/chat/completions" `
                             -Method Post `
@@ -771,7 +1925,7 @@ function Update-ActiveSearches {
                             -ContentType "application/json" `
                             -Body $orBody `
                             -TimeoutSec 30
-                        
+
                         if ($response -and $response.choices -and $response.choices[0].message.content) {
                             $openRouterSummary = $response.choices[0].message.content.Trim()
                             return [PSCustomObject]@{ Status = 'Done'; Result = $openRouterSummary }
@@ -785,16 +1939,16 @@ function Update-ActiveSearches {
                 $null = $psOR.AddArgument($prompt)
                 $null = $psOR.AddArgument($search.OpenRouterApiKey)
                 $null = $psOR.AddArgument($search.OpenRouterModel)
-                
+
                 $search.OutputOpenRouter = [System.Management.Automation.PSDataCollection[PSObject]]::new()
                 $search.AsyncOpenRouter = $psOR.BeginInvoke($search.OutputOpenRouter)
                 $search.PsOpenRouter = $psOR
             }
-            
+
             if ($search.GeminiState -eq 'Waiting') { $search.GeminiState = 'None' }
             if ($search.OpenRouterState -eq 'Waiting') { $search.OpenRouterState = 'None' }
         }
-        
+
         # 3. Process Gemini Runspace Output
         if ($null -ne $search.PsGemini) {
             while ($search.OutputGemini.Count -gt 0) {
@@ -805,7 +1959,7 @@ function Update-ActiveSearches {
                     $search.GeminiVal = $data.Result
                 }
             }
-            
+
             if ($search.AsyncGemini.IsCompleted) {
                 try {
                     $resList = $search.PsGemini.EndInvoke($search.AsyncGemini)
@@ -830,7 +1984,7 @@ function Update-ActiveSearches {
                 $search.AsyncGemini = $null
             }
         }
-        
+
         # 4. Process OpenRouter Runspace Output
         if ($null -ne $search.PsOpenRouter) {
             while ($search.OutputOpenRouter.Count -gt 0) {
@@ -841,7 +1995,7 @@ function Update-ActiveSearches {
                     $search.OpenRouterVal = $data.Result
                 }
             }
-            
+
             if ($search.AsyncOpenRouter.IsCompleted) {
                 try {
                     $resList = $search.PsOpenRouter.EndInvoke($search.AsyncOpenRouter)
@@ -866,10 +2020,10 @@ function Update-ActiveSearches {
                 $search.AsyncOpenRouter = $null
             }
         }
-        
+
         # Rebuild Results list
         $newResults = [System.Collections.Generic.List[string]]::new()
-        
+
         # Gemini display
         if ($search.GeminiState -eq 'Waiting') {
             $newResults.Add("[Gemini: $($search.GeminiModel)] (Waiting for web search...)")
@@ -884,7 +2038,7 @@ function Update-ActiveSearches {
             $newResults.Add("[Gemini Error] (Failed$durationStr)")
             $newResults.Add("  $($search.GeminiVal)")
         }
-        
+
         # OpenRouter display
         if ($search.OpenRouterState -eq 'Waiting') {
             $newResults.Add("[OpenRouter: $($search.OpenRouterModel)] (Waiting for web search...)")
@@ -899,23 +2053,28 @@ function Update-ActiveSearches {
             $newResults.Add("[OpenRouter Error] (Failed$durationStr)")
             $newResults.Add("  $($search.OpenRouterVal)")
         }
-        
+
         # Local DB display
         if ($search.LocalState -eq 'Done' -and $search.LocalVal) {
             $newResults.Add($search.LocalVal)
         }
-        
+
         # Web Snippet display
         if ($search.WebState -eq 'Searching') {
             $newResults.Add("[Web Snippet] (Searching... $spChar ${elapsed}s)")
+        } elseif ($search.WebState -eq 'Done' -and $search.WebSnippets -and $search.WebSnippets.Count -gt 0) {
+            for ($snippetIndex = 0; $snippetIndex -lt $search.WebSnippets.Count; $snippetIndex++) {
+                $snippetNumber = $snippetIndex + 1
+                $newResults.Add("[Web Snippet $snippetNumber/$($search.WebSnippets.Count)] $($search.WebSnippets[$snippetIndex])")
+            }
         } elseif ($search.WebState -eq 'Done' -and $search.WebVal) {
-            $newResults.Add("[Web Snippet] $($search.WebVal)")
+            $newResults.Add("[Web Snippet 1/1] $($search.WebVal)")
         } elseif ($search.WebState -eq 'Error') {
             $newResults.Add("[Web Snippet Error] $($search.WebVal)")
         }
-        
+
         $search.Device.SearchResults = $newResults
-        
+
         # Check if completed
         $finished = $true
         if ($null -ne $search.PsWeb) { $finished = $false }
@@ -923,12 +2082,12 @@ function Update-ActiveSearches {
         if ($null -ne $search.PsOpenRouter) { $finished = $false }
         if ($search.GeminiState -eq 'Waiting') { $finished = $false }
         if ($search.OpenRouterState -eq 'Waiting') { $finished = $false }
-        
+
         if ($finished) {
             $completedIds.Add($instanceId)
         }
     }
-    
+
     foreach ($id in $completedIds) {
         $script:ActiveSearches.Remove($id)
     }
@@ -1005,42 +2164,42 @@ function Read-ConsoleKey {
 }
 
 # Initial categories detection
-$categories = Get-DeviceCategories
+Invoke-SystemScan
 $selectedIndex = 0
 $running = $true
 
 try {
     [Console]::CursorVisible = $false
-    
+
     while ($running) {
         Lock-ViewportToWindow
-        
+
         # Calculate current visible rows
         $script:visibleRows = Update-VisibleRows
-        
-        # Clamp selected index to selectable types (Category / Device / Result)
+
+        # Clamp selected index to selectable types (Root / Category / Device / Result)
         if ($visibleRows.Count -eq 0) {
             $selectedIndex = 0
         } else {
             $selectedIndex = [Math]::Max(0, [Math]::Min($selectedIndex, $visibleRows.Count - 1))
-            while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
+            while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
                 $selectedIndex--
             }
         }
-        
+
         # Render viewport
         Render-Frame
-        
+
         # Key Handling
         $key = Read-ConsoleKey
         switch ($key.Key) {
             'UpArrow' {
                 if ($selectedIndex -gt 0) {
                     $idx = $selectedIndex - 1
-                    while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Category', 'Device', 'Result')) {
+                    while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Root', 'Category', 'Device', 'Result')) {
                         $idx--
                     }
-                    if ($visibleRows[$idx].Type -in @('Category', 'Device', 'Result')) {
+                    if ($visibleRows[$idx].Type -in @('Root', 'Category', 'Device', 'Result')) {
                         $selectedIndex = $idx
                     }
                 }
@@ -1048,23 +2207,23 @@ try {
             'DownArrow' {
                 if ($selectedIndex -lt ($visibleRows.Count - 1)) {
                     $idx = $selectedIndex + 1
-                    while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Category', 'Device', 'Result')) {
+                    while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Root', 'Category', 'Device', 'Result')) {
                         $idx++
                     }
-                    if ($visibleRows[$idx].Type -in @('Category', 'Device', 'Result')) {
+                    if ($visibleRows[$idx].Type -in @('Root', 'Category', 'Device', 'Result')) {
                         $selectedIndex = $idx
                     }
                 }
             }
             'PageUp' {
                 $selectedIndex = [Math]::Max(0, $selectedIndex - 10)
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
+                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
                     $selectedIndex--
                 }
             }
             'PageDown' {
                 $selectedIndex = [Math]::Min($visibleRows.Count - 1, $selectedIndex + 10)
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
+                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
                     $selectedIndex--
                 }
             }
@@ -1073,47 +2232,59 @@ try {
             }
             'End' {
                 $selectedIndex = $visibleRows.Count - 1
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Category', 'Device', 'Result')) {
+                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
                     $selectedIndex--
                 }
             }
             'RightArrow' {
                 $currentRow = $visibleRows[$selectedIndex]
-                if ($currentRow.Type -eq 'Category') {
-                    $currentRow.Ref.IsExpanded = $true
-                }
+                Expand-SelectedNode -Row $currentRow
             }
             'LeftArrow' {
                 $currentRow = $visibleRows[$selectedIndex]
-                if ($currentRow.Type -eq 'Category') {
-                    $currentRow.Ref.IsExpanded = $false
-                } elseif ($currentRow.Type -eq 'Device') {
-                    $parentCatName = $currentRow.Class
-                    $parentIndex = -1
-                    for ($j = 0; $j -lt $visibleRows.Count; $j++) {
-                        if ($visibleRows[$j].Type -eq 'Category' -and $visibleRows[$j].Name -eq $parentCatName) {
-                            $parentIndex = $j
-                            break
-                        }
-                    }
-                    if ($parentIndex -ne -1) {
-                        $selectedIndex = $parentIndex
-                        $visibleRows[$parentIndex].Ref.IsExpanded = $false
-                    }
-                }
+                Collapse-SelectedNode -Row $currentRow
+                $selectedIndex = $script:selectedIndex
             }
-            'Enter' {
+            'Add' {
                 $currentRow = $visibleRows[$selectedIndex]
-                if ($currentRow.Type -eq 'Category') {
-                    $currentRow.Ref.IsExpanded = -not $currentRow.Ref.IsExpanded
+                Expand-SelectedNode -Row $currentRow
+            }
+            'OemPlus' {
+                $currentRow = $visibleRows[$selectedIndex]
+                Expand-SelectedNode -Row $currentRow
+            }
+            'Subtract' {
+                $currentRow = $visibleRows[$selectedIndex]
+                Collapse-SelectedNode -Row $currentRow
+                $selectedIndex = $script:selectedIndex
+            }
+            'OemMinus' {
+                $currentRow = $visibleRows[$selectedIndex]
+                Collapse-SelectedNode -Row $currentRow
+                $selectedIndex = $script:selectedIndex
+            }
+            'R' {
+                Invoke-SystemScanWithFeedback -Quiet
+                $selectedIndex = $script:selectedIndex
+            }
+            'E' {
+                $currentRow = $visibleRows[$selectedIndex]
+                if ($currentRow.Type -eq 'Root') {
+                    Start-AllEvidenceScan
+                } elseif ($currentRow.Type -eq 'Category') {
+                    Start-CategoryEvidenceScan -Category $currentRow.Ref
+                } elseif ($currentRow.Type -eq 'Device') {
+                    Start-DeviceLookup -Dev $currentRow.Ref -EvidenceOnly -ForceEvidenceRefresh
+                } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
+                    Start-DeviceLookup -Dev $currentRow.ParentDevice -EvidenceOnly -ForceEvidenceRefresh
                 }
             }
             'S' {
                 $currentRow = $visibleRows[$selectedIndex]
                 if ($currentRow.Type -eq 'Device') {
-                    Start-DeviceLookup -Dev $currentRow.Ref
+                    Start-DeviceLookup -Dev $currentRow.Ref -ForceEvidenceRefresh
                 } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                    Start-DeviceLookup -Dev $currentRow.ParentDevice
+                    Start-DeviceLookup -Dev $currentRow.ParentDevice -ForceEvidenceRefresh
                 }
             }
             'Escape' {
@@ -1126,14 +2297,35 @@ try {
                 continue
             }
             default {
-                # Handle lowercase 's' keypress
-                if ($key.KeyChar -eq 's') {
+                # Handle lowercase hotkeys from hosts that do not map Key names consistently.
+                if ($key.KeyChar -eq 'r') {
+                    Invoke-SystemScanWithFeedback -Quiet
+                    $selectedIndex = $script:selectedIndex
+                } elseif ($key.KeyChar -eq 'e') {
+                    $currentRow = $visibleRows[$selectedIndex]
+                    if ($currentRow.Type -eq 'Root') {
+                        Start-AllEvidenceScan
+                    } elseif ($currentRow.Type -eq 'Category') {
+                        Start-CategoryEvidenceScan -Category $currentRow.Ref
+                    } elseif ($currentRow.Type -eq 'Device') {
+                        Start-DeviceLookup -Dev $currentRow.Ref -EvidenceOnly -ForceEvidenceRefresh
+                    } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
+                        Start-DeviceLookup -Dev $currentRow.ParentDevice -EvidenceOnly -ForceEvidenceRefresh
+                    }
+                } elseif ($key.KeyChar -eq 's') {
                     $currentRow = $visibleRows[$selectedIndex]
                     if ($currentRow.Type -eq 'Device') {
-                        Start-DeviceLookup -Dev $currentRow.Ref
+                        Start-DeviceLookup -Dev $currentRow.Ref -ForceEvidenceRefresh
                     } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                        Start-DeviceLookup -Dev $currentRow.ParentDevice
+                        Start-DeviceLookup -Dev $currentRow.ParentDevice -ForceEvidenceRefresh
                     }
+                } elseif ($key.KeyChar -eq '+') {
+                    $currentRow = $visibleRows[$selectedIndex]
+                    Expand-SelectedNode -Row $currentRow
+                } elseif ($key.KeyChar -eq '-') {
+                    $currentRow = $visibleRows[$selectedIndex]
+                    Collapse-SelectedNode -Row $currentRow
+                    $selectedIndex = $script:selectedIndex
                 }
             }
         }
