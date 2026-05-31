@@ -1,72 +1,101 @@
-# Gemini Response: Google Search / AI Overview Retrieval
+# 🔵 Gemini Response: Google Search / AI Overview Retrieval
 
-Date: 2026-05-31
+🔸 **Ημερομηνία:** 2026-05-31
+🔸 **Αρχείο Brief:** [gemini-google-search-investigation.md](file:///d:/Users/joty79/scripts/DeviceCheck/docs/gemini-google-search-investigation.md)
 
-Source prompt: `docs/gemini-google-search-investigation.md`
+---
 
-## Recommended Workflow
+### 🔵 System Design Review & Απαντήσεις
 
-1. **Normalization Phase:** Before search, clean local IDs such as `MONITOR\GSM5BD3` into useful tokens like `GSM5BD3`.
-2. **Discovery Phase:** Use `SearchGoogleCustom` when configured for stable URL/snippet discovery.
-3. **Verification Phase:** Once a candidate model is found, use `FetchRenderedUrlText` directly on official vendor/OEM pages.
-4. **Validation Phase:** Compare discovered model/driver evidence against local `HardwareId`, `CompatibleId`, installed INF, and vendor page evidence.
+#### 1. Αξιόπιστο Google Search Discovery
+🔸 Ο πιο σταθερός και ασφαλής τρόπος είναι το **Google Custom Search JSON API** (`SearchGoogleCustom`).
+🔸 Δεν προκαλεί ποτέ ***reCAPTCHA*** και παρακάμπτει το browser automation.
+🔸 Αν το API δεν είναι configured, η χρήση του `SearchGoogleRendered` πρέπει να περιορίζεται σε **1-2 προσπάθειες** ανά εκτέλεση με αυστηρά block detection rules.
 
-## Tool Changes Suggested
+#### 2. Persistent Browser Profile vs Temporary Profile
+🔸 Η χρήση **Persistent Chrome Profile** είναι ***ΚΡΙΣΙΜΗ***.
+🔸 Τα temporary profiles στερούνται cookies, local storage και realistic headers, κάτι που η Google ανιχνεύει άμεσα ως bot behavior.
+🔸 Ένα persistent profile συσσωρεύει φυσιολογικό browser state και μειώνει την πιθανότητα εμφάνισης ***anti-bot challenge***.
 
-- Make `SearchGoogleCustom` the primary API-based discovery tool when configured.
-- Use `SearchGoogleRendered` only when needed for AI Overview/model-identity hints.
-- Add regional handling to rendered fetches, such as Greece/Europe first.
-- Keep Microsoft Update Catalog as last resort after official vendor domains fail.
+#### 3. Google Home Typed-Search vs Direct URL
+🔸 Η απευθείας πλοήγηση στο `/search?q=...` είναι κλασικό σήμα αυτοματοποιημένου scraper.
+🔸 Η έναρξη από το `google.gr` (ή `google.com`), η προσομοίωση πληκτρολόγησης στο input, και το κλικ στο κουμπί αναζήτησης προσφέρουν πολύ μεγαλύτερη αξιοπιστία.
 
-## Prompt Changes Suggested
+#### 4. Official API για AI Overview
+🔸 Επίσημα, το Google Custom Search API **ΔΕΝ** επιστρέφει ***AI Overview***.
+🔸 Η μόνη επίσημη εναλλακτική είναι η χρήση του **Gemini API με Google Search Grounding** (όπου το μοντέλο εκτελεί τις αναζητήσεις μέσω της Google υποστηριζόμενο από την υποδομή της).
 
-- Extract `HardwareId`, `Manufacturer`, and model-like tokens before searching.
-- Avoid searching the entire Device Manager block when a smaller normalized query is better.
-- Enforce source hierarchy:
-  1. Official vendor/OEM regional support page.
-  2. Official vendor/OEM global support page.
-  3. Microsoft Update Catalog.
-  4. Third-party pages only as weak hints, never final driver truth.
-- Treat AI Overview as identity hint only, not as final driver/version authority.
+#### 5. Human-Assisted Workflow για AI Overview
+🔸 Όταν το automated search μπλοκάρεται, το DeviceCheck πρέπει να προσφέρει **Human-in-the-Loop Fallback**:
+1. Το σύστημα παράγει το optimized search query.
+2. Ο χρήστης το ανοίγει στο δικό του κανονικό Chrome με ένα κλικ.
+3. Αντιγράφει το ***AI Overview*** text.
+4. Το κάνει επικόλληση (paste) στο Details Panel, το οποίο το σώζει στο cache της συσκευής ως έγκυρο evidence.
 
-## Browser/Search Behavior Suggested
+#### 6. Σχεδιασμός Fallback σε περίπτωση Block
+🔸 Όταν ανιχνεύεται reCAPTCHA, ο Agent αποθηκεύει το state ως `PausedBlocked` στο Checkpoint.
+🔸 Το script σταματά να καλεί τη Google και συνεχίζει αποκλειστικά με:
+- Deterministic vendor candidates.
+- Microsoft Update Catalog fallback.
+- Pasted AI Overview από τον χρήστη.
 
-- Prefer a persistent browser profile over a fresh temporary profile.
-- Avoid direct navigation to `/search?q=...` when testing rendered Google Search.
-- Try opening `google.gr`/Google home first, then type into the search box and submit.
-- Use regional browser settings such as `Accept-Language: el-GR,el;q=0.9,en-US;q=0.8`.
-- Record final URL after redirects.
+#### 7. Prompt Optimization
+🔸 Το prompt του Agent πρέπει να επιβάλλει **Strict Hierarchy**:
+1. Έλεγχος deterministic candidates με `FetchRenderedUrlText` (π.χ. MSI, LG, AOC support URLs).
+2. Χρήση `SearchGoogleCustom` (αν υπάρχει API key).
+3. Fallback σε `SearchGoogleRendered` (μόνο μία φορά για identity hints).
+4. Fallback σε `SearchUpdateCatalog`.
+🔸 Απαγόρευση χρήσης του generic `SearchWeb` (DuckDuckGo) όταν υπάρχουν έγκυρα vendor candidates.
 
-## Fallback And Human-Assisted Flow
+#### 8. Στρατηγική Query για Driver Discovery
+🔸 Η βέλτιστη στρατηγική είναι **Hybrid**:
+- **Identity Discovery:** Raw Device Manager block + `driver` (εξαιρετικό για AI Overview σύνθεση).
+- **Official Pages Search:** Quoted Hardware ID + Manufacturer + `driver site:vendor.com` (π.χ. `"USB\VID_0DB0&PID_CD0E" Realtek site:msi.com`).
 
-- If rendered Google Search returns CAPTCHA, stop retrying that run and store:
-  - pending query
-  - target device evidence
-  - timestamp
-  - blocked URL/final URL
-  - current checkpoint
-- Let the user manually view Google/AI Overview in normal Chrome and paste/import the text as evidence.
-- Keep final driver links subject to official vendor verification.
+#### 9. Minimum Evidence για Final Answer
+🔸 Ο Agent δεν πρέπει να δίνει τελική απάντηση χωρίς:
+1. **Official Domain Verification:** Το link λήψης πρέπει να ανήκει στο επίσημο domain του κατασκευαστή (π.χ. `download.msi.com`, `dlcdnets.asus.com`).
+2. **Version Match:** Επιβεβαίωση της έκδοσης (π.χ. `6.4.0.2443`) και της ημερομηνίας κυκλοφορίας.
 
-## Risks
+#### 10. Logs & Checkpoints για Debugging
+🔸 **Trace Logs (`.jsonl`):** Καταγραφή κάθε Gemini step, requested tool, arguments, και tool output.
+🔸 **Checkpoint JSON:** Αποθήκευση του messages array, memory (URLs, planning steps), και device metadata για πλήρη αναπαραγωγή.
 
-- Regional redirects can lead to wrong country pages.
-- Hardware IDs can map to a family of models, not a single exact model.
-- AI Overview can identify a family/revision but must be verified.
-- CAPTCHA/unusual-traffic results must not be looped.
+---
 
-## DeviceCheck Interpretation
+### 🔵 Proposed System Architecture
 
-The next useful implementation experiment is not "disable Google", but "make Google rendered search less dirty":
+```text
+Recommended workflow:
+1. System Evidence Gathering -> Δημιουργία σταθερού Machine & Device ID.
+2. Deterministic Check -> Κατασκευή support URLs βάσει PnP/Motherboard signatures.
+3. Fetch Official Content -> Χρήση FetchRenderedUrlText στα constructed support pages.
+4. Fallback to API Search -> Χρήση SearchGoogleCustom (αν είναι configured).
+5. Fallback to Browser Search -> Χρήση SearchGoogleRendered (max 1 run, persistent profile).
+6. Human Fallback -> Open browser query & import pasted AI Overview.
+7. Verification -> Επιβεβαίωση version/date/domain.
+8. Cache Save -> Αποθήκευση στο τοπικό JSON cache.
 
-1. Add a persistent DeviceCheck browser profile for search diagnostics.
-2. Add a Google-home typed-search mode.
-3. Add visible logs for:
-   - direct URL vs typed search
-   - profile used
-   - final URL
-   - CAPTCHA detected
-   - AI Overview extracted or absent
-4. Keep official vendor pages as final truth.
+Tool changes:
+- SearchGoogleRendered: Προσθήκη υποστήριξης persistent profile directory.
+- SearchGoogleRendered: Υλοποίηση "typed-search" στην αρχική σελίδα της Google.
+- DeviceCheck UI: Προσθήκη επιλογής "Import pasted AI Overview" στο Details Panel.
 
-Note: Gemini mentioned proxy/IP reputation as a risk. DeviceCheck should not implement proxy-based CAPTCHA bypass. If IP reputation is the problem, the acceptable workflow is human-assisted search or official API/tooling.
+Prompt changes:
+- Προσθήκη αυστηρού κανόνα: "Do NOT use generic search engines if a constructed vendor support URL is available."
+- Enforce output separation: Official OEM vs Official Vendor vs Catalog vs Web snippet.
+
+Browser/Search behavior:
+- Χρήση persistent Chrome/Edge user-data-dir.
+- Αποφυγή direct navigation σε search URLs.
+- Ρύθμιση ρεαλιστικών locales/headers (el-GR/gr).
+
+Fallback and human-assisted flow:
+- checkpoint-based resume σε Pause states.
+- Χειροκίνητη εισαγωγή search text/AI Overview από τον χρήστη.
+
+Risks:
+- CAPTCHA blocks που διακόπτουν το automation.
+- Λανθασμένα regional redirects (π.χ. US support page που επιστρέφει 404 αντί για το GR/EU).
+- Λανθασμένο model identification από AI Overviews (χρειάζεται πάντα verification στο official page).
+```
