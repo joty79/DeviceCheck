@@ -272,3 +272,31 @@ Root cause: The first rendered AOC workflow tried a US drivers search page and t
 Guardrail/rule: Add deterministic vendor prefetch adapters ahead of Gemini when a safe pattern is known. For AOC monitor models, try regional product pages with rendered extraction and feed the official driver/manual download evidence to Gemini before it spends planning calls.
 Files affected: `Get-DriverUpdateAgent.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: AOC Greece rendered smoke from previous turn; PowerShell parser validation; fake-key checkpoint smoke.
+
+Date: 2026-05-31
+Problem: On an LG UltraGear monitor, Gemini ignored the intended OEM-first workflow and spent steps on DuckDuckGo snippets, including cached/noisy search results and Microsoft Catalog fallback.
+Root cause: `SearchWeb` was available too early, and the agent prompt only advised vendor-first behavior instead of enforcing it. The agent also received only a small device summary, not the full local PnP evidence that could help identify installed INF/provider/version details.
+Guardrail/rule: Treat generic search as a guarded last resort. Build official vendor-first candidates from local device evidence before Gemini planning; block `SearchWeb` until at least one official `FetchRenderedUrlText`/`FetchUrlText` attempt has occurred when candidates exist; limit repeated search calls. Pass compact local device evidence JSON into the agent prompt.
+Files affected: `Get-DriverUpdateAgent.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; LG fake-key checkpoint smoke confirmed LG official candidates and local evidence JSON are present before Gemini; `node --check`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Short generic searches such as `LG monitor driver download` or DuckDuckGo snippets did not identify the exact monitor model, while a raw Google query containing the Device Manager-style fields did surface useful AI Overview and official-result context.
+Root cause: The agent was being asked to infer too much from normalized summary text and low-quality snippets. Google's model-identity hints were strongest when the full local evidence block was provided, including `InstanceId`, `HardwareId`, `CompatibleId`, `Service`, and installed `INF`.
+Guardrail/rule: For agentic driver discovery, build Google/API queries from raw local evidence fields, not short SEO-style phrases. Prefer the official Google Custom Search JSON API when configured; it returns result URLs/snippets but not AI Overview. Treat AI Overview as an optional interactive/browser hint only, then verify driver version/date/download links on official vendor pages. Do not automatically open browser Google when safe official vendor-first candidates already exist; try those first, and use Google only when no vendor candidate can be built or when official pages are insufficient. When vendor sites are regional, try Greece/Europe official pages before US/global pages; a US 404 or empty search is not enough to conclude no driver exists. If browser Google returns anti-bot/reCAPTCHA, log the block explicitly, stop retrying Google for that run, and continue with official vendor candidates instead of looping.
+Files affected: `Get-DriverUpdateAgent.ps1`, `tools/Search-GoogleRendered.js`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Direct rendered Google smoke reproduced useful AI Overview/official-result evidence once, then later Google returned anti-bot/reCAPTCHA; fake-key agent smoke confirmed automatic browser Google is skipped when official vendor-first candidates exist; PowerShell parser validation; `node --check`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: AI Overview can be high-value identity evidence for devices, but it is not exposed by Google's official Custom Search JSON API and browser automation against Google Search can trigger reCAPTCHA.
+Root cause: AI Overview is a Google Search UI feature, while the official JSON API returns normal result fields such as title/link/snippet. Automated Google SERP sessions are unreliable and can be classified as machine-generated traffic.
+Guardrail/rule: Treat AI Overview as user-assisted evidence, not as a default automated dependency. The app should generate/copy/open the raw evidence query, let the user view AI Overview in their normal browser when available, then import pasted/copied AI Overview text into the selected device cache with query, timestamp, and source label. Gemini may use that evidence for identity hints, but final driver links must still be verified on official vendor pages.
+Files affected: `README.md`, `PROJECT_RULES.md`.
+Validation/tests run: Pending for future manual evidence import UI.
+
+Date: 2026-05-31
+Problem: Gemini still called the browser Google Search tool after `SearchGoogleCustom` reported that the official API was not configured, causing another Google reCAPTCHA/unusual-traffic page. However, previous successful experiments suggest rendered Google Search can work in some cases and may be valuable for AI Overview/model identity.
+Root cause: The current Google rendered helper may be using a fragile browser/search pattern: fresh temporary profile, direct `/search?q=` navigation, long raw query, or other automation signals. Disabling the tool hides the problem instead of learning the right workflow.
+Guardrail/rule: Keep `SearchGoogleRendered` available during active investigation, but log CAPTCHA blocks clearly and do not retry after a block in the same run. Maintain `docs/gemini-google-search-investigation.md` as the briefing prompt for Gemini/system-design review of better Google Search / AI Overview retrieval patterns. Do not treat AI Overview as final truth; verify driver links on official vendor pages.
+Files affected: `Get-DriverUpdateAgent.ps1`, `docs/gemini-google-search-investigation.md`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Gemini API review request saved to `docs/gemini-google-search-investigation-response.md`; PowerShell parser validation; `node --check`; `git diff --check`.

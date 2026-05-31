@@ -2468,12 +2468,16 @@ function Update-ActiveSearches {
 
                 $psAgent = [PowerShell]::Create()
                 $psAgent.AddScript({
-                    param($DeviceName, $InstanceId, $HardwareId, $Manufacturer, $InstalledDriver, $Motherboard, $Cpu, $Os, $ApiKey, $AgentScriptPath, $TracePath, $CheckpointPath, $ToolCacheRoot, $MaxIterations)
+                    param($DeviceName, $InstanceId, $HardwareId, $Manufacturer, $InstalledDriver, $Motherboard, $Cpu, $Os, $EvidenceJson, $ApiKey, $AgentScriptPath, $TracePath, $CheckpointPath, $ToolCacheRoot, $MaxIterations)
                     $ProgressPreference = 'SilentlyContinue'
-                    & $AgentScriptPath -DeviceName $DeviceName -InstanceId $InstanceId -HardwareId $HardwareId -Manufacturer $Manufacturer -InstalledDriver $InstalledDriver -Motherboard $Motherboard -Cpu $Cpu -Os $Os -ApiKey $ApiKey -TracePath $TracePath -CheckpointPath $CheckpointPath -ToolCacheRoot $ToolCacheRoot -MaxIterations $MaxIterations
+                    & $AgentScriptPath -DeviceName $DeviceName -InstanceId $InstanceId -HardwareId $HardwareId -Manufacturer $Manufacturer -InstalledDriver $InstalledDriver -Motherboard $Motherboard -Cpu $Cpu -Os $Os -EvidenceJson $EvidenceJson -ApiKey $ApiKey -TracePath $TracePath -CheckpointPath $CheckpointPath -ToolCacheRoot $ToolCacheRoot -MaxIterations $MaxIterations
                 })
 
                 $agentScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Get-DriverUpdateAgent.ps1'
+                $evidenceJson = ''
+                if ($search.DeviceEvidence) {
+                    try { $evidenceJson = $search.DeviceEvidence | ConvertTo-Json -Depth 30 -Compress } catch {}
+                }
                 $null = $psAgent.AddArgument($deviceName)
                 $null = $psAgent.AddArgument($instanceId)
                 $null = $psAgent.AddArgument($hardwareId)
@@ -2482,6 +2486,7 @@ function Update-ActiveSearches {
                 $null = $psAgent.AddArgument($motherboard)
                 $null = $psAgent.AddArgument($cpu)
                 $null = $psAgent.AddArgument($os)
+                $null = $psAgent.AddArgument($evidenceJson)
                 $null = $psAgent.AddArgument($search.ApiKey)
                 $null = $psAgent.AddArgument($agentScriptPath)
                 $null = $psAgent.AddArgument($search.AgentTracePath)

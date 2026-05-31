@@ -9,6 +9,7 @@ param(
     [string]$Motherboard,
     [string]$Cpu,
     [string]$Os,
+    [AllowEmptyString()][string]$EvidenceJson,
     [string]$ApiKey,
     [string]$TracePath,
     [string]$CheckpointPath,
@@ -264,6 +265,184 @@ function Get-UrlsFromAgentText {
     return @($urls)
 }
 
+function Get-DeviceModelTokens {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$MaxCount = 5
+    )
+
+    $tokens = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+
+    foreach ($match in [regex]::Matches($Text, '(?i)\b[A-Z0-9]{2,}[-_]?[A-Z0-9]{2,}(?:[-_][A-Z0-9]{2,})*\b')) {
+        $token = $match.Value.ToUpperInvariant()
+        if ($token -in @('DISPLAYPORT', 'MONITOR', 'WINDOWS', 'DRIVER', 'DRIVERS', 'AUDIO', 'DEVICE', 'HARDWARE', 'MICROSOFT')) { continue }
+        if ($token -match '^(VEN|DEV|SUBSYS|REV|VID|PID|MI|COL|UID)[A-Z0-9_]*$') { continue }
+        if (-not $tokens.Contains($token)) { $tokens.Add($token) }
+        if ($tokens.Count -ge $MaxCount) { break }
+    }
+
+    return @($tokens)
+}
+
+function New-VendorCandidate {
+    param(
+        [string]$Vendor,
+        [string]$Url,
+        [string]$TargetText,
+        [string]$InputText,
+        [string]$Reason
+    )
+
+    return [pscustomobject]@{
+        vendor     = $Vendor
+        url        = $Url
+        targetText = $TargetText
+        inputText  = $InputText
+        reason     = $Reason
+    }
+}
+
+function Get-VendorFirstCandidates {
+    param(
+        [string]$Name,
+        [string]$HwId,
+        [string]$Maker,
+        [string]$Board
+    )
+
+    $sourceText = "$Name $HwId $Maker $Board"
+    $candidateInput = @(
+        Get-DeviceModelTokens -Text "$Name $HwId $Maker" -MaxCount 4
+    ) | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($candidateInput)) { $candidateInput = $Name }
+
+    $candidates = [System.Collections.Generic.List[object]]::new()
+
+    if ($sourceText -match '(?i)\bAOC\b' -or $HwId -match '(?i)^MONITOR\\AOC') {
+        $model = $candidateInput
+        foreach ($region in @('gr', 'eu', 'uk', 'us')) {
+            if (-not [string]::IsNullOrWhiteSpace($model)) {
+                $candidates.Add((New-VendorCandidate -Vendor 'AOC' -Url "https://www.aoc.com/$region/gaming/monitors/$($model.ToLowerInvariant())" -TargetText 'DRIVERS AND MANUALS|Drivers & Manuals|Drivers' -InputText '' -Reason "AOC regional product page for model $model"))
+            }
+        }
+        $candidates.Add((New-VendorCandidate -Vendor 'AOC' -Url 'https://www.aoc.com/gr/gaming/drivers-downloads' -TargetText 'Search' -InputText $candidateInput -Reason 'AOC regional driver search page'))
+    }
+
+    if ($sourceText -match '(?i)\bLG\b|ULTRAGEAR|\bGSM[0-9A-F]{4}\b' -or $HwId -match '(?i)^MONITOR\\GSM') {
+        $searchInput = if ($HwId -match '(?i)MONITOR\\([^\\]+)') { $Matches[1].ToUpperInvariant() } else { $candidateInput }
+        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/gr/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason 'LG Greece/regional official software/firmware/driver search by monitor hardware code'))
+        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/uk/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason 'LG Europe/UK official software/firmware/driver search by monitor hardware code'))
+        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/us/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason 'LG US official software/firmware/driver search by monitor hardware code after regional checks'))
+        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url "https://www.lg.com/gr/search?q=$([Uri]::EscapeDataString($searchInput))" -TargetText 'Support|Drivers|Software' -InputText '' -Reason 'LG Greece official site search by hardware code'))
+    }
+
+    $isExternalMonitor = $HwId -match '(?i)^MONITOR\\' -or $Name -match '(?i)\bmonitor\b|ULTRAGEAR|DisplayPort|HDMI'
+    if (-not $isExternalMonitor -and $sourceText -match '(?i)Micro-Star|MSI|MAG X870 TOMAHAWK WIFI') {
+        $candidates.Add((New-VendorCandidate -Vendor 'MSI' -Url 'https://www.msi.com/Motherboard/MAG-X870-TOMAHAWK-WIFI/support' -TargetText 'Driver' -InputText '' -Reason 'MSI motherboard support page from local BaseBoard evidence'))
+    }
+
+    return @($candidates)
+}
+
+function Format-VendorCandidateGuidance {
+    param([AllowNull()]$Candidates)
+
+    $items = @($Candidates)
+    if ($items.Count -eq 0) {
+        return 'No deterministic official vendor URLs were constructed. Use SearchGoogleCustom if configured with the local device evidence query, then immediately fetch the best official/vendor result with FetchRenderedUrlText. Use SearchGoogleRendered only as a fragile fallback/diagnostic.'
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('Vendor-first required actions before search discovery:')
+    $index = 0
+    foreach ($candidate in $items | Select-Object -First 6) {
+        $index++
+        $lines.Add("$index. FetchRenderedUrlText url=$($candidate.url); targetText=$($candidate.targetText); inputText=$($candidate.inputText) [$($candidate.reason)]")
+    }
+    return ($lines -join "`n")
+}
+
+function New-LocalDeviceSearchText {
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in @($DeviceName, $InstanceId, $HardwareId, $Manufacturer, $InstalledDriver)) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) { $parts.Add([string]$value) }
+    }
+
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($EvidenceJson)) {
+            $evidence = $EvidenceJson | ConvertFrom-Json
+            $important = Get-NotePropertyValue -Object $evidence -Name 'ImportantProperties'
+            foreach ($key in @(
+                'DEVPKEY_Device_DeviceDesc',
+                'DEVPKEY_Device_HardwareIds',
+                'DEVPKEY_Device_CompatibleIds',
+                'DEVPKEY_Device_Manufacturer',
+                'DEVPKEY_Device_Service',
+                'DEVPKEY_Device_DriverInfPath',
+                'DEVPKEY_Device_DriverVersion'
+            )) {
+                $value = Get-NotePropertyValue -Object $important -Name $key
+                if ($value) { $parts.Add(($value -join ' ')) }
+            }
+        }
+    } catch {}
+
+    return (($parts | Select-Object -Unique) -join ' | ')
+}
+
+function Get-GoogleSearchQueries {
+    $queries = [System.Collections.Generic.List[string]]::new()
+    $localText = New-LocalDeviceSearchText
+    $modelTokens = @(Get-DeviceModelTokens -Text $localText -MaxCount 5)
+    $hardwareCode = ''
+    if ($HardwareId -match '(?i)^[^\\]+\\([^\\]+)$') { $hardwareCode = $Matches[1].ToUpperInvariant() }
+
+    $rawEvidenceLines = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($DeviceName)) { $rawEvidenceLines.Add("FriendlyName  : $DeviceName") }
+    if (-not [string]::IsNullOrWhiteSpace($InstanceId)) { $rawEvidenceLines.Add("InstanceId    : $InstanceId") }
+    if (-not [string]::IsNullOrWhiteSpace($HardwareId)) { $rawEvidenceLines.Add("HardwareId    : $HardwareId") }
+    if (-not [string]::IsNullOrWhiteSpace($Manufacturer)) { $rawEvidenceLines.Add("Manufacturer  : $Manufacturer") }
+    if (-not [string]::IsNullOrWhiteSpace($InstalledDriver)) { $rawEvidenceLines.Add("Driver        : $InstalledDriver") }
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($EvidenceJson)) {
+            $evidence = $EvidenceJson | ConvertFrom-Json
+            $important = Get-NotePropertyValue -Object $evidence -Name 'ImportantProperties'
+            $compatibleId = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_CompatibleIds'
+            $service = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_Service'
+            $driverInf = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_DriverInfPath'
+            $driverVersion = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_DriverVersion'
+            if ($compatibleId) { $rawEvidenceLines.Add("CompatibleId  : $(($compatibleId -join ' '))") }
+            if ($service) { $rawEvidenceLines.Add("Service       : $(($service -join ' '))") }
+            if ($driverVersion -or $driverInf) { $rawEvidenceLines.Add("Installed INF : $(($driverVersion, $driverInf | Where-Object { $_ }) -join ' ')") }
+        }
+    } catch {}
+    if ($rawEvidenceLines.Count -gt 0) {
+        $queries.Add(($rawEvidenceLines -join "`n"))
+    }
+
+    $coreTerms = @()
+    if (-not [string]::IsNullOrWhiteSpace($DeviceName)) { $coreTerms += '"' + $DeviceName + '"' }
+    if (-not [string]::IsNullOrWhiteSpace($hardwareCode)) { $coreTerms += '"' + $hardwareCode + '"' }
+    if (-not [string]::IsNullOrWhiteSpace($Manufacturer)) { $coreTerms += '"' + $Manufacturer + '"' }
+    if ($InstalledDriver -match '\(([^)]+\.inf)\)') { $coreTerms += '"' + $Matches[1] + '"' }
+    if ($coreTerms.Count -gt 0) {
+        $queries.Add((($coreTerms + @('driver', 'official')) -join ' '))
+    }
+
+    if ($modelTokens.Count -gt 0) {
+        $queries.Add((($modelTokens | ForEach-Object { '"' + $_ + '"' }) -join ' ') + ' driver official')
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($localText)) {
+        $brief = $localText
+        if ($brief.Length -gt 240) { $brief = $brief.Substring(0, 240) }
+        $queries.Add("$brief driver")
+    }
+
+    return @($queries | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique -First 3)
+}
+
 function Add-AgentMemoryFromTool {
     param(
         [Parameter(Mandatory = $true)]$Memory,
@@ -367,14 +546,24 @@ function Convert-CheckpointMemory {
 # Tool: SearchWeb
 function SearchWeb {
     param([string]$query)
-    $toolArgs = [pscustomobject]@{ query = $query }
-    return Invoke-CachedTool -ToolName 'SearchWeb' -ArgsObject $toolArgs -MaxAgeHours 6 -Action {
-    try {
-        if ($query -match 'https?://[^\s"<>]+') {
-            $directUrl = $Matches[0].TrimEnd('.', ',', ';', ')', ']')
-            return "Query contained a direct URL; rendered browser fetch result:`n$(FetchRenderedUrlText -url $directUrl -targetText '')"
-        }
 
+    if ($query -match 'https?://[^\s"<>]+') {
+        $directUrl = $Matches[0].TrimEnd('.', ',', ';', ')', ']')
+        return "Query contained a direct URL; rendered browser fetch result:`n$(FetchRenderedUrlText -url $directUrl -targetText '')"
+    }
+
+    if ($script:AgentVendorFirstCandidates -and @($script:AgentVendorFirstCandidates).Count -gt 0 -and $script:AgentOfficialFetchAttempts -lt 1) {
+        return "POLICY BLOCKED: SearchWeb is a last-resort URL discovery tool, not the first step. Do not use DuckDuckGo snippets yet.`n$(Format-VendorCandidateGuidance -Candidates $script:AgentVendorFirstCandidates)"
+    }
+
+    $script:AgentSearchWebCalls++
+    if ($script:AgentSearchWebCalls -gt 1) {
+        return "POLICY BLOCKED: SearchWeb budget is exhausted for this run. Do not loop on search snippets. Use FetchRenderedUrlText on the best official vendor URL already found, SearchUpdateCatalog as fallback, or produce a cautious final answer from available evidence."
+    }
+
+    $toolArgs = [pscustomobject]@{ query = $query; policy = 'SearchWebDiscoveryV2' }
+    return Invoke-CachedTool -ToolName 'SearchWebDiscoveryV2' -ArgsObject $toolArgs -MaxAgeHours 6 -Action {
+    try {
         $escapedQuery = [Uri]::EscapeDataString($query)
         $ddgUrl = "https://html.duckduckgo.com/html/?q=$escapedQuery"
         $response = Invoke-WebRequest -Uri $ddgUrl -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 15 -UseBasicParsing
@@ -404,10 +593,88 @@ function SearchWeb {
     }
 }
 
+# Tool: SearchGoogleRendered
+function SearchGoogleRendered {
+    param([string]$query)
+
+    $script:AgentGoogleSearchCalls++
+    if ($script:AgentGoogleSearchCalls -gt 2) {
+        return "POLICY BLOCKED: Google search budget is exhausted for this run. Use FetchRenderedUrlText on the best official result already found, SearchUpdateCatalog as fallback, or produce a cautious final answer from available evidence."
+    }
+
+    $toolArgs = [pscustomobject]@{ query = $query; policy = 'GoogleRenderedDiscoveryV1' }
+    return Invoke-CachedTool -ToolName 'SearchGoogleRendered' -ArgsObject $toolArgs -MaxAgeHours 6 -Action {
+    try {
+        $node = Get-Command node -ErrorAction Stop
+        $helper = Join-Path -Path $PSScriptRoot -ChildPath 'tools\Search-GoogleRendered.js'
+        if (-not (Test-Path -LiteralPath $helper)) {
+            return "Google rendered search failed: helper not found at $helper"
+        }
+
+        $output = & $node.Source @($helper, $query, '70000') 2>&1
+        $exitCode = $LASTEXITCODE
+        $text = ($output | Out-String).Trim()
+        if ($exitCode -ne 0) {
+            return "Google rendered search failed with exit code ${exitCode}: $text"
+        }
+        if ($text -match '"blockedByGoogle"\s*:\s*true' -or $text -match "(?i)I'm not a robot|unusual traffic|reCAPTCHA|detected unusual traffic") {
+            $script:AgentGoogleSearchCalls = 2
+            return "Google rendered search blocked by Google anti-bot/reCAPTCHA for this automated browser session. Do not retry Google in this run. Use the vendor-first official regional URLs already provided, fetch official/vendor pages with FetchRenderedUrlText, and only use Microsoft Update Catalog as fallback.`n$text"
+        }
+        return $text
+    } catch {
+        return "Google rendered search failed: $($_.Exception.Message)"
+    }
+    }
+}
+
+# Tool: SearchGoogleCustom
+function SearchGoogleCustom {
+    param([string]$query)
+
+    $apiKey = $env:GOOGLE_CUSTOM_SEARCH_API_KEY
+    if ([string]::IsNullOrWhiteSpace($apiKey)) { $apiKey = $env:GOOGLE_CSE_API_KEY }
+    $cx = $env:GOOGLE_CUSTOM_SEARCH_CX
+    if ([string]::IsNullOrWhiteSpace($cx)) { $cx = $env:GOOGLE_CSE_CX }
+
+    if ([string]::IsNullOrWhiteSpace($apiKey) -or [string]::IsNullOrWhiteSpace($cx)) {
+        return "Google Custom Search API is not configured. Set GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_CX, then retry. Use official vendor candidates and FetchRenderedUrlText without Google API for this run."
+    }
+
+    $toolArgs = [pscustomobject]@{ query = $query; cx = $cx; gl = 'gr'; policy = 'GoogleCustomSearchOfficialApiV1' }
+    return Invoke-CachedTool -ToolName 'GoogleCustomSearchOfficialApiV1' -ArgsObject $toolArgs -MaxAgeHours 12 -Action {
+    try {
+        $escapedQuery = [Uri]::EscapeDataString($query)
+        $escapedCx = [Uri]::EscapeDataString($cx)
+        $escapedKey = [Uri]::EscapeDataString($apiKey)
+        $url = "https://www.googleapis.com/customsearch/v1?key=$escapedKey&cx=$escapedCx&q=$escapedQuery&gl=gr&hl=en&num=10"
+        $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 25
+        $items = @($response.items)
+        if ($items.Count -eq 0) {
+            return "Google Custom Search API returned no results."
+        }
+        $results = foreach ($item in $items | Select-Object -First 10) {
+            [pscustomobject]@{
+                title       = [string]$item.title
+                link        = [string]$item.link
+                displayLink = [string]$item.displayLink
+                snippet     = [string]$item.snippet
+            }
+        }
+        return ($results | ConvertTo-Json -Depth 5)
+    } catch {
+        $body = Get-WebExceptionBody -ErrorRecord $_
+        if ([string]::IsNullOrWhiteSpace($body)) { $body = $_.Exception.Message }
+        return "Google Custom Search API failed: $body"
+    }
+    }
+}
+
 # Tool: FetchUrlText
 function FetchUrlText {
     param([string]$url)
     $toolArgs = [pscustomobject]@{ url = $url }
+    $script:AgentOfficialFetchAttempts++
     return Invoke-CachedTool -ToolName 'FetchUrlText' -ArgsObject $toolArgs -MaxAgeHours 12 -Action {
     try {
         $response = Invoke-WebRequest -Uri $url -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -TimeoutSec 15 -UseBasicParsing
@@ -456,6 +723,7 @@ function FetchRenderedUrlText {
     )
 
     $toolArgs = [pscustomobject]@{ url = $url; targetText = $targetText; inputText = $inputText }
+    $script:AgentOfficialFetchAttempts++
     return Invoke-CachedTool -ToolName 'FetchRenderedUrlText' -ArgsObject $toolArgs -MaxAgeHours 12 -Action {
     try {
         $node = Get-Command node -ErrorAction Stop
@@ -585,12 +853,23 @@ function FindDeterministicVendorDownloads {
 # Define Tools schema
 $functionDeclarations = @(
     @{
-        name = "SearchWeb"
-        description = "Fallback search via DuckDuckGo for finding official support URLs when no likely OEM URL/search page is known. Returns snippet summaries and may be blocked/noisy; prefer FetchRenderedUrlText for known OEM support pages."
+        name = "SearchGoogleRendered"
+        description = "Fragile fallback only. Opens Google Search in a real local Chrome/Edge browser via DevTools and returns AI Overview text as a hint plus top organic result URLs/snippets. Google may return anti-bot/reCAPTCHA; do not loop if blocked. Prefer SearchGoogleCustom when configured, and always confirm final answers by fetching official/vendor pages with FetchRenderedUrlText."
         parameters = @{
             type = "OBJECT"
             properties = @{
-                query = @{ type = "STRING"; description = "The search query (e.g. 'MSI MAG X870 TOMAHAWK WIFI Realtek USB audio driver')" }
+                query = @{ type = "STRING"; description = 'A focused query built from local Device Manager evidence, preferably a multiline block with FriendlyName, InstanceId, HardwareId, Manufacturer, CompatibleId, Service, and Driver/INF.' }
+            }
+            required = @("query")
+        }
+    },
+    @{
+        name = "SearchGoogleCustom"
+        description = "Preferred Google discovery tool when configured. Uses the official Google Custom Search JSON API, avoiding browser SERP automation and reCAPTCHA. Returns result title, link, displayLink, and snippet. Requires GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_CX environment variables."
+        parameters = @{
+            type = "OBJECT"
+            properties = @{
+                query = @{ type = "STRING"; description = 'A focused query built from local Device Manager evidence or model/manufacturer terms. Use this for discovery before fetching official/vendor URLs.' }
             }
             required = @("query")
         }
@@ -647,18 +926,32 @@ System Info:
 - OS: $Os
 "@
 
+$localEvidenceSection = ''
+if (-not [string]::IsNullOrWhiteSpace($EvidenceJson)) {
+    $evidencePreview = $EvidenceJson
+    if ($evidencePreview.Length -gt 16000) {
+        $evidencePreview = $evidencePreview.Substring(0, 16000) + '...[truncated]'
+    }
+    $localEvidenceSection = @"
+
+Local Device Evidence JSON:
+$evidencePreview
+"@
+}
+
 $agentGuide = @"
 Driver search policy:
 1. Prefer the official OEM/support source for this exact machine or motherboard first.
 2. If motherboard/system model is known, construct or retrieve the OEM support page and use rendered retrieval on that page before using generic web search or Microsoft Update Catalog.
-3. If you have a direct official support/download URL, call FetchRenderedUrlText on that URL. Do not pass direct URLs into SearchWeb.
-4. For MSI, AOC, Dell, HP, Lenovo, ASUS, Gigabyte, or JavaScript-heavy OEM support pages, use FetchRenderedUrlText and click the matching category text when useful (for example On-Board Audio Drivers, LAN Drivers, BIOS, Driver, Drivers, Downloads, Support). Plain FetchUrlText may fail with 403 or miss tab content.
-5. For AOC monitor driver/software searches, use FetchRenderedUrlText with url=https://aoc.com/us/gaming/drivers-downloads, targetText=Search, and inputText set to the monitor model such as 27G4HRE before trying Microsoft Update Catalog.
-6. Use SearchWeb only as a URL discovery fallback. Do not loop on DuckDuckGo snippets when an OEM rendered search page is available.
-7. Microsoft Update Catalog is fallback evidence, not the primary answer, unless the device is generic or no OEM/vendor package can be found.
-8. If an official support page fetch fails with 403/blocked HTML or search returns an anti-bot challenge, do not treat that as "no OEM driver". Use FetchRenderedUrlText before falling back to Microsoft Update Catalog.
-9. Do not claim "latest" unless you have a version/date from an official page, official download URL, or Microsoft Catalog row.
-10. Final answer must separate source quality: Official OEM, Official vendor, Microsoft Catalog, or Web snippet only.
+3. When vendor pages are regional, try Greece/Europe regional official pages first (for example /gr, /eu, /uk or local-language pages), then US/global. A US "not found" is not proof that no driver exists.
+4. If you have a direct official support/download URL, call FetchRenderedUrlText on that URL. Do not pass direct URLs into search tools.
+5. For MSI, AOC, Dell, HP, Lenovo, ASUS, Gigabyte, or JavaScript-heavy OEM support pages, use FetchRenderedUrlText and click the matching category text when useful (for example On-Board Audio Drivers, LAN Drivers, BIOS, Driver, Drivers, Downloads, Support). Plain FetchUrlText may fail with 403 or miss tab content.
+6. For AOC monitor driver/software searches, use FetchRenderedUrlText with a regional AOC product/support page before trying Microsoft Update Catalog.
+7. For search discovery, SearchGoogleRendered is available again for testing because Google Search + AI Overview may provide strong model identity hints. Use it carefully: one focused raw Device Manager-style evidence query first, then fetch official/vendor pages. If it returns anti-bot/reCAPTCHA, do not retry it in the same run. Build queries from raw local evidence: FriendlyName, InstanceId, HardwareId, Manufacturer, CompatibleId, Service, and installed INF/driver version. Treat AI Overview as a strong model-identity hint only; confirm driver/version/download links by fetching official/vendor URLs.
+8. Microsoft Update Catalog is fallback evidence, not the primary answer, unless the device is generic or no OEM/vendor package can be found.
+9. If an official support page fetch fails with 403/blocked HTML or search returns an anti-bot challenge, do not treat that as "no OEM driver". Use FetchRenderedUrlText before falling back to Microsoft Update Catalog.
+10. Do not claim "latest" unless you have a version/date from an official page, official download URL, or Microsoft Catalog row.
+11. Final answer must separate source quality: Official OEM, Official vendor, Microsoft Catalog, or Web snippet only.
 "@
 
 $messages = [System.Collections.Generic.List[object]]::new()
@@ -699,7 +992,31 @@ Write-AgentEvent -Type 'Log' -Message "[Agent] Started for: $(Format-AgentLogVal
     MaxIterations   = $MaxIterations
 }
 
+$script:AgentSearchWebCalls = 0
+$script:AgentGoogleSearchCalls = 0
+$script:AgentOfficialFetchAttempts = 0
+$script:AgentVendorFirstCandidates = @(Get-VendorFirstCandidates -Name $DeviceName -HwId $HardwareId -Maker $Manufacturer -Board $Motherboard)
+$vendorFirstGuidance = Format-VendorCandidateGuidance -Candidates $script:AgentVendorFirstCandidates
+Write-AgentEvent -Type 'Log' -Message "[Deterministic] Vendor-first candidates: $(@($script:AgentVendorFirstCandidates).Count)" -Data @{ Candidates = $script:AgentVendorFirstCandidates }
+
 $deterministicEvidence = FindDeterministicVendorDownloads -Name $DeviceName -HwId $HardwareId -Maker $Manufacturer
+$googleQueries = @(Get-GoogleSearchQueries)
+$googleDiscoveryEvidence = ''
+if (@($script:AgentVendorFirstCandidates).Count -eq 0 -and $googleQueries.Count -gt 0) {
+    if ((-not [string]::IsNullOrWhiteSpace($env:GOOGLE_CUSTOM_SEARCH_API_KEY) -or -not [string]::IsNullOrWhiteSpace($env:GOOGLE_CSE_API_KEY)) -and
+        (-not [string]::IsNullOrWhiteSpace($env:GOOGLE_CUSTOM_SEARCH_CX) -or -not [string]::IsNullOrWhiteSpace($env:GOOGLE_CSE_CX))) {
+        Write-AgentEvent -Type 'Log' -Message "[Google] Custom Search API query: $(Format-AgentLogValue -Value $googleQueries[0] -MaxLength 180)" -Data @{ Query = $googleQueries[0] }
+        $googleDiscoveryEvidence = SearchGoogleCustom -query $googleQueries[0]
+    } else {
+        Write-AgentEvent -Type 'Log' -Message "[Google] Skipped automatic search because Google Custom Search API is not configured. Browser Google search is reserved for explicit Gemini fallback/diagnostic to avoid reCAPTCHA loops." -Data @{ Query = $googleQueries[0] }
+    }
+} elseif ($googleQueries.Count -gt 0) {
+    Write-AgentEvent -Type 'Log' -Message "[Google] Skipped automatic search because official vendor-first candidates exist. Gemini may call SearchGoogleCustom after official candidates are insufficient." -Data @{ Query = $googleQueries[0]; VendorCandidateCount = @($script:AgentVendorFirstCandidates).Count }
+}
+$deterministicEvidence = "$deterministicEvidence`n`n$vendorFirstGuidance"
+if (-not [string]::IsNullOrWhiteSpace($googleDiscoveryEvidence)) {
+    $deterministicEvidence = "$deterministicEvidence`n`nGoogle Custom Search discovery evidence (confirm final answer on official/vendor URLs):`n$googleDiscoveryEvidence"
+}
 $memory.CurrentPlan = 'Deterministic evidence collected before Gemini. Gemini should synthesize directly if sufficient, otherwise call the smallest useful tool next.'
 if ($deterministicEvidence -notmatch '^No deterministic vendor adapter matched') {
     Add-AgentMemoryFromTool -Memory $memory -Step 0 -Tool 'FindDeterministicVendorDownloads' -ArgsObject ([pscustomobject]@{ name = $DeviceName; hardwareId = $HardwareId; manufacturer = $Manufacturer }) -Result $deterministicEvidence
@@ -708,7 +1025,7 @@ if ($deterministicEvidence -notmatch '^No deterministic vendor adapter matched')
 if ($messages.Count -eq 0) {
     $messages.Add(@{
         role = "user"
-        parts = @( @{ text = "You are an autonomous hardware support assistant. Find the latest official driver and direct download link for the device below. Motherboard model and system specs are provided to locate OEM drivers if applicable. Use deterministic evidence first. Run the fewest possible Gemini/tool steps. If deterministic evidence already contains official download links, synthesize the final answer instead of searching again. Ensure you specify the version, release date, source quality, and provide direct download URLs in your final synthesis.`n`n$agentGuide`n`n$systemDetails`n`nDeterministic prefetch evidence:`n$deterministicEvidence" } )
+        parts = @( @{ text = "You are an autonomous hardware support assistant. Your only goal is to identify the correct hardware model and the correct driver download link(s). Ignore PDFs, manuals, utilities, unrelated software, and generic explanations unless no driver package exists. Use deterministic evidence and vendor-first candidates before search. If discovery is needed, use one focused SearchGoogleRendered query built from raw local Device Manager-style evidence, then fetch the best official/vendor result with FetchRenderedUrlText. Prefer Greece/Europe regional official pages before US/global pages. If deterministic or Google evidence already contains official driver links, synthesize the final answer instead of searching again. Use Local Device Evidence JSON to identify exact hardware IDs, original INF names, provider, installed version/date, parent/child devices, and model hints. Ensure you specify version/date when available, source quality, and direct download URLs.`n`n$agentGuide`n`n$systemDetails$localEvidenceSection`n`nDeterministic prefetch evidence:`n$deterministicEvidence" } )
     })
 } else {
     $messages.Add(@{
@@ -780,6 +1097,8 @@ while ($loop -and $iterations -lt $maxIterations) {
         $toolResult = $null
         switch ($funcName) {
             "SearchWeb" { $toolResult = SearchWeb -query $args.query }
+            "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query $args.query }
+            "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query $args.query }
             "FetchUrlText" { $toolResult = FetchUrlText -url $args.url }
             "FetchRenderedUrlText" { $toolResult = FetchRenderedUrlText -url $args.url -targetText $args.targetText -inputText $args.inputText }
             "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId $args.hardwareId }

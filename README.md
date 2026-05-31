@@ -143,6 +143,8 @@ DeviceCheck renders both panes inside one terminal window rather than requiring 
 
 The agent saves a checkpoint after each Gemini/tool step, including conversation state, tool results, candidate URLs, confirmed/failing URLs, and the current plan. If Gemini returns a rate-limit response or the 10-step budget guard is reached, the run pauses with a visible state; running the agent again for the same device resumes from the checkpoint and reuses cached rendered pages/tool results where possible.
 
+Before Gemini spends planning calls, DeviceCheck builds vendor-first official candidates from the local device and machine evidence. If no official vendor candidate can be built, or if Gemini later needs identity discovery after vendor pages are insufficient, it can use rendered Google Search with raw Device Manager-style evidence (`FriendlyName`, `InstanceId`, `HardwareId`, `CompatibleId`, `Service`, and installed `INF`). Google AI Overview is treated as an identity hint, not final truth, and driver links still have to be confirmed by rendered official/vendor pages. Google can return anti-bot/reCAPTCHA pages for automated SERP sessions, so those blocks are logged and should be investigated with the Gemini Google Search briefing in `docs/gemini-google-search-investigation.md`. For regional OEM sites, Greece/Europe pages are tried before US/global pages so a US miss does not become a false "no driver" result.
+
 </details>
 
 <details>

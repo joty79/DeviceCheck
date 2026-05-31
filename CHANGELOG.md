@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added autonomous Agentic Driver Finder (`Get-DriverUpdateAgent.ps1`) that uses Gemini 3.1 Flash Lite Function Calling (Tool Use) to automatically search for, identify, and locate the latest official drivers for any device.
-- Agent has built-in tools for `SearchWeb` (DuckDuckGo scraper), `FetchUrlText` (plain HTML text/link extractor), `FetchRenderedUrlText` (real Chrome DevTools rendered-page extraction with optional category/tab click), and `SearchUpdateCatalog` (Microsoft Update Catalog search with direct `.cab` download link extraction via POST to DownloadDialog.aspx).
+- Agent has built-in tools for `SearchGoogleCustom` (official Google Custom Search JSON API when configured), `SearchWeb` (guarded DuckDuckGo fallback), `FetchUrlText` (plain HTML text/link extractor), `FetchRenderedUrlText` (real Chrome DevTools rendered-page extraction with optional category/tab click), and `SearchUpdateCatalog` (Microsoft Update Catalog search with direct `.cab` download link extraction via POST to DownloadDialog.aspx).
 - Agent runs in a recursive loop: Gemini decides which tool to call, the script executes it locally and feeds the result back, until Gemini produces a final synthesized answer with version, date, and download URLs.
 - Added `tools/Fetch-RenderedPage.js`, a dependency-light Node helper that drives local Chrome through DevTools Protocol for JavaScript-rendered OEM support pages that block plain HTTP fetches.
 - Rendered-page helper can now type into visible search/product inputs, letting the Agent use OEM search pages such as AOC Drivers & Software.
@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent runs now save resumable checkpoints after every Gemini/tool step, including conversation state, tool results, candidate URLs, confirmed/failing URLs, and current plan.
 - Added a tool-result cache for rendered pages, plain fetches, web searches, and Microsoft Update Catalog lookups so retries do not refetch recent evidence unnecessarily.
 - Added a deterministic prefetch phase before Gemini planning, currently including an AOC regional product-page adapter as the first vendor-specific pattern.
+- Added vendor-first candidate guidance for agent runs so Gemini receives official rendered-page actions before it can fall back to search snippets.
+- Added `tools/Search-GoogleRendered.js`, a Chrome/Edge DevTools Google Search helper that feeds raw Device Manager-style evidence to Google, captures AI Overview text as an identity hint, and returns top organic result URLs for official-page confirmation.
+- Added `SearchGoogleCustom`, an official Google Custom Search JSON API tool controlled by `GOOGLE_CUSTOM_SEARCH_API_KEY` and `GOOGLE_CUSTOM_SEARCH_CX`, so agent discovery can avoid automated Google SERP sessions.
+- Added regional-first discovery guidance so Greece/Europe OEM pages are checked before US/global pages when vendor sites differ by region.
+- Added Google anti-bot/reCAPTCHA detection so rendered search blocks are logged clearly and the agent stops retrying Google during that run.
+- Limited automatic Google discovery to official Custom Search API when configured, reducing CAPTCHA risk while keeping browser Google only as an explicit fragile fallback/diagnostic.
+- Added `docs/gemini-google-search-investigation.md`, a focused Gemini briefing for investigating reliable Google Search / AI Overview retrieval.
+- Re-enabled the browser Google Search tool in Gemini's default tool list for active testing, while keeping block detection and retry limits.
 - Added a 10-step Agent budget guard that pauses with checkpoint state instead of spending unbounded Gemini requests.
 - Fixed Agent activity streaming so logs appear while the background runspace is still running instead of only after completion.
 - Agent result rows now stay as one selectable tree item, while the full driver report, trace path, and clickable terminal download links are displayed in the right-side details pane.
@@ -31,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed final answers emitted on the last allowed Agent step being overwritten by a false maximum-iteration error.
 - Fixed rate-limit handling so Gemini `429`/quota responses pause as `Paused: Rate limit` with a checkpoint instead of becoming an unrecoverable failed run.
 - Improved DuckDuckGo anti-bot handling so AOC model searches point Gemini toward rendered AOC driver-page search instead of repeated failed web queries.
+- Changed Agent `SearchWeb` into a guarded last-resort discovery tool: it now blocks premature DuckDuckGo use when official vendor candidates exist and limits repeated search loops.
+- Passed compact local device evidence JSON into agent prompts so Gemini can see full PnP properties, signed-driver data, and `pnputil` output instead of only a few summary strings.
+- Changed the pre-Gemini discovery query to use raw local evidence fields (`FriendlyName`, `InstanceId`, `HardwareId`, `CompatibleId`, `Service`, and installed `INF`) instead of short generic search phrases.
 - Reduced Agent tree noise by hiding local/web snippet rows during agentic runs; observable tool activity remains available in the details pane and JSONL trace.
 
 ## [0.1.9] - 2026-05-31
