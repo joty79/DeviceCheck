@@ -1038,106 +1038,153 @@ if ($messages.Count -eq 0) {
 Write-AgentEvent -Type 'Log' -Message "[Deterministic] $(Format-AgentLogValue -Value $deterministicEvidence -MaxLength 220)" -Data @{ Result = $deterministicEvidence }
 Save-AgentCheckpoint -State 'Running' -Step 0 -Messages $messages -Memory $memory -Reason 'Agent initialized.' -RetryAfterSeconds $null
 
-$loop = $true
-$iterations = 0
-$maxIterations = [Math]::Max(1, $MaxIterations)
-
-while ($loop -and $iterations -lt $maxIterations) {
-    $iterations++
-    Write-AgentEvent -Type 'Log' -Message "[Gemini] Step ${iterations}: asking model for next action" -Data @{ Step = $iterations }
+    $loop = $true
+    $iterations = 0
+    $maxIterations = [Math]::Max(1, $MaxIterations)
     
-    $body = @{
-        contents = $messages.ToArray()
-        tools = @( @{ functionDeclarations = $functionDeclarations } )
-    } | ConvertTo-Json -Depth 10
-    
-    try {
-        $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
-    } catch {
-        $apiErrorBody = Get-WebExceptionBody -ErrorRecord $_
-        $statusCode = Get-WebExceptionStatusCode -ErrorRecord $_
-        $retryAfterSeconds = Get-WebExceptionRetryAfterSeconds -ErrorRecord $_
-        $apiError = "API Error: $($_.Exception.Message)"
-        if (-not [string]::IsNullOrWhiteSpace($apiErrorBody)) {
-            $apiError = "$apiError $apiErrorBody"
+    while ($loop -and $iterations -lt $maxIterations) {
+        $iterations++
+        Write-AgentEvent -Type 'Log' -Message "[Gemini] Step ${iterations}: asking model for next action" -Data @{ Step = $iterations }
+        
+        $toolsList = [System.Collections.Generic.List[object]]::new()
+        $toolsList.Add(@{ google_search = @{} })
+        if ($functionDeclarations.Count -gt 0) {
+            $toolsList.Add(@{ functionDeclarations = $functionDeclarations })
         }
-        if ($statusCode -eq 429 -or $apiError -match '(?i)429|rate limit|quota') {
-            $reason = "Rate limit hit while asking Gemini at step $iterations. Checkpoint saved; resume later without repeating completed tool results."
-            Save-AgentCheckpoint -State 'PausedRateLimit' -Step $iterations -Messages $messages -Memory $memory -Reason $reason -RetryAfterSeconds $retryAfterSeconds
-            Write-AgentEvent -Type 'PausedRateLimit' -Message $reason -Data @{ Step = $iterations; ApiError = $apiErrorBody; RetryAfterSeconds = $retryAfterSeconds; CheckpointPath = $CheckpointPath }
+
+        $body = @{
+            contents = $messages.ToArray()
+            tools = $toolsList.ToArray()
+        } | ConvertTo-Json -Depth 10
+        
+        try {
+            $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
+        } catch {
+            $apiErrorBody = Get-WebExceptionBody -ErrorRecord $_
+            $statusCode = Get-WebExceptionStatusCode -ErrorRecord $_
+            $retryAfterSeconds = Get-WebExceptionRetryAfterSeconds -ErrorRecord $_
+            $apiError = "API Error: $($_.Exception.Message)"
+            if (-not [string]::IsNullOrWhiteSpace($apiErrorBody)) {
+                $apiError = "$apiError $apiErrorBody"
+            }
+            if ($statusCode -eq 429 -or $apiError -match '(?i)429|rate limit|quota') {
+                $reason = "Rate limit hit while asking Gemini at step $iterations. Checkpoint saved; resume later without repeating completed tool results."
+                Save-AgentCheckpoint -State 'PausedRateLimit' -Step $iterations -Messages $messages -Memory $memory -Reason $reason -RetryAfterSeconds $retryAfterSeconds
+                Write-AgentEvent -Type 'PausedRateLimit' -Message $reason -Data @{ Step = $iterations; ApiError = $apiErrorBody; RetryAfterSeconds = $retryAfterSeconds; CheckpointPath = $CheckpointPath }
+                return
+            }
+            Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason $apiError -RetryAfterSeconds $null
+            Write-AgentEvent -Type 'Error' -Message $apiError -Data @{ Step = $iterations; ApiError = $apiErrorBody }
             return
         }
-        Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason $apiError -RetryAfterSeconds $null
-        Write-AgentEvent -Type 'Error' -Message $apiError -Data @{ Step = $iterations; ApiError = $apiErrorBody }
-        return
-    }
-    
-    if (-not $response -or -not $response.candidates -or $response.candidates.Count -eq 0) {
-        Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason 'Empty API response.' -RetryAfterSeconds $null
-        Write-AgentEvent -Type 'Error' -Message "Empty API response." -Data @{ Step = $iterations }
-        return
-    }
-    
-    $candidate = $response.candidates[0]
-    $part = $candidate.content.parts[0]
-    $functionCallProperty = $part.PSObject.Properties['functionCall']
-    $textProperty = $part.PSObject.Properties['text']
-    
-    if ($functionCallProperty -and $null -ne $functionCallProperty.Value) {
-        $functionCall = $functionCallProperty.Value
-        $funcName = $functionCall.name
-        $args = $functionCall.args
-        Write-AgentEvent -Type 'Log' -Message "[Gemini] Requested tool: $funcName $(Format-AgentArgs -ArgsObject $args)" -Data @{
-            Step = $iterations
-            Tool = $funcName
-            Args = $args
-        }
-
-        # Execute tool locally
-        $toolResult = $null
-        switch ($funcName) {
-            "SearchWeb" { $toolResult = SearchWeb -query $args.query }
-            "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query $args.query }
-            "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query $args.query }
-            "FetchUrlText" { $toolResult = FetchUrlText -url $args.url }
-            "FetchRenderedUrlText" { $toolResult = FetchRenderedUrlText -url $args.url -targetText $args.targetText -inputText $args.inputText }
-            "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId $args.hardwareId }
-            default { $toolResult = "Error: Unknown function '$funcName'" }
-        }
-        Write-AgentEvent -Type 'Log' -Message "[Tool Result] $funcName -> $(Format-AgentLogValue -Value $toolResult)" -Data @{
-            Step = $iterations
-            Tool = $funcName
-            Result = $toolResult
-        }
-        Add-AgentMemoryFromTool -Memory $memory -Step $iterations -Tool $funcName -ArgsObject $args -Result $toolResult
-
-        # Preserve the full model content, including thoughtSignature metadata required by Gemini 3 tool calls.
-        $messages.Add($candidate.content)
         
-        $messages.Add(@{
-            role = "tool"
-            parts = @( @{
-                functionResponse = @{
-                    name = $funcName
-                    response = @{ result = $toolResult }
+        if (-not $response -or -not $response.candidates -or $response.candidates.Count -eq 0) {
+            Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason 'Empty API response.' -RetryAfterSeconds $null
+            Write-AgentEvent -Type 'Error' -Message "Empty API response." -Data @{ Step = $iterations }
+            return
+        }
+        
+        $candidate = $response.candidates[0]
+        
+        # Process grounding metadata if present (Google Search Grounding sources)
+        if ($candidate.PSObject.Properties['groundingMetadata'] -and $null -ne $candidate.groundingMetadata) {
+            $gm = $candidate.groundingMetadata
+            $queriesText = ""
+            if ($gm.PSObject.Properties['webSearchQueries'] -and $null -ne $gm.webSearchQueries) {
+                $queriesText = ($gm.webSearchQueries -join ", ")
+            }
+            
+            $chunksText = [System.Collections.Generic.List[string]]::new()
+            if ($gm.PSObject.Properties['groundingChunks'] -and $null -ne $gm.groundingChunks) {
+                foreach ($chunk in @($gm.groundingChunks)) {
+                    if ($chunk.PSObject.Properties['web'] -and $null -ne $chunk.web) {
+                        $web = $chunk.web
+                        $title = $web.title
+                        $uri = $web.uri
+                        $chunksText.Add("$title ($uri)")
+                        # Add to candidate and confirmed URLs
+                        if (-not $memory.CandidateUrls.Contains($uri)) {
+                            $memory.CandidateUrls.Add($uri)
+                        }
+                        if (-not $memory.ConfirmedUrls.Contains($uri)) {
+                            $memory.ConfirmedUrls.Add($uri)
+                        }
+                    }
                 }
-            } )
-        })
-        Save-AgentCheckpoint -State 'Running' -Step $iterations -Messages $messages -Memory $memory -Reason "Completed tool call $funcName." -RetryAfterSeconds $null
-    } elseif ($textProperty -and -not [string]::IsNullOrWhiteSpace([string]$textProperty.Value)) {
-        # Final answer received
-        $finalAnswer = ([string]$textProperty.Value).Trim()
-        Write-AgentEvent -Type 'Log' -Message "[Gemini] Final answer received" -Data @{ Step = $iterations }
-        Save-AgentCheckpoint -State 'Done' -Step $iterations -Messages $messages -Memory $memory -Reason 'Final answer received.' -RetryAfterSeconds $null
-        Write-AgentEvent -Type 'Result' -Message $finalAnswer -Data @{ Step = $iterations; FinalAnswer = $finalAnswer }
-        $loop = $false
-    } else {
-        $reason = "Gemini returned a response without text or functionCall."
-        Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason $reason -RetryAfterSeconds $null
-        Write-AgentEvent -Type 'Error' -Message $reason -Data @{ Step = $iterations; Content = $candidate.content }
-        return
+            }
+            
+            if ($queriesText -or $chunksText.Count -gt 0) {
+                $logMessage = "[Google Grounding] Queries: $queriesText"
+                if ($chunksText.Count -gt 0) {
+                    $logMessage += " | Sources: " + ($chunksText -join "; ")
+                }
+                Write-AgentEvent -Type 'Log' -Message $logMessage -Data @{
+                    Step = $iterations
+                    Queries = $gm.webSearchQueries
+                    Chunks = $gm.groundingChunks
+                }
+            }
+        }
+
+        $part = $candidate.content.parts[0]
+        $functionCallProperty = $part.PSObject.Properties['functionCall']
+        $textProperty = $part.PSObject.Properties['text']
+        
+        if ($functionCallProperty -and $null -ne $functionCallProperty.Value) {
+            $functionCall = $functionCallProperty.Value
+            $funcName = $functionCall.name
+            $args = $functionCall.args
+            Write-AgentEvent -Type 'Log' -Message "[Gemini] Requested tool: $funcName $(Format-AgentArgs -ArgsObject $args)" -Data @{
+                Step = $iterations
+                Tool = $funcName
+                Args = $args
+            }
+    
+            # Execute tool locally
+            $toolResult = $null
+            switch ($funcName) {
+                "SearchWeb" { $toolResult = SearchWeb -query $args.query }
+                "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query $args.query }
+                "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query $args.query }
+                "FetchUrlText" { $toolResult = FetchUrlText -url $args.url }
+                "FetchRenderedUrlText" { $toolResult = FetchRenderedUrlText -url $args.url -targetText $args.targetText -inputText $args.inputText }
+                "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId $args.hardwareId }
+                default { $toolResult = "Error: Unknown function '$funcName'" }
+            }
+            Write-AgentEvent -Type 'Log' -Message "[Tool Result] $funcName -> $(Format-AgentLogValue -Value $toolResult)" -Data @{
+                Step = $iterations
+                Tool = $funcName
+                Result = $toolResult
+            }
+            Add-AgentMemoryFromTool -Memory $memory -Step $iterations -Tool $funcName -ArgsObject $args -Result $toolResult
+    
+            # Preserve the full model content, including thoughtSignature metadata required by Gemini 3 tool calls.
+            $messages.Add($candidate.content)
+            
+            $messages.Add(@{
+                role = "tool"
+                parts = @( @{
+                    functionResponse = @{
+                        name = $funcName
+                        response = @{ result = $toolResult }
+                    }
+                } )
+            })
+            Save-AgentCheckpoint -State 'Running' -Step $iterations -Messages $messages -Memory $memory -Reason "Completed tool call $funcName." -RetryAfterSeconds $null
+        } elseif ($textProperty -and -not [string]::IsNullOrWhiteSpace([string]$textProperty.Value)) {
+            # Final answer received
+            $finalAnswer = ([string]$textProperty.Value).Trim()
+            Write-AgentEvent -Type 'Log' -Message "[Gemini] Final answer received" -Data @{ Step = $iterations }
+            Save-AgentCheckpoint -State 'Done' -Step $iterations -Messages $messages -Memory $memory -Reason 'Final answer received.' -RetryAfterSeconds $null
+            Write-AgentEvent -Type 'Result' -Message $finalAnswer -Data @{ Step = $iterations; FinalAnswer = $finalAnswer }
+            $loop = $false
+        } else {
+            $reason = "Gemini returned a response without text or functionCall."
+            Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason $reason -RetryAfterSeconds $null
+            Write-AgentEvent -Type 'Error' -Message $reason -Data @{ Step = $iterations; Content = $candidate.content }
+            return
+        }
     }
-}
 
 if ($loop -and $iterations -ge $maxIterations) {
     $reason = "Agent paused at budget guard after $maxIterations Gemini steps. Checkpoint saved; run the agent again to continue."

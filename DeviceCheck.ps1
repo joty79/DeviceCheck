@@ -28,6 +28,7 @@ $script:DeviceCheckCacheRoot = Join-Path -Path ([Environment]::GetFolderPath('Lo
 if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {
     $script:DeviceCheckCacheRoot = Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
 }
+$env:DEVICECHECK_CHROME_PROFILE = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'browser-profile'
 
 function Initialize-AvailableModels {
     $script:AvailableModels = [System.Collections.Generic.List[object]]::new()

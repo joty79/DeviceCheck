@@ -152,10 +152,21 @@ async function waitForBodyText(send, deadline) {
 async function main() {
   const deadline = Date.now() + timeoutMs;
   const chrome = findChrome();
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devicecheck-google-'));
+  
+  const isPersistent = !process.env.DEVICECHECK_TEMP_PROFILE;
+  const profileDir = process.env.DEVICECHECK_CHROME_PROFILE || 
+    path.join(process.env.LOCALAPPDATA || os.homedir(), 'DeviceCheck', 'browser-profile');
+  
+  if (!fs.existsSync(profileDir)) {
+    fs.mkdirSync(profileDir, { recursive: true });
+  }
+
   const googleHl = process.env.DEVICECHECK_GOOGLE_HL || 'en';
   const googleGl = process.env.DEVICECHECK_GOOGLE_GL || 'gr';
-  const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=${encodeURIComponent(googleHl)}&gl=${encodeURIComponent(googleGl)}&pws=0`;
+  
+  // Navigate to Google home first instead of direct search URL
+  const startUrl = `https://www.google.gr/?hl=${encodeURIComponent(googleHl)}&gl=${encodeURIComponent(googleGl)}`;
+  
   const args = [
     '--remote-debugging-port=0',
     `--user-data-dir=${profileDir}`,
@@ -165,7 +176,7 @@ async function main() {
     '--disable-sync',
     '--disable-extensions',
     '--window-size=1400,1000',
-    searchUrl,
+    startUrl,
   ];
 
   const child = spawn(chrome, args, { stdio: 'ignore', windowsHide: false });
@@ -179,21 +190,62 @@ async function main() {
 
     await send('Page.enable');
     await send('Runtime.enable');
-    await send('Page.navigate', { url: searchUrl });
-    await sleep(2000);
+    await send('Page.navigate', { url: startUrl });
+    await sleep(2500);
     await waitForBodyText(send, Math.min(deadline, Date.now() + 25000));
 
+    // Handle Google Consent popup if visible
     await send('Runtime.evaluate', {
       expression: `(() => {
         const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
-        const accept = candidates.find(el => /^(accept all|accept)$/i.test((el.innerText || el.textContent || '').trim()));
+        const accept = candidates.find(el => /^(accept all|accept|αποδοχή όλων|συμφωνώ)$/i.test((el.innerText || el.textContent || '').trim()));
         if (accept) { accept.click(); return true; }
         return false;
       })()`,
       returnByValue: true,
     }).catch(() => {});
-    await sleep(2500);
+    await sleep(2000);
     await waitForBodyText(send, Math.min(deadline, Date.now() + 15000));
+
+    // Emulate typing the search query like a real user
+    const typeAndSearchExpression = `(async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const input = document.querySelector('textarea[name="q"]') || document.querySelector('input[name="q"]');
+      if (!input) return false;
+      
+      input.focus();
+      input.click();
+      await sleep(300);
+      
+      input.value = '';
+      const queryText = ${JSON.stringify(query)};
+      for (let i = 0; i < queryText.length; i++) {
+        input.value += queryText[i];
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: queryText[i] }));
+        input.dispatchEvent(new KeyboardEvent('keypress', { key: queryText[i] }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { key: queryText[i] }));
+        await sleep(40 + Math.random() * 70);
+      }
+      
+      await sleep(500);
+      const form = input.closest('form');
+      if (form) {
+        form.submit();
+        return true;
+      }
+      return false;
+     })()`;
+
+    await send('Runtime.evaluate', {
+      expression: typeAndSearchExpression,
+      returnByValue: true,
+      awaitPromise: true
+    }).catch(() => {});
+    
+    // Wait for search results page to load
+    await sleep(3500);
+    await waitForBodyText(send, Math.min(deadline, Date.now() + 20000));
 
     for (let i = 0; i < 2; i++) {
       await send('Runtime.evaluate', { expression: 'window.scrollBy(0, 650);', returnByValue: true }).catch(() => {});
@@ -269,7 +321,7 @@ async function main() {
       return;
     }
     if (!String(value.textSnippet || '').trim() && !String(value.aiOverviewHint || '').trim() && !(value.organicResults || []).length) {
-      throw new Error(`Google rendered search returned empty page text at ${value.finalUrl || searchUrl}`);
+      throw new Error(`Google rendered search returned empty page text at ${value.finalUrl || startUrl}`);
     }
     console.log(JSON.stringify(value, null, 2));
   } finally {
@@ -280,9 +332,11 @@ async function main() {
       child.kill();
     } catch {}
     await sleep(500);
-    try {
-      fs.rmSync(profileDir, { recursive: true, force: true });
-    } catch {}
+    if (!isPersistent) {
+      try {
+        fs.rmSync(profileDir, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 

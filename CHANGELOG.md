@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-05-31
 
 ### Added
+- Integrated the official **Google Search Grounding API** (`google_search` tool) into the Agent (`Get-DriverUpdateAgent.ps1`), allowing server-side, CAPTCHA-free web search powered directly by Google, and parsing of `groundingMetadata` for live web citations.
+- Implemented **Stealth Browser Automation & Persistent Profile** support in `tools/Search-GoogleRendered.js`, using a stable Chrome profile directory (`browser-profile`) and simulating human-like key typing (typed-search emulation) instead of direct URL queries to prevent reCAPTCHA blocks.
 - Completed and documented the Gemini response for Google Search / AI Overview retrieval strategies (`docs/gemini-google-search-investigation-response.md`), outlining recommended workflows, tool/prompt changes, and human-in-the-loop fallback strategies.
 - Added autonomous Agentic Driver Finder (`Get-DriverUpdateAgent.ps1`) that uses Gemini 3.1 Flash Lite Function Calling (Tool Use) to automatically search for, identify, and locate the latest official drivers for any device.
 - Agent has built-in tools for `SearchGoogleCustom` (official Google Custom Search JSON API when configured), `SearchWeb` (guarded DuckDuckGo fallback), `FetchUrlText` (plain HTML text/link extractor), `FetchRenderedUrlText` (real Chrome DevTools rendered-page extraction with optional category/tab click), and `SearchUpdateCatalog` (Microsoft Update Catalog search with direct `.cab` download link extraction via POST to DownloadDialog.aspx).
