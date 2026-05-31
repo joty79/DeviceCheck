@@ -300,3 +300,38 @@ Root cause: The current Google rendered helper may be using a fragile browser/se
 Guardrail/rule: Keep `SearchGoogleRendered` available during active investigation, but log CAPTCHA blocks clearly and do not retry after a block in the same run. Maintain `docs/gemini-google-search-investigation.md` as the briefing prompt for Gemini/system-design review of better Google Search / AI Overview retrieval patterns. Do not treat AI Overview as final truth; verify driver links on official vendor pages.
 Files affected: `Get-DriverUpdateAgent.ps1`, `docs/gemini-google-search-investigation.md`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Gemini API review request saved to `docs/gemini-google-search-investigation-response.md`; PowerShell parser validation; `node --check`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Gemini ignored prompt instructions and used short search queries like "lg monitor GSM5BD3 model drivers" when calling SearchGoogleRendered, resulting in poor AI Overview resolution.
+Root cause: LLMs tend to generalize and summarize input queries for search tools, ignoring system instructions to pass exact blocks.
+Guardrail/rule: Enforce query requirements programmatically inside the tool handler (SearchGoogleRendered) by detecting and overriding non-structured or short queries with the full script-scoped `$script:devicePropertiesBlock`.
+Files affected: `Get-DriverUpdateAgent.ps1`, `PROJECT_RULES.md`, `CHANGELOG.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: Long log, checkpoint, and cache path strings were truncated in the details panel (ending with "..."), making it impossible for the user to see the filenames or copy/access the files. Also, automated Google searches typed queries but failed to submit on dynamic page variants.
+Root cause: 1) `Format-UiValue` enforced truncation based on window width. 2) Modern Google Search home pages intercept `form.submit()`, causing the browser to stay on the home page.
+Guardrail/rule: 1) For important file paths (Log, Checkpoint, Cache), use a custom `Add-WrappedPathLine` function to wrap the path on the right side of the pane and format each wrapped segment as a clickable terminal hyperlink using the `file:///` scheme. 2) Emulate keyboard `Enter` events and click the Google Search button as fallbacks to ensure form submission in `tools/Search-GoogleRendered.js`.
+Files affected: `DeviceCheck.ps1`, `tools/Search-GoogleRendered.js`, `PROJECT_RULES.md`, `CHANGELOG.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: The current rendered Google Search workflow is not ideal/safe long-term, but it is the only usable path currently producing useful model-identity evidence for the driver-finder agent.
+Root cause: Official Google Custom Search does not expose AI Overview, while browser-based Google Search can work only with a more realistic session/search flow and may still be fragile. Replacing it before a tested alternative exists would break the user's working workflow.
+Guardrail/rule: Do not remove, disable, or "clean up" the current working `SearchGoogleRendered` behavior until a safer replacement is implemented and proven with the same LG/AOC/MSI test cases. Future work should investigate a safer mode using Playwright or a full agentic browser harness, persistent normal browser sessions, human-assisted fallback, and official vendor verification. For now, preserve the working Google rendered path and focus on improving local device evidence quality.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Reminder/guardrail only; no code changes.
+
+Date: 2026-05-31
+Problem: `SearchGoogleCustom` looked like a Gemini search-grounding leftover and cost an extra Gemini step when `GOOGLE_CUSTOM_SEARCH_API_KEY`/`GOOGLE_CUSTOM_SEARCH_CX` were not configured.
+Root cause: Google Custom Search JSON API is a separate Programmable Search Engine product, not Gemini built-in search grounding. The tool was always advertised to Gemini, so the model could call it even though the user only had `GOOGLE_API_KEY` for Gemini.
+Guardrail/rule: Hide `SearchGoogleCustom` from Gemini unless both the Custom Search API key and Programmable Search Engine `cx` are configured. Keep it as a future official low-noise discovery layer: it can return normal Google result titles/links/snippets with about 100 free queries/day, but it does not expose AI Overview and must still be followed by official vendor page verification.
+Files affected: `Get-DriverUpdateAgent.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; static tool-declaration check with missing Custom Search env vars.
+
+Date: 2026-05-31
+Problem: After hiding `SearchGoogleCustom`, LG agent runs appeared to skip browser Google entirely and hit `POLICY BLOCKED` after cached `SearchGoogleRendered` results.
+Root cause: `SearchGoogleRendered` incremented the per-run Google budget before checking the tool cache, and an empty cached Google-home result (`organicResults: []`, empty `aiOverviewHint`) was treated as valid evidence.
+Guardrail/rule: Rendered Google cache hits must not consume the per-run browser-search budget. Empty Google-home/cache results should be deleted and retried once through the browser, and empty browser results should not be cached.
+Files affected: `Get-DriverUpdateAgent.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; static cache/budget order review.

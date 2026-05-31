@@ -8,7 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-05-31
 
 ### Added
-- Integrated the official **Google Search Grounding API** (`google_search` tool) into the Agent (`Get-DriverUpdateAgent.ps1`), allowing server-side, CAPTCHA-free web search powered directly by Google, and parsing of `groundingMetadata` for live web citations.
+- Parameterized the Agent model name using the `-ModelName` parameter in `Get-DriverUpdateAgent.ps1` and passed the user-selected model dynamically from the `DeviceCheck.ps1` TUI instead of hardcoding `gemini-3.1-flash-lite`.
+- Disabled the built-in `google_search` grounding tool due to a Gemini API restriction that forbids combining built-in tools with custom Function Calling in the same request.
+- Prevented monitor EDID hardware/PnP codes (such as `GSM5BD3`) from being prefetched as direct search inputs on LG support pages, allowing Google Search to perform model discovery first.
+- Refactored `Get-GoogleSearchQueries` to build clean, deduplicated, single-line human-like queries combining device properties instead of robotic multiline blocks.
+- Added `--disable-blink-features=AutomationControlled` to Chrome arguments in `Search-GoogleRendered.js` to disable webdriver detection and mitigate instant CAPTCHA challenges.
+- Updated TUI status display to render the active Agent model name dynamically (e.g., `[Agent: gemini-2.5-flash]`).
 - Implemented **Stealth Browser Automation & Persistent Profile** support in `tools/Search-GoogleRendered.js`, using a stable Chrome profile directory (`browser-profile`) and simulating human-like key typing (typed-search emulation) instead of direct URL queries to prevent reCAPTCHA blocks.
 - Completed and documented the Gemini response for Google Search / AI Overview retrieval strategies (`docs/gemini-google-search-investigation-response.md`), outlining recommended workflows, tool/prompt changes, and human-in-the-loop fallback strategies.
 - Added autonomous Agentic Driver Finder (`Get-DriverUpdateAgent.ps1`) that uses Gemini 3.1 Flash Lite Function Calling (Tool Use) to automatically search for, identify, and locate the latest official drivers for any device.
@@ -36,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `A = agent` shortcut to both footer renderers (legacy and dual-pane).
 
 ### Fixed
+- Hid `SearchGoogleCustom` from Gemini tool declarations unless `GOOGLE_CUSTOM_SEARCH_API_KEY`/`GOOGLE_CUSTOM_SEARCH_CX` (or the `GOOGLE_CSE_*` aliases) are configured, preventing a wasted agent step on the "Custom Search API is not configured" result.
+- Fixed `SearchGoogleRendered` cache handling so empty Google-home results are ignored/deleted and cached results do not consume the per-run rendered Google budget before a real browser attempt.
+- Improved Google Search form submission in `tools/Search-GoogleRendered.js` by emulating keyboard `Enter` events and clicking the Google Search button as fallbacks to raw `form.submit()`, ensuring typed queries submit correctly on dynamic search variants.
+- Added programmatic wrapping and hyperlink formatting for `Log`, `Checkpoint`, and `Cache` path values in `DeviceCheck.ps1`'s details panel using `Add-WrappedPathLine` to prevent truncation and make them Ctrl-clickable terminal links.
+- Enforced using the full multiline Device Properties Block as the search query in `SearchGoogleRendered` inside `Get-DriverUpdateAgent.ps1`. If the Gemini model tries to call the tool with a short/summarized search query, the function automatically overrides it with the full script-scoped `$script:devicePropertiesBlock` to guarantee accurate model resolution and AI Overview parsing in Google.
 - Fixed Gemini 3 tool-calling `400 Bad Request` failures by preserving the full model content, including `thoughtSignature`, when sending function-call history back to the API.
 - Fixed Agent API failures being displayed as successful `(Done)` results; they now return `Type = Error` and render as failed in the TUI.
 - Fixed a strict-mode crash when Gemini returns a final text response without a `functionCall` property.

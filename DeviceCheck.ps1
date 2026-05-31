@@ -492,6 +492,49 @@ function New-KeyValueLine {
     return " $($_C.Dim)$keyText :$($_C.Reset) $ValueColor$valueText$($_C.Reset)"
 }
 
+function Add-WrappedPathLine {
+    param(
+        [Parameter(Mandatory)]
+        $Lines,
+        [string]$Key,
+        [string]$Path,
+        [int]$Width
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        $keyText = Format-PlainToWidth -Text $Key -Width 13
+        $Lines.Add(" $($_C.Dim)$keyText :$($_C.Reset) -")
+        return
+    }
+
+    $keyText = Format-PlainToWidth -Text $Key -Width 13
+    $valueWidth = [Math]::Max(8, $Width - 17)
+
+    # Wrap the path into pieces of $valueWidth length
+    $wrapped = [System.Collections.Generic.List[string]]::new()
+    $tempPath = $Path
+    while ($tempPath.Length -gt 0) {
+        $chunkSize = [Math]::Min($tempPath.Length, $valueWidth)
+        $wrapped.Add($tempPath.Substring(0, $chunkSize))
+        $tempPath = $tempPath.Substring($chunkSize)
+    }
+
+    $fileUrl = "file:///" + ($Path -replace '\\', '/')
+    
+    # First line has the key
+    $first = $wrapped[0]
+    $clickableFirst = New-TerminalHyperlink -Label $first -Url $fileUrl
+    $Lines.Add(" $($_C.Dim)$keyText :$($_C.Reset) $($_C.White)$clickableFirst$($_C.Reset)")
+
+    # Subsequent lines are indented by 15 spaces (13 key + 2 padding/separator)
+    for ($i = 1; $i -lt $wrapped.Count; $i++) {
+        $indent = ' ' * 15
+        $clickableChunk = New-TerminalHyperlink -Label $wrapped[$i] -Url $fileUrl
+        $Lines.Add("$indent$($_C.White)$clickableChunk$($_C.Reset)")
+    }
+}
+
+
 function Get-CompactSystemStatus {
     param([AllowEmptyString()][string]$StatusText)
 
@@ -957,11 +1000,11 @@ function Add-AgentTraceLines {
     $stateText = if ($ActiveSearch.AgentState) { $ActiveSearch.AgentState } else { 'Unknown' }
     $lines.Add((New-KeyValueLine -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor))
     if (-not [string]::IsNullOrWhiteSpace($ActiveSearch.AgentTracePath)) {
-        $lines.Add((New-KeyValueLine -Key 'Log' -Value $ActiveSearch.AgentTracePath -Width $Width))
+        Add-WrappedPathLine -Lines $lines -Key 'Log' -Path $ActiveSearch.AgentTracePath -Width $Width
     }
     $checkpointPath = Get-NotePropertyValue -Object $ActiveSearch -Name 'AgentCheckpointPath'
     if (-not [string]::IsNullOrWhiteSpace($checkpointPath)) {
-        $lines.Add((New-KeyValueLine -Key 'Checkpoint' -Value $checkpointPath -Width $Width))
+        Add-WrappedPathLine -Lines $lines -Key 'Checkpoint' -Path $checkpointPath -Width $Width
     }
 
     if ($ActiveSearch.AgentLogs.Count -gt 0) {
@@ -1093,7 +1136,7 @@ function Get-DetailDisplayLines {
             }
 
             $cachePath = Get-DeviceEvidenceCachePath -InstanceId $SelectedRow.Ref.InstanceId
-            $lines.Add((New-KeyValueLine -Key 'Cache' -Value $cachePath -Width $Width))
+            Add-WrappedPathLine -Lines $lines -Key 'Cache' -Path $cachePath -Width $Width
         } elseif ($null -eq $activeSearch) {
             $lines.Add((New-KeyValueLine -Key 'Evidence' -Value 'Not scanned yet. Press E for local evidence or S for search.' -Width $Width -ValueColor $_C.Warn))
         }
@@ -1119,7 +1162,7 @@ function Get-DetailDisplayLines {
                 Get-NotePropertyValue -Object $parentDevice -Name 'SearchTracePath'
             }
             if (-not [string]::IsNullOrWhiteSpace($tracePath)) {
-                $lines.Add((New-KeyValueLine -Key 'Log' -Value $tracePath -Width $Width))
+                Add-WrappedPathLine -Lines $lines -Key 'Log' -Path $tracePath -Width $Width
             }
             $checkpointPath = if ($null -ne $resultSearch) {
                 Get-NotePropertyValue -Object $resultSearch -Name 'AgentCheckpointPath'
@@ -1127,7 +1170,7 @@ function Get-DetailDisplayLines {
                 Get-NotePropertyValue -Object $parentDevice -Name 'SearchCheckpointPath'
             }
             if (-not [string]::IsNullOrWhiteSpace($checkpointPath)) {
-                $lines.Add((New-KeyValueLine -Key 'Checkpoint' -Value $checkpointPath -Width $Width))
+                Add-WrappedPathLine -Lines $lines -Key 'Checkpoint' -Path $checkpointPath -Width $Width
             }
 
             $detailText = if ($null -ne $resultSearch -and -not [string]::IsNullOrWhiteSpace($resultSearch.AgentVal)) {
@@ -1242,6 +1285,8 @@ function Invoke-ModelSelector {
                 $providerColor = if ($model.Provider -eq 'Gemini') { $_C.Info } else { $_C.Gold }
 
                 $displayText = " $checkColor$check$($_C.Reset) $providerColor$($model.Provider):$($_C.Reset) $($model.FriendlyName) $($_C.Dim)($($model.ApiId))$($_C.Reset)"
+
+
 
                 # Show limits if available
                 if ($model.RpmLimit -or $model.RpdLimit) {
@@ -1757,6 +1802,15 @@ function Start-DeviceLookup {
         try { $apiKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).GEMINI_API_KEY } catch {}
     }
 
+    # Resolve Agent model if using agent
+    $agentModel = 'gemini-3.1-flash-lite'
+    if ($UseAgent) {
+        $selectedGemini = $script:AvailableModels | Where-Object { $_.Selected -and $_.Provider -eq 'Gemini' } | Select-Object -First 1
+        if ($null -ne $selectedGemini) {
+            $agentModel = $selectedGemini.ApiId
+        }
+    }
+
     if ($UseAgent -and [string]::IsNullOrWhiteSpace($apiKey)) {
         $message = "Google/Gemini API key is missing (set GEMINI_API_KEY environment variable)."
         $Dev.SearchStatus = 'Done'
@@ -1764,7 +1818,7 @@ function Start-DeviceLookup {
         $Dev.SearchDetail = $message
         $Dev.SearchTracePath = $null
         $Dev.SearchCheckpointPath = $null
-        $Dev.SearchResults = @("[Agent: gemini-3.1-flash-lite] (Failed)")
+        $Dev.SearchResults = @("[Agent: $agentModel] (Failed)")
         return
     }
 
@@ -1817,7 +1871,7 @@ function Start-DeviceLookup {
     $Dev.SearchCheckpointPath = $agentCheckpointPath
     $newResults = [System.Collections.Generic.List[string]]::new()
     if ($UseAgent) {
-        $newResults.Add("[Agent: gemini-3.1-flash-lite] (Waiting for local evidence...)")
+        $newResults.Add("[Agent: $agentModel] (Waiting for local evidence...)")
     } else {
         $newResults.AddRange($activeResults)
         if ($webState -eq 'Searching') { $newResults.Add("[Web Snippet] (Searching...)") }
@@ -2155,6 +2209,7 @@ function Start-DeviceLookup {
         EvidenceOnly       = [bool]$EvidenceOnly
         EvidenceBatchId    = $EvidenceBatchId
         UseAgent           = [bool]$UseAgent
+        AgentModelName     = $agentModel
         ApiKey             = $apiKey
         AgentLogs          = [System.Collections.Generic.List[string]]::new()
         AgentState         = if ($UseAgent) { 'Waiting' } else { 'None' }
@@ -2293,20 +2348,22 @@ function Stop-DeviceLookup {
     $newResults = [System.Collections.Generic.List[string]]::new()
 
     if ($search.UseAgent) {
+        $mName = $search.AgentModelName
+        if ([string]::IsNullOrWhiteSpace($mName)) { $mName = 'gemini-3.1-flash-lite' }
         if ($search.AgentState -in @('Searching', 'Waiting')) {
-            $newResults.Add("[Agent: gemini-3.1-flash-lite] (Cancelled)")
+            $newResults.Add("[Agent: $mName] (Cancelled)")
             $search.Device.SearchDetail = "Cancelled by user."
         } elseif ($search.AgentState -eq 'Done') {
-            $newResults.Add("[Agent: gemini-3.1-flash-lite] (Done)")
+            $newResults.Add("[Agent: $mName] (Done)")
             $search.Device.SearchDetail = $search.AgentVal
         } elseif ($search.AgentState -eq 'Error') {
-            $newResults.Add("[Agent: gemini-3.1-flash-lite] (Failed)")
+            $newResults.Add("[Agent: $mName] (Failed)")
             $search.Device.SearchDetail = $search.AgentVal
         } elseif ($search.AgentState -eq 'PausedRateLimit') {
-            $newResults.Add("[Agent: gemini-3.1-flash-lite] (Paused: Rate limit)")
+            $newResults.Add("[Agent: $mName] (Paused: Rate limit)")
             $search.Device.SearchDetail = $search.AgentVal
         } elseif ($search.AgentState -eq 'PausedBudget') {
-            $newResults.Add("[Agent: gemini-3.1-flash-lite] (Paused: Budget)")
+            $newResults.Add("[Agent: $mName] (Paused: Budget)")
             $search.Device.SearchDetail = $search.AgentVal
         }
         $search.Device.SearchKind = 'Agent'
@@ -2469,9 +2526,9 @@ function Update-ActiveSearches {
 
                 $psAgent = [PowerShell]::Create()
                 $psAgent.AddScript({
-                    param($DeviceName, $InstanceId, $HardwareId, $Manufacturer, $InstalledDriver, $Motherboard, $Cpu, $Os, $EvidenceJson, $ApiKey, $AgentScriptPath, $TracePath, $CheckpointPath, $ToolCacheRoot, $MaxIterations)
+                    param($DeviceName, $InstanceId, $HardwareId, $Manufacturer, $InstalledDriver, $Motherboard, $Cpu, $Os, $EvidenceJson, $ApiKey, $AgentScriptPath, $TracePath, $CheckpointPath, $ToolCacheRoot, $ModelName, $MaxIterations)
                     $ProgressPreference = 'SilentlyContinue'
-                    & $AgentScriptPath -DeviceName $DeviceName -InstanceId $InstanceId -HardwareId $HardwareId -Manufacturer $Manufacturer -InstalledDriver $InstalledDriver -Motherboard $Motherboard -Cpu $Cpu -Os $Os -EvidenceJson $EvidenceJson -ApiKey $ApiKey -TracePath $TracePath -CheckpointPath $CheckpointPath -ToolCacheRoot $ToolCacheRoot -MaxIterations $MaxIterations
+                    & $AgentScriptPath -DeviceName $DeviceName -InstanceId $InstanceId -HardwareId $HardwareId -Manufacturer $Manufacturer -InstalledDriver $InstalledDriver -Motherboard $Motherboard -Cpu $Cpu -Os $Os -EvidenceJson $EvidenceJson -ApiKey $ApiKey -TracePath $TracePath -CheckpointPath $CheckpointPath -ToolCacheRoot $ToolCacheRoot -ModelName $ModelName -MaxIterations $MaxIterations
                 })
 
                 $agentScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Get-DriverUpdateAgent.ps1'
@@ -2493,6 +2550,7 @@ function Update-ActiveSearches {
                 $null = $psAgent.AddArgument($search.AgentTracePath)
                 $null = $psAgent.AddArgument($search.AgentCheckpointPath)
                 $null = $psAgent.AddArgument($search.AgentToolCacheRoot)
+                $null = $psAgent.AddArgument($search.AgentModelName)
                 $null = $psAgent.AddArgument(10)
 
                 $search.AgentInput = [System.Management.Automation.PSDataCollection[PSObject]]::new()
@@ -2740,23 +2798,25 @@ function Update-ActiveSearches {
             $search.Device.SearchKind = 'Agent'
             $search.Device.SearchTracePath = $search.AgentTracePath
             $search.Device.SearchCheckpointPath = $search.AgentCheckpointPath
+            $mName = $search.AgentModelName
+            if ([string]::IsNullOrWhiteSpace($mName)) { $mName = 'gemini-3.1-flash-lite' }
             if ($search.AgentState -eq 'Waiting') {
-                $newResults.Add("[Agent: gemini-3.1-flash-lite] (Waiting for local evidence...)")
+                $newResults.Add("[Agent: $mName] (Waiting for local evidence...)")
                 $search.Device.SearchDetail = $null
             } elseif ($search.AgentState -eq 'Searching') {
-                $newResults.Add("[Agent: gemini-3.1-flash-lite] (Running... $spChar ${elapsed}s)")
+                $newResults.Add("[Agent: $mName] (Running... $spChar ${elapsed}s)")
                 $search.Device.SearchDetail = $null
             } elseif ($search.AgentState -eq 'Done') {
-                $newResults.Add("[Agent: gemini-3.1-flash-lite] (Done)")
+                $newResults.Add("[Agent: $mName] (Done)")
                 $search.Device.SearchDetail = $search.AgentVal
             } elseif ($search.AgentState -eq 'Error') {
-                $newResults.Add("[Agent: gemini-3.1-flash-lite] (Failed)")
+                $newResults.Add("[Agent: $mName] (Failed)")
                 $search.Device.SearchDetail = $search.AgentVal
             } elseif ($search.AgentState -eq 'PausedRateLimit') {
-                $newResults.Add("[Agent: gemini-3.1-flash-lite] (Paused: Rate limit)")
+                $newResults.Add("[Agent: $mName] (Paused: Rate limit)")
                 $search.Device.SearchDetail = $search.AgentVal
             } elseif ($search.AgentState -eq 'PausedBudget') {
-                $newResults.Add("[Agent: gemini-3.1-flash-lite] (Paused: Budget)")
+                $newResults.Add("[Agent: $mName] (Paused: Budget)")
                 $search.Device.SearchDetail = $search.AgentVal
             }
         } else {

@@ -122,7 +122,7 @@ async function connectCdp(wsUrl) {
       pending.set(messageId, { resolve, reject });
       setTimeout(() => {
         if (pending.delete(messageId)) reject(new Error(`CDP command timed out: ${method}`));
-      }, 15000);
+      }, 45000);
     });
   }
 
@@ -170,6 +170,7 @@ async function main() {
   const args = [
     '--remote-debugging-port=0',
     `--user-data-dir=${profileDir}`,
+    '--disable-blink-features=AutomationControlled',
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
@@ -178,6 +179,16 @@ async function main() {
     '--window-size=1400,1000',
     startUrl,
   ];
+
+  // Delete stale DevToolsActivePort file to prevent reading a port from a previous run
+  const activePortPath = path.join(profileDir, 'DevToolsActivePort');
+  try {
+    if (fs.existsSync(activePortPath)) {
+      fs.unlinkSync(activePortPath);
+    }
+  } catch (err) {
+    console.warn('Warning: DevToolsActivePort exists and could not be deleted. Chrome might already be running: ' + err.message);
+  }
 
   const child = spawn(chrome, args, { stdio: 'ignore', windowsHide: false });
   let cdp = null;
@@ -207,7 +218,7 @@ async function main() {
     await sleep(2000);
     await waitForBodyText(send, Math.min(deadline, Date.now() + 15000));
 
-    // Emulate typing the search query like a real user
+    // Emulate typing the search query like a real user (simulate typing first few characters and then pasting for long queries)
     const typeAndSearchExpression = `(async () => {
       const sleep = ms => new Promise(r => setTimeout(r, ms));
       const input = document.querySelector('textarea[name="q"]') || document.querySelector('input[name="q"]');
@@ -218,17 +229,55 @@ async function main() {
       await sleep(300);
       
       input.value = '';
-      const queryText = ${JSON.stringify(query)};
-      for (let i = 0; i < queryText.length; i++) {
-        input.value += queryText[i];
+      const queryText = ${JSON.stringify(query)}.replace(/\r?\n/g, ' ');
+      
+      if (queryText.length <= 15) {
+        for (let i = 0; i < queryText.length; i++) {
+          input.value += queryText[i];
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: queryText[i] }));
+          input.dispatchEvent(new KeyboardEvent('keypress', { key: queryText[i] }));
+          input.dispatchEvent(new KeyboardEvent('keyup', { key: queryText[i] }));
+          await sleep(30 + Math.random() * 50);
+        }
+      } else {
+        // Type first 5 characters
+        const firstPart = queryText.slice(0, 5);
+        for (let i = 0; i < firstPart.length; i++) {
+          input.value += firstPart[i];
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: firstPart[i] }));
+          await sleep(30 + Math.random() * 50);
+        }
+        await sleep(200 + Math.random() * 300);
+        
+        // Paste the remaining query
+        input.value = queryText;
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: queryText[i] }));
-        input.dispatchEvent(new KeyboardEvent('keypress', { key: queryText[i] }));
-        input.dispatchEvent(new KeyboardEvent('keyup', { key: queryText[i] }));
-        await sleep(40 + Math.random() * 70);
+        input.dispatchEvent(new Event('change', { bubbles: true }));
       }
       
       await sleep(500);
+      
+      // Dispatch Enter key events
+      const enterDown = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+      input.dispatchEvent(enterDown);
+      const enterPress = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+      input.dispatchEvent(enterPress);
+      const enterUp = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+      input.dispatchEvent(enterUp);
+      
+      await sleep(1000);
+      
+      // Click Search button if still on Google homepage
+      if (location.href === ${JSON.stringify(startUrl)} || location.pathname === '/' || location.pathname === '' || location.hostname.includes('google.')) {
+        const btn = document.querySelector('input[name="btnK"]') || document.querySelector('button[type="submit"]') || Array.from(document.querySelectorAll('input, button, div, span')).find(el => /Google Search|Αναζήτηση Google/i.test(el.value || el.innerText || el.textContent || ''));
+        if (btn) {
+          btn.click();
+          await sleep(500);
+        }
+      }
+      
       const form = input.closest('form');
       if (form) {
         form.submit();

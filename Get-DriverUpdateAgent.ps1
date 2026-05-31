@@ -14,6 +14,7 @@ param(
     [string]$TracePath,
     [string]$CheckpointPath,
     [string]$ToolCacheRoot,
+    [string]$ModelName,
     [int]$MaxIterations = 10
 )
 
@@ -22,6 +23,9 @@ $ErrorActionPreference = 'Stop'
 
 # Define API variables
 $resolvedModelName = "gemini-3.1-flash-lite"
+if (-not [string]::IsNullOrWhiteSpace($ModelName)) {
+    $resolvedModelName = $ModelName
+}
 if ([string]::IsNullOrWhiteSpace($ApiKey)) {
     Write-Output ([PSCustomObject]@{ Type = 'Error'; Message = "Google API key is required." })
     return
@@ -251,6 +255,21 @@ function Invoke-CachedTool {
     return $result
 }
 
+function Test-GoogleRenderedResultUseful {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+
+    $isEmptyGoogleHome = (
+        $Text -match '"finalUrl"\s*:\s*"https://www\.google\.com/\?hl=en&gl=gr"' -and
+        $Text -match '"organicResults"\s*:\s*\[\]' -and
+        $Text -match '"aiOverviewHint"\s*:\s*""'
+    )
+    if ($isEmptyGoogleHome) { return $false }
+
+    return $true
+}
+
 function Get-UrlsFromAgentText {
     param([AllowEmptyString()][string]$Text)
 
@@ -330,11 +349,21 @@ function Get-VendorFirstCandidates {
     }
 
     if ($sourceText -match '(?i)\bLG\b|ULTRAGEAR|\bGSM[0-9A-F]{4}\b' -or $HwId -match '(?i)^MONITOR\\GSM') {
-        $searchInput = if ($HwId -match '(?i)MONITOR\\([^\\]+)') { $Matches[1].ToUpperInvariant() } else { $candidateInput }
-        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/gr/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason 'LG Greece/regional official software/firmware/driver search by monitor hardware code'))
-        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/uk/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason 'LG Europe/UK official software/firmware/driver search by monitor hardware code'))
-        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/us/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason 'LG US official software/firmware/driver search by monitor hardware code after regional checks'))
-        $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url "https://www.lg.com/gr/search?q=$([Uri]::EscapeDataString($searchInput))" -TargetText 'Support|Drivers|Software' -InputText '' -Reason 'LG Greece official site search by hardware code'))
+        $isMonitor = $HwId -match '(?i)^MONITOR\\'
+        $isEdidCode = $HwId -match '(?i)MONITOR\\([^\\]+)'
+        $edid = if ($isEdidCode) { $Matches[1].ToUpperInvariant() } else { '' }
+
+        $searchInput = $candidateInput
+        # If it is a monitor and the search input is just the EDID code or generic series name, do not prefetch support search.
+        # Monitors have EDID hardware codes (like GSM5BD3) that LG support search pages do not index.
+        # We must use Google Search first to resolve it to a commercial model (like 27GP850).
+        if ($isMonitor -and ($searchInput -eq $edid -or $searchInput -eq 'ULTRAGEAR' -or [string]::IsNullOrWhiteSpace($searchInput))) {
+            # Skip support search prefetch
+        } else {
+            $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/gr/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason "LG Greece/regional official software/firmware/driver search for model $searchInput"))
+            $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/uk/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason "LG Europe/UK official software/firmware/driver search for model $searchInput"))
+            $candidates.Add((New-VendorCandidate -Vendor 'LG' -Url 'https://www.lg.com/us/support/software-firmware-drivers' -TargetText 'Search' -InputText $searchInput -Reason "LG US official software/firmware/driver search for model $searchInput"))
+        }
     }
 
     $isExternalMonitor = $HwId -match '(?i)^MONITOR\\' -or $Name -match '(?i)\bmonitor\b|ULTRAGEAR|DisplayPort|HDMI'
@@ -398,45 +427,42 @@ function Get-GoogleSearchQueries {
     $hardwareCode = ''
     if ($HardwareId -match '(?i)^[^\\]+\\([^\\]+)$') { $hardwareCode = $Matches[1].ToUpperInvariant() }
 
-    $rawEvidenceLines = [System.Collections.Generic.List[string]]::new()
-    if (-not [string]::IsNullOrWhiteSpace($DeviceName)) { $rawEvidenceLines.Add("FriendlyName  : $DeviceName") }
-    if (-not [string]::IsNullOrWhiteSpace($InstanceId)) { $rawEvidenceLines.Add("InstanceId    : $InstanceId") }
-    if (-not [string]::IsNullOrWhiteSpace($HardwareId)) { $rawEvidenceLines.Add("HardwareId    : $HardwareId") }
-    if (-not [string]::IsNullOrWhiteSpace($Manufacturer)) { $rawEvidenceLines.Add("Manufacturer  : $Manufacturer") }
-    if (-not [string]::IsNullOrWhiteSpace($InstalledDriver)) { $rawEvidenceLines.Add("Driver        : $InstalledDriver") }
-    try {
-        if (-not [string]::IsNullOrWhiteSpace($EvidenceJson)) {
-            $evidence = $EvidenceJson | ConvertFrom-Json
-            $important = Get-NotePropertyValue -Object $evidence -Name 'ImportantProperties'
-            $compatibleId = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_CompatibleIds'
-            $service = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_Service'
-            $driverInf = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_DriverInfPath'
-            $driverVersion = Get-NotePropertyValue -Object $important -Name 'DEVPKEY_Device_DriverVersion'
-            if ($compatibleId) { $rawEvidenceLines.Add("CompatibleId  : $(($compatibleId -join ' '))") }
-            if ($service) { $rawEvidenceLines.Add("Service       : $(($service -join ' '))") }
-            if ($driverVersion -or $driverInf) { $rawEvidenceLines.Add("Installed INF : $(($driverVersion, $driverInf | Where-Object { $_ }) -join ' ')") }
+    # Generate a clean, single-line combined query from device details
+    $cleanParts = [System.Collections.Generic.List[string]]::new()
+    if ($Manufacturer -and $Manufacturer -notmatch '(?i)standard|generic') { $cleanParts.Add($Manufacturer) }
+
+    if ($DeviceName) {
+        # Clean up any suffix like (DisplayPort) or (HDMI)
+        $cleanName = $DeviceName -replace '(?i)\s*\((DisplayPort|HDMI|VGA|DVI)\)', ''
+        $cleanParts.Add($cleanName)
+    }
+
+    if ($hardwareCode) { $cleanParts.Add($hardwareCode) }
+
+    if ($InstalledDriver -and $InstalledDriver -match '\(([^)]+\.inf)\)') { $cleanParts.Add($Matches[1]) }
+
+    # Split by spaces, deduplicate terms, and join
+    $dedupedTerms = @()
+    foreach ($part in $cleanParts) {
+        foreach ($term in $part -split '\s+') {
+            $cleanedTerm = $term -replace '[":;,]', ''
+            if ($cleanedTerm -and $cleanedTerm -notIn $dedupedTerms) {
+                $dedupedTerms += $cleanedTerm
+            }
         }
-    } catch {}
-    if ($rawEvidenceLines.Count -gt 0) {
-        $queries.Add(($rawEvidenceLines -join "`n"))
+    }
+    if ($dedupedTerms.Count -gt 0) {
+        $queries.Add((($dedupedTerms + @('driver', 'official')) -join ' '))
     }
 
-    $coreTerms = @()
-    if (-not [string]::IsNullOrWhiteSpace($DeviceName)) { $coreTerms += '"' + $DeviceName + '"' }
-    if (-not [string]::IsNullOrWhiteSpace($hardwareCode)) { $coreTerms += '"' + $hardwareCode + '"' }
-    if (-not [string]::IsNullOrWhiteSpace($Manufacturer)) { $coreTerms += '"' + $Manufacturer + '"' }
-    if ($InstalledDriver -match '\(([^)]+\.inf)\)') { $coreTerms += '"' + $Matches[1] + '"' }
-    if ($coreTerms.Count -gt 0) {
-        $queries.Add((($coreTerms + @('driver', 'official')) -join ' '))
-    }
-
+    # Generate model tokens query (without forced quotes to allow semantic matches)
     if ($modelTokens.Count -gt 0) {
-        $queries.Add((($modelTokens | ForEach-Object { '"' + $_ + '"' }) -join ' ') + ' driver official')
+        $queries.Add((($modelTokens | ForEach-Object { $_ }) -join ' ') + ' driver official')
     }
 
     if (-not [string]::IsNullOrWhiteSpace($localText)) {
-        $brief = $localText
-        if ($brief.Length -gt 240) { $brief = $brief.Substring(0, 240) }
+        $brief = $localText -replace '\s+', ' '
+        if ($brief.Length -gt 180) { $brief = $brief.Substring(0, 180) }
         $queries.Add("$brief driver")
     }
 
@@ -597,13 +623,31 @@ function SearchWeb {
 function SearchGoogleRendered {
     param([string]$query)
 
+    # CRITICAL: Enforce the rule to use the full Device Properties Block as the search query.
+    # If the model passes a summarized/short query instead of the full block, override it with the full block.
+    $searchQuery = $query
+    if ($query -notmatch 'FriendlyName\s*:' -or $query -notmatch 'HardwareId\s*:') {
+        $searchQuery = $script:devicePropertiesBlock
+        Write-AgentEvent -Type 'Log' -Message "[Google] Overriding model search query with full Device Properties Block for accurate AI Overview model resolution." -Data @{ OriginalQuery = $query; OverriddenQuery = $searchQuery }
+    }
+
+    $toolArgs = [pscustomobject]@{ query = $searchQuery; policy = 'GoogleRenderedDiscoveryV1' }
+
+    $cached = Get-CachedToolResult -ToolName 'SearchGoogleRendered' -ArgsObject $toolArgs -MaxAgeHours 6
+    if ($null -ne $cached) {
+        if (Test-GoogleRenderedResultUseful -Text $cached.Result) {
+            return "[Cached SearchGoogleRendered result from $($cached.CapturedAt.ToString('u'))]`n$($cached.Result)"
+        }
+
+        try { Remove-Item -LiteralPath $cached.Path -Force -ErrorAction SilentlyContinue } catch {}
+        Write-AgentEvent -Type 'Log' -Message "[Google] Ignored empty cached SearchGoogleRendered result and will retry with browser." -Data @{ CachePath = $cached.Path }
+    }
+
     $script:AgentGoogleSearchCalls++
     if ($script:AgentGoogleSearchCalls -gt 2) {
         return "POLICY BLOCKED: Google search budget is exhausted for this run. Use FetchRenderedUrlText on the best official result already found, SearchUpdateCatalog as fallback, or produce a cautious final answer from available evidence."
     }
 
-    $toolArgs = [pscustomobject]@{ query = $query; policy = 'GoogleRenderedDiscoveryV1' }
-    return Invoke-CachedTool -ToolName 'SearchGoogleRendered' -ArgsObject $toolArgs -MaxAgeHours 6 -Action {
     try {
         $node = Get-Command node -ErrorAction Stop
         $helper = Join-Path -Path $PSScriptRoot -ChildPath 'tools\Search-GoogleRendered.js'
@@ -611,7 +655,7 @@ function SearchGoogleRendered {
             return "Google rendered search failed: helper not found at $helper"
         }
 
-        $output = & $node.Source @($helper, $query, '70000') 2>&1
+        $output = & $node.Source @($helper, $searchQuery, '70000') 2>&1
         $exitCode = $LASTEXITCODE
         $text = ($output | Out-String).Trim()
         if ($exitCode -ne 0) {
@@ -621,10 +665,14 @@ function SearchGoogleRendered {
             $script:AgentGoogleSearchCalls = 2
             return "Google rendered search blocked by Google anti-bot/reCAPTCHA for this automated browser session. Do not retry Google in this run. Use the vendor-first official regional URLs already provided, fetch official/vendor pages with FetchRenderedUrlText, and only use Microsoft Update Catalog as fallback.`n$text"
         }
+        if (Test-GoogleRenderedResultUseful -Text $text) {
+            Set-CachedToolResult -ToolName 'SearchGoogleRendered' -ArgsObject $toolArgs -Result $text
+        } else {
+            Write-AgentEvent -Type 'Log' -Message "[Google] Browser returned an empty Google result; not caching it." -Data @{ Query = $searchQuery }
+        }
         return $text
     } catch {
         return "Google rendered search failed: $($_.Exception.Message)"
-    }
     }
 }
 
@@ -851,14 +899,19 @@ function FindDeterministicVendorDownloads {
 }
 
 # Define Tools schema
+$googleCustomSearchConfigured = (
+    (-not [string]::IsNullOrWhiteSpace($env:GOOGLE_CUSTOM_SEARCH_API_KEY) -or -not [string]::IsNullOrWhiteSpace($env:GOOGLE_CSE_API_KEY)) -and
+    (-not [string]::IsNullOrWhiteSpace($env:GOOGLE_CUSTOM_SEARCH_CX) -or -not [string]::IsNullOrWhiteSpace($env:GOOGLE_CSE_CX))
+)
+
 $functionDeclarations = @(
     @{
         name = "SearchGoogleRendered"
-        description = "Fragile fallback only. Opens Google Search in a real local Chrome/Edge browser via DevTools and returns AI Overview text as a hint plus top organic result URLs/snippets. Google may return anti-bot/reCAPTCHA; do not loop if blocked. Prefer SearchGoogleCustom when configured, and always confirm final answers by fetching official/vendor pages with FetchRenderedUrlText."
+        description = "Fragile fallback only. Opens Google Search in a real local Chrome/Edge browser via DevTools and returns AI Overview text as a hint plus top organic result URLs/snippets. Google may return anti-bot/reCAPTCHA; do not loop if blocked. Always confirm final answers by fetching official/vendor pages with FetchRenderedUrlText."
         parameters = @{
             type = "OBJECT"
             properties = @{
-                query = @{ type = "STRING"; description = 'A focused query built from local Device Manager evidence, preferably a multiline block with FriendlyName, InstanceId, HardwareId, Manufacturer, CompatibleId, Service, and Driver/INF.' }
+                query = @{ type = "STRING"; description = 'CRITICAL: The query argument MUST be the exact multiline Device Properties block containing FriendlyName, InstanceId, HardwareId, Manufacturer, CompatibleId, Service, and Driver, provided in the system instructions. Do NOT summarize, shorten or modify this block.' }
             }
             required = @("query")
         }
@@ -910,6 +963,9 @@ $functionDeclarations = @(
         }
     }
 )
+if (-not $googleCustomSearchConfigured) {
+    $functionDeclarations = @($functionDeclarations | Where-Object { $_.name -ne 'SearchGoogleCustom' })
+}
 
 # Prepare prompt context
 $systemDetails = @"
@@ -924,6 +980,28 @@ System Info:
 - Motherboard: $Motherboard
 - CPU: $Cpu
 - OS: $Os
+"@
+
+$script:devicePropertiesBlock = @"
+FriendlyName  : $DeviceName
+InstanceId    : $InstanceId
+Status        : OK (Working properly)
+HardwareId    : $HardwareId
+Manufacturer  : $Manufacturer
+CompatibleId  : $(if (-not [string]::IsNullOrWhiteSpace($EvidenceJson)) {
+    try {
+        $evidence = $EvidenceJson | ConvertFrom-Json
+        $compat = Get-NotePropertyValue -Object $evidence.ImportantProperties -Name 'DEVPKEY_Device_CompatibleIds'
+        if ($compat) { if ($compat -is [array]) { $compat -join ' ' } else { $compat } } else { '*PNP09FF' }
+    } catch { '*PNP09FF' }
+} else { '*PNP09FF' })
+Service       : $(if (-not [string]::IsNullOrWhiteSpace($EvidenceJson)) {
+    try {
+        $evidence = $EvidenceJson | ConvertFrom-Json
+        Get-NotePropertyValue -Object $evidence.ImportantProperties -Name 'DEVPKEY_Device_Service'
+    } catch { 'monitor' }
+} else { 'monitor' })
+Driver        : $InstalledDriver
 "@
 
 $localEvidenceSection = ''
@@ -952,6 +1030,7 @@ Driver search policy:
 9. If an official support page fetch fails with 403/blocked HTML or search returns an anti-bot challenge, do not treat that as "no OEM driver". Use FetchRenderedUrlText before falling back to Microsoft Update Catalog.
 10. Do not claim "latest" unless you have a version/date from an official page, official download URL, or Microsoft Catalog row.
 11. Final answer must separate source quality: Official OEM, Official vendor, Microsoft Catalog, or Web snippet only.
+12. If search discovery (e.g., AI Overview or organic results) reveals multiple potential retail model numbers for a generic PnP/EDID hardware ID (for example, both a 27-inch and a 32-inch variant like 27GP850 and 32GP850), do not stop. You should retrieve support pages and download links for all candidates on the official vendor site and present them clearly so the user can select the one matching their physical screen size.
 "@
 
 $messages = [System.Collections.Generic.List[object]]::new()
@@ -1003,15 +1082,14 @@ $deterministicEvidence = FindDeterministicVendorDownloads -Name $DeviceName -HwI
 $googleQueries = @(Get-GoogleSearchQueries)
 $googleDiscoveryEvidence = ''
 if (@($script:AgentVendorFirstCandidates).Count -eq 0 -and $googleQueries.Count -gt 0) {
-    if ((-not [string]::IsNullOrWhiteSpace($env:GOOGLE_CUSTOM_SEARCH_API_KEY) -or -not [string]::IsNullOrWhiteSpace($env:GOOGLE_CSE_API_KEY)) -and
-        (-not [string]::IsNullOrWhiteSpace($env:GOOGLE_CUSTOM_SEARCH_CX) -or -not [string]::IsNullOrWhiteSpace($env:GOOGLE_CSE_CX))) {
+    if ($googleCustomSearchConfigured) {
         Write-AgentEvent -Type 'Log' -Message "[Google] Custom Search API query: $(Format-AgentLogValue -Value $googleQueries[0] -MaxLength 180)" -Data @{ Query = $googleQueries[0] }
         $googleDiscoveryEvidence = SearchGoogleCustom -query $googleQueries[0]
     } else {
-        Write-AgentEvent -Type 'Log' -Message "[Google] Skipped automatic search because Google Custom Search API is not configured. Browser Google search is reserved for explicit Gemini fallback/diagnostic to avoid reCAPTCHA loops." -Data @{ Query = $googleQueries[0] }
+        Write-AgentEvent -Type 'Log' -Message "[Google] Skipped Custom Search because GOOGLE_CUSTOM_SEARCH_API_KEY/GOOGLE_CUSTOM_SEARCH_CX are not configured. SearchGoogleCustom is hidden from Gemini for this run." -Data @{ Query = $googleQueries[0] }
     }
 } elseif ($googleQueries.Count -gt 0) {
-    Write-AgentEvent -Type 'Log' -Message "[Google] Skipped automatic search because official vendor-first candidates exist. Gemini may call SearchGoogleCustom after official candidates are insufficient." -Data @{ Query = $googleQueries[0]; VendorCandidateCount = @($script:AgentVendorFirstCandidates).Count }
+    Write-AgentEvent -Type 'Log' -Message "[Google] Skipped automatic search because official vendor-first candidates exist. Gemini may call Google discovery tools only if official candidates are insufficient and the tools are available." -Data @{ Query = $googleQueries[0]; VendorCandidateCount = @($script:AgentVendorFirstCandidates).Count }
 }
 $deterministicEvidence = "$deterministicEvidence`n`n$vendorFirstGuidance"
 if (-not [string]::IsNullOrWhiteSpace($googleDiscoveryEvidence)) {
@@ -1025,7 +1103,7 @@ if ($deterministicEvidence -notmatch '^No deterministic vendor adapter matched')
 if ($messages.Count -eq 0) {
     $messages.Add(@{
         role = "user"
-        parts = @( @{ text = "You are an autonomous hardware support assistant. Your only goal is to identify the correct hardware model and the correct driver download link(s). Ignore PDFs, manuals, utilities, unrelated software, and generic explanations unless no driver package exists. Use deterministic evidence and vendor-first candidates before search. If discovery is needed, use one focused SearchGoogleRendered query built from raw local Device Manager-style evidence, then fetch the best official/vendor result with FetchRenderedUrlText. Prefer Greece/Europe regional official pages before US/global pages. If deterministic or Google evidence already contains official driver links, synthesize the final answer instead of searching again. Use Local Device Evidence JSON to identify exact hardware IDs, original INF names, provider, installed version/date, parent/child devices, and model hints. Ensure you specify version/date when available, source quality, and direct download URLs.`n`n$agentGuide`n`n$systemDetails$localEvidenceSection`n`nDeterministic prefetch evidence:`n$deterministicEvidence" } )
+        parts = @( @{ text = "You are an autonomous hardware support assistant. Your only goal is to identify the correct hardware model and the correct driver download link(s). Ignore PDFs, manuals, utilities, unrelated software, and generic explanations unless no driver package exists. Use deterministic evidence and vendor-first candidates before search. If discovery is needed, you MUST call SearchGoogleRendered with the EXACT text from the 'Device Properties Block' below as the 'query' parameter (do NOT shorten, modify, or summarize it). Prefer Greece/Europe regional official pages before US/global pages. If deterministic or Google evidence already contains official driver links, synthesize the final answer instead of searching again. Use Local Device Evidence JSON to identify exact hardware IDs, original INF names, provider, installed version/date, parent/child devices, and model hints. Ensure you specify version/date when available, source quality, and direct download URLs.`n`n$agentGuide`n`nDevice Properties Block (CRITICAL: Pass this EXACT block as the query parameter for SearchGoogleRendered):`n$($script:devicePropertiesBlock)`n`n$systemDetails$localEvidenceSection`n`nDeterministic prefetch evidence:`n$deterministicEvidence" } )
     })
 } else {
     $messages.Add(@{
@@ -1047,7 +1125,6 @@ Save-AgentCheckpoint -State 'Running' -Step 0 -Messages $messages -Memory $memor
         Write-AgentEvent -Type 'Log' -Message "[Gemini] Step ${iterations}: asking model for next action" -Data @{ Step = $iterations }
         
         $toolsList = [System.Collections.Generic.List[object]]::new()
-        $toolsList.Add(@{ google_search = @{} })
         if ($functionDeclarations.Count -gt 0) {
             $toolsList.Add(@{ functionDeclarations = $functionDeclarations })
         }
@@ -1143,12 +1220,17 @@ Save-AgentCheckpoint -State 'Running' -Step 0 -Messages $messages -Memory $memor
             # Execute tool locally
             $toolResult = $null
             switch ($funcName) {
-                "SearchWeb" { $toolResult = SearchWeb -query $args.query }
-                "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query $args.query }
-                "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query $args.query }
-                "FetchUrlText" { $toolResult = FetchUrlText -url $args.url }
-                "FetchRenderedUrlText" { $toolResult = FetchRenderedUrlText -url $args.url -targetText $args.targetText -inputText $args.inputText }
-                "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId $args.hardwareId }
+                "SearchWeb" { $toolResult = SearchWeb -query (Get-NotePropertyValue -Object $args -Name 'query') }
+                "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query (Get-NotePropertyValue -Object $args -Name 'query') }
+                "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query (Get-NotePropertyValue -Object $args -Name 'query') }
+                "FetchUrlText" { $toolResult = FetchUrlText -url (Get-NotePropertyValue -Object $args -Name 'url') }
+                "FetchRenderedUrlText" {
+                    $urlParam = Get-NotePropertyValue -Object $args -Name 'url'
+                    $targetTextParam = Get-NotePropertyValue -Object $args -Name 'targetText'
+                    $inputTextParam = Get-NotePropertyValue -Object $args -Name 'inputText'
+                    $toolResult = FetchRenderedUrlText -url $urlParam -targetText $targetTextParam -inputText $inputTextParam
+                }
+                "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId (Get-NotePropertyValue -Object $args -Name 'hardwareId') }
                 default { $toolResult = "Error: Unknown function '$funcName'" }
             }
             Write-AgentEvent -Type 'Log' -Message "[Tool Result] $funcName -> $(Format-AgentLogValue -Value $toolResult)" -Data @{

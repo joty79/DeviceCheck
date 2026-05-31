@@ -179,13 +179,13 @@ async function main() {
     await send('Runtime.evaluate', {
       expression: `(() => {
         const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
-        const accept = candidates.find(el => /^(accept all|accept)$/i.test((el.innerText || el.textContent || '').trim()));
+        const accept = candidates.find(el => /^(accept all|accept|αποδοχή όλων|συμφωνώ|αποδοχή|agree|consent)$/i.test((el.innerText || el.textContent || '').trim()));
         if (accept) { accept.click(); return true; }
         return false;
       })()`,
       returnByValue: true,
     }).catch(() => {});
-    await sleep(1000);
+    await sleep(1500);
 
     if (targetText) {
       await send('Runtime.evaluate', {
