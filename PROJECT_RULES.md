@@ -174,3 +174,101 @@ Root cause: Root/category detail panels counted cached evidence with `Test-Path`
 Guardrail/rule: Avoid filesystem work inside per-frame render paths. Track device evidence cache presence in memory and update the flag when an evidence scan completes.
 Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation; `git diff --check`; static render-path filesystem check review.
+
+Date: 2026-05-31
+Problem: The TUI froze after ~2 seconds of scanning, and pressing keys threw a strict-mode exception on `$key.Key`.
+Root cause: 1) Models with `State = 'None'` (e.g. missing API keys) stayed `Started = $false`, making `$hasPendingModel` permanently `$true` and spamming runspace triggers in the key loop. 2) The spam caused exceptions that crashed the loop inside `Read-ConsoleKey`, which returned a `$null` or incomplete object that failed under `Set-StrictMode` when evaluating `$key.Key`.
+Guardrail/rule: Exclude models with `State = 'None'` when querying for pending model runs. Ensure `Read-ConsoleKey` always returns a valid custom object structure and never throws exceptions when reading key events.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: User model selections in the `M` menu were lost and reverted to default when restarting the script.
+Root cause: Selected models state was kept only in memory and never persisted.
+Guardrail/rule: Save active model selections to `config.json` inside `$script:DeviceCheckCacheRoot` (`%LOCALAPPDATA%\DeviceCheck`) upon selector exit, and restore them during initialization.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: If EndInvoke returned null or an incomplete collection, reading its Count property in strict mode caused an exception.
+Root cause: Lack of null checks for EndInvoke outputs under Set-StrictMode -Version Latest.
+Guardrail/rule: Always verify that runspace EndInvoke collection outputs are not null before accessing properties like Count or attempting iteration.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: Background rendering or update exceptions inside Read-ConsoleKey were caught and swallowed, leading to a silent infinite loop that eventually crashed the script.
+Root cause: The catch block in Read-ConsoleKey suppressed exceptions, returning an empty key object immediately, causing the main loop to re-call it immediately without delay.
+Guardrail/rule: Rethrow unexpected exceptions inside Read-ConsoleKey to stop execution immediately and reveal the actual failure stack trace.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: Querying for pending model runs returned null when no items matched, causing a strict-mode exception when reading the Count property.
+Root cause: Directly accessing the Count property on a null-valued pipeline result under Set-StrictMode -Version Latest.
+Guardrail/rule: Always wrap pipeline expressions in array subexpressions `@(...)` before accessing the Count property to ensure it safely evaluates to 0 when the result is null.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: Unexpected thread/pipeline termination or key-reading failures could cause Read-ConsoleKey to return null, crashing the main switch statement.
+Root cause: Accessing the Key property on a null $key variable under Set-StrictMode -Version Latest.
+Guardrail/rule: Always verify that the $key variable returned from Read-ConsoleKey is not null and has a valid Key property before invoking switch ($key.Key) in any loop.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation.
+
+Date: 2026-05-31
+Problem: Gemini 3.1 Flash Lite Agent failed with `400 Bad Request` after the first function call.
+Root cause: The Agent saved only the `functionCall` object into the next request history and dropped Gemini's required `thoughtSignature` metadata from the model part. API errors were also emitted as normal `Result` objects, so the TUI showed `(Done)` for failures.
+Guardrail/rule: For Gemini tool/function calling, append the full `candidate.content` returned by the model to conversation history, preserving `thoughtSignature`. API failures must be emitted as `Type = Error` and rendered as failed, not as successful result text.
+Files affected: `Get-DriverUpdateAgent.ps1`, `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Gemini `models.list` availability check; live Agent smoke with `gemini-3.1-flash-lite`; PowerShell parser validation for `Get-DriverUpdateAgent.ps1` and `DeviceCheck.ps1`.
+
+Date: 2026-05-31
+Problem: During `A` agent mode, the right details pane only showed `(Running...)`, making the agent feel like a black box.
+Root cause: The Agent emitted sparse logs, and the details renderer only showed agent logs inside the cached-evidence branch for selected device rows.
+Guardrail/rule: Agent mode should surface observable activity, not hidden model thoughts: Gemini step number, requested tool, sanitized query/url/hardware-id arguments, and short tool-result previews. Render this trace both for the selected device and the selected `[Agent: ...]` result row.
+Files affected: `Get-DriverUpdateAgent.ps1`, `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Live Agent smoke confirming `Log` events; PowerShell parser validation for `Get-DriverUpdateAgent.ps1` and `DeviceCheck.ps1`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Agent activity still did not appear live in the right pane; it stayed on `Waiting for first Gemini/tool event` until the Agent finished.
+Root cause: `PowerShell.BeginInvoke($collection)` treated the supplied collection as input, so output was only available from `EndInvoke`. Also, removing items from a live `PSDataCollection` is a fragile streaming pattern.
+Guardrail/rule: For live runspace output, use an explicit completed input collection plus output collection: `BeginInvoke($inputCollection, $outputCollection)`. Read live `PSDataCollection` output by index with a stored cursor instead of enumerating or `RemoveAt()` while the writer is active.
+Files affected: `DeviceCheck.ps1`, `Get-DriverUpdateAgent.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Isolated runspace streaming smoke; live Agent streaming smoke showing 5 log entries after 2 seconds while still running; PowerShell parser validation; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Gemini correctly saw MSI plain fetch failures/403s but then fell back to Microsoft Update Catalog, missing the newer official OEM Realtek audio driver.
+Root cause: The Agent only had search/plain-fetch/catalog tools. The successful manual path required a real rendered browser session, JavaScript-loaded MSI support content, and clicking the correct driver category (`On-Board Audio Drivers`).
+Guardrail/rule: For OEM pages that block plain HTTP or render driver rows client-side, provide a deterministic browser retrieval tool and instruct Gemini to use it before Catalog fallback. The browser tool should expose observable facts (rendered text, download links, clicked category) and write JSONL traces for audit. Catalog is fallback evidence, not primary OEM truth, when machine/motherboard model is known.
+Files affected: `tools/Fetch-RenderedPage.js`, `Get-DriverUpdateAgent.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Rendered Chrome/CDP MSI support smoke found `Realtek HD Universal Driver` version `6.4.0.2443`, release `2026-05-18`, and `https://download.msi.com/dvr_exe/mb/realtek_audio_USB_R.zip`; live Gemini agent smoke used `FetchRenderedUrlText` twice and returned the official OEM MSI driver; PowerShell parser validation; `git diff --check`.
+
+Date: 2026-05-31
+Problem: AOC monitor Agent runs could spend all 10 steps on DuckDuckGo variations, then show a maximum-iteration error even when Gemini produced a final answer at the last step.
+Root cause: `SearchWeb` returned snippets without reliable URLs and could be blocked by DuckDuckGo anti-bot challenges. The rendered browser helper could click tabs but could not type into OEM search inputs. The max-iteration check did not verify whether the loop had already completed.
+Guardrail/rule: Search/tool traces should distinguish search-engine blockage from no results. For AOC monitor searches, route anti-bot failures toward rendered AOC Drivers & Software search with `inputText=<model>`. Rendered browser tooling must support both clicking and typing. Only emit max-iteration errors if the Agent loop is still active after the loop exits.
+Files affected: `tools/Fetch-RenderedPage.js`, `Get-DriverUpdateAgent.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: AOC rendered search smoke for `27G4HRE` reached `https://aoc.com/us/gaming/drivers-downloads?query=27G4HRE` and returned official “Nothing found”; PowerShell parser validation; `node --check`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Agent final answers and web snippets expanded into many selectable rows in the left device tree, making the tree hard to scan and wasting the right details pane.
+Root cause: `SearchResults` was used as both tree row storage and full result text storage, so multi-line Agent reports became child rows.
+Guardrail/rule: Keep the left tree as navigation only. Agent mode should render one selectable result row and store the full answer, trace path, and download links on the device object for the right details pane.
+Files affected: `DeviceCheck.ps1`, `Get-DriverUpdateAgent.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; `node --check`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Agentic driver lookup can consume many Gemini requests and lose progress if rate limits, request budget, or transient tool failures stop a run.
+Root cause: Agent state lived only in memory inside the current runspace, and tool results were refetched on every retry.
+Guardrail/rule: Agent mode must checkpoint after each Gemini/tool step, pause cleanly on `429`/quota or step-budget exhaustion, and store reusable tool results under the machine cache. Pressing `A` again for the same device should resume only paused checkpoints; completed/error checkpoints are audit history, not automatic truth.
+Files affected: `Get-DriverUpdateAgent.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; fake-key checkpoint smoke; `node --check`; `git diff --check`.
+
+Date: 2026-05-31
+Problem: Generic web search can miss valid regional OEM pages, such as AOC `27G4HRE` existing on the Greece product page but not the US page.
+Root cause: The first rendered AOC workflow tried a US drivers search page and treated its miss as too strong a signal.
+Guardrail/rule: Add deterministic vendor prefetch adapters ahead of Gemini when a safe pattern is known. For AOC monitor models, try regional product pages with rendered extraction and feed the official driver/manual download evidence to Gemini before it spends planning calls.
+Files affected: `Get-DriverUpdateAgent.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: AOC Greece rendered smoke from previous turn; PowerShell parser validation; fake-key checkpoint smoke.

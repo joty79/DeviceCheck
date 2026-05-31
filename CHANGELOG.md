@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-31
+
+### Added
+- Added autonomous Agentic Driver Finder (`Get-DriverUpdateAgent.ps1`) that uses Gemini 3.1 Flash Lite Function Calling (Tool Use) to automatically search for, identify, and locate the latest official drivers for any device.
+- Agent has built-in tools for `SearchWeb` (DuckDuckGo scraper), `FetchUrlText` (plain HTML text/link extractor), `FetchRenderedUrlText` (real Chrome DevTools rendered-page extraction with optional category/tab click), and `SearchUpdateCatalog` (Microsoft Update Catalog search with direct `.cab` download link extraction via POST to DownloadDialog.aspx).
+- Agent runs in a recursive loop: Gemini decides which tool to call, the script executes it locally and feeds the result back, until Gemini produces a final synthesized answer with version, date, and download URLs.
+- Added `tools/Fetch-RenderedPage.js`, a dependency-light Node helper that drives local Chrome through DevTools Protocol for JavaScript-rendered OEM support pages that block plain HTTP fetches.
+- Rendered-page helper can now type into visible search/product inputs, letting the Agent use OEM search pages such as AOC Drivers & Software.
+- Integrated Agent into the DeviceCheck TUI via the `A` hotkey. Selecting a device and pressing `A` launches the Agent in a background runspace.
+- Live Agent activity is displayed in real-time in the right-side Details Panel, including model steps, requested tools, query/url arguments, and short tool-result previews.
+- Agent runs now write JSONL traces under the machine cache so failed or misleading lookup paths can be audited after the TUI run.
+- Agent runs now save resumable checkpoints after every Gemini/tool step, including conversation state, tool results, candidate URLs, confirmed/failing URLs, and current plan.
+- Added a tool-result cache for rendered pages, plain fetches, web searches, and Microsoft Update Catalog lookups so retries do not refetch recent evidence unnecessarily.
+- Added a deterministic prefetch phase before Gemini planning, currently including an AOC regional product-page adapter as the first vendor-specific pattern.
+- Added a 10-step Agent budget guard that pauses with checkpoint state instead of spending unbounded Gemini requests.
+- Fixed Agent activity streaming so logs appear while the background runspace is still running instead of only after completion.
+- Agent result rows now stay as one selectable tree item, while the full driver report, trace path, and clickable terminal download links are displayed in the right-side details pane.
+- Added `A = agent` shortcut to both footer renderers (legacy and dual-pane).
+
+### Fixed
+- Fixed Gemini 3 tool-calling `400 Bad Request` failures by preserving the full model content, including `thoughtSignature`, when sending function-call history back to the API.
+- Fixed Agent API failures being displayed as successful `(Done)` results; they now return `Type = Error` and render as failed in the TUI.
+- Fixed a strict-mode crash when Gemini returns a final text response without a `functionCall` property.
+- Fixed final answers emitted on the last allowed Agent step being overwritten by a false maximum-iteration error.
+- Fixed rate-limit handling so Gemini `429`/quota responses pause as `Paused: Rate limit` with a checkpoint instead of becoming an unrecoverable failed run.
+- Improved DuckDuckGo anti-bot handling so AOC model searches point Gemini toward rendered AOC driver-page search instead of repeated failed web queries.
+- Reduced Agent tree noise by hiding local/web snippet rows during agentic runs; observable tool activity remains available in the details pane and JSONL trace.
+
+## [0.1.9] - 2026-05-31
+
+### Added
+- Added dynamic model configuration by loading free-tier Gemini and Gemma models from `data/google-ai-studio-rate-limits-only free.csv`.
+- Added Gemma 4 models (`gemma-4-26b-a4b-it` and `gemma-4-31b-it`) to the available model list.
+- Added interactive TUI Model Selector (`Invoke-ModelSelector` triggered by pressing `M`/`m`) to select which models are active for lookup.
+- Added parallel background execution for multiple active models concurrently, scaling dynamically to any number of selected models.
+- Added `M = models` footer shortcuts and polling key handlers.
+- Updated tree highlighting and legacy stacked rendering to color OpenRouter models green (`$_C.OK`) and Gemini models blue (`$_C.Info`).
+
+### Fixed
+- Fixed TUI freeze caused by inactive models (State = 'None') keeping the pending model count permanently above zero.
+- Fixed strict mode exception (`The property 'Key' cannot be found on this object`) in `Read-ConsoleKey` by wrapping properties extraction and ensuring a valid object is always returned.
+- Fixed model selection persistence across sessions by automatically saving selections to `config.json` in `LocalApplicationData` and restoring them upon startup.
+- Fixed potential strict-mode exceptions by adding null-checks for runspace EndInvoke outputs.
+- Prevented silent infinite loop hangs by rethrowing unexpected exceptions in Read-ConsoleKey instead of swallowing them.
+- Fixed strict-mode exception on pending models count query by wrapping it in an array subexpression `@(...)` to safely evaluate `.Count`.
+- Added robust null and property existence guards to all loop `switch ($key.Key)` invocations to prevent strict-mode crashes when key objects are null.
+
 ## [0.1.8] - 2026-05-30
 
 ### Added

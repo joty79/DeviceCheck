@@ -56,6 +56,8 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 | `R` | Rescan machine evidence and the full present PnP device tree; shows running/complete counts |
 | `E` | Collect local evidence for the selected device; on a category, scan that group; on the computer root, scan all present devices |
 | `S` | Refresh selected-device evidence, then run web/AI lookup |
+| `A` | Run the agentic driver finder for the selected device; the tree shows one agent row while full answer, trace, and links stay in the details pane |
+| `M` | Select which free-tier AI models are active for lookup |
 | `+` | Expand the selected category; on the computer root, expand every category |
 | `-` | Collapse the selected category; on the computer root, collapse every category |
 | `Q` / `Esc` | Exit |
@@ -80,6 +82,8 @@ cd DeviceCheck
 | **OS** | Windows 10 / 11 |
 | **Runtime** | PowerShell 7 (PS7) |
 | **Terminal** | Windows Terminal (recommended for synchronized rendering) |
+| **Agent browser retrieval** | Node.js and local Chrome are used by the agent when JavaScript-rendered OEM support pages block plain HTTP fetches |
+| **Agent state** | Agent checkpoints, traces, and tool-result cache are stored under `%LOCALAPPDATA%\DeviceCheck\machines\<machineId>\` |
 
 ---
 
@@ -91,8 +95,11 @@ DeviceCheck/
 │   └── google-ai-studio-rate-limits-only free.csv  # Local model quota reference
 ├── docs/
 │   └── google-ai-studio-rate-limits-only-free.md   # Human-readable quota table
+├── tools/
+│   └── Fetch-RenderedPage.js                       # Chrome DevTools rendered-page fetch helper
 ├── .gitattributes        # Repository line-ending policy
 ├── DeviceCheck.ps1         # Main interactive TUI script
+├── Get-DriverUpdateAgent.ps1 # Gemini tool-calling driver finder
 ├── PROJECT_RULES.md        # Project-specific implementation memory
 ├── PS_UI_Blueprint.psm1    # TUI synchronized rendering engine
 ├── README.md               # You are here
@@ -128,6 +135,13 @@ It uses **Windows Terminal Synchronized Output (ANSI ESC `[?2026h` / `[?2026l`)*
 <summary><b>How does the dual-pane layout work?</b></summary>
 
 DeviceCheck renders both panes inside one terminal window rather than requiring a Windows Terminal split. Wide terminals show the device tree on the left and selected details on the right; narrow terminals fall back to the stacked layout.
+
+</details>
+
+<details>
+<summary><b>How does the agent handle rate limits and retries?</b></summary>
+
+The agent saves a checkpoint after each Gemini/tool step, including conversation state, tool results, candidate URLs, confirmed/failing URLs, and the current plan. If Gemini returns a rate-limit response or the 10-step budget guard is reached, the run pauses with a visible state; running the agent again for the same device resumes from the checkpoint and reuses cached rendered pages/tool results where possible.
 
 </details>
 
