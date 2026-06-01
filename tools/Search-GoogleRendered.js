@@ -229,7 +229,7 @@ async function main() {
       await sleep(300);
       
       input.value = '';
-      const queryText = ${JSON.stringify(query)}.replace(/\r?\n/g, ' ');
+      const queryText = ${JSON.stringify(query)}.replace(/\\r?\\n/g, ' ');
       
       if (queryText.length <= 15) {
         for (let i = 0; i < queryText.length; i++) {
@@ -286,11 +286,16 @@ async function main() {
       return false;
      })()`;
 
-    await send('Runtime.evaluate', {
+    const typeResult = await send('Runtime.evaluate', {
       expression: typeAndSearchExpression,
       returnByValue: true,
       awaitPromise: true
-    }).catch(() => {});
+    }).catch(err => {
+      console.error("CDP Evaluation error: " + err.message);
+    });
+    if (typeResult && typeResult.exceptionDetails) {
+      console.error("Browser JS Exception: " + JSON.stringify(typeResult.exceptionDetails));
+    }
     
     // Wait for search results page to load
     await sleep(3500);

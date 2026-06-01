@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated TUI status display to render the active Agent model name dynamically (e.g., `[Agent: gemini-2.5-flash]`).
 - Implemented **Stealth Browser Automation & Persistent Profile** support in `tools/Search-GoogleRendered.js`, using a stable Chrome profile directory (`browser-profile`) and simulating human-like key typing (typed-search emulation) instead of direct URL queries to prevent reCAPTCHA blocks.
 - Completed and documented the Gemini response for Google Search / AI Overview retrieval strategies (`docs/gemini-google-search-investigation-response.md`), outlining recommended workflows, tool/prompt changes, and human-in-the-loop fallback strategies.
+- Added documentation analyzing Google Search AI Overview behavior in profiled vs non-profiled sessions, including test evidence logs (`docs/google-search-profile-analysis.md`).
+- Added system design and research documentation for local/online Device ID databases (PCI, USB, EDID/PNP) to achieve offline deterministic device resolution (`docs/device-id-database-research.md`).
 - Added autonomous Agentic Driver Finder (`Get-DriverUpdateAgent.ps1`) that uses Gemini 3.1 Flash Lite Function Calling (Tool Use) to automatically search for, identify, and locate the latest official drivers for any device.
 - Agent has built-in tools for `SearchGoogleCustom` (official Google Custom Search JSON API when configured), `SearchWeb` (guarded DuckDuckGo fallback), `FetchUrlText` (plain HTML text/link extractor), `FetchRenderedUrlText` (real Chrome DevTools rendered-page extraction with optional category/tab click), and `SearchUpdateCatalog` (Microsoft Update Catalog search with direct `.cab` download link extraction via POST to DownloadDialog.aspx).
 - Agent runs in a recursive loop: Gemini decides which tool to call, the script executes it locally and feeds the result back, until Gemini produces a final synthesized answer with version, date, and download URLs.
@@ -41,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `A = agent` shortcut to both footer renderers (legacy and dual-pane).
 
 ### Fixed
+- Fixed SyntaxError in the browser JS code of `tools/Search-GoogleRendered.js` caused by unescaped newlines inside the RegExp literal (`/\r?\n/g`) in Node's template string.
+- Increased CDP command timeout in `tools/Search-GoogleRendered.js` to 45 seconds and optimized query input to simulate human paste (`document.execCommand('insertText')`) for long queries, preventing command timeouts on multiline property blocks.
 - Hid `SearchGoogleCustom` from Gemini tool declarations unless `GOOGLE_CUSTOM_SEARCH_API_KEY`/`GOOGLE_CUSTOM_SEARCH_CX` (or the `GOOGLE_CSE_*` aliases) are configured, preventing a wasted agent step on the "Custom Search API is not configured" result.
 - Fixed `SearchGoogleRendered` cache handling so empty Google-home results are ignored/deleted and cached results do not consume the per-run rendered Google budget before a real browser attempt.
 - Improved Google Search form submission in `tools/Search-GoogleRendered.js` by emulating keyboard `Enter` events and clicking the Google Search button as fallbacks to raw `form.submit()`, ensuring typed queries submit correctly on dynamic search variants.
