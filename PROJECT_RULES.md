@@ -57,6 +57,20 @@ Quick lookup:
 ### Decision Log
 
 Date: 2026-06-03
+Problem: The desktop repo depended on `source\hwdata` to rebuild `data\hwdb`, but `.gitignore` ignored all of `source`, so clones/branch moves could miss the runtime-critical ID files even though generated cache folders are intentionally ignored.
+Root cause: The ignore rule treated cloned study sources and adopted runtime source data the same way.
+Guardrail/rule: Track only the runtime-critical adopted `source\hwdata` files (`pci.ids`, `usb.ids`, `pnp.ids`, plus license/readme files) while keeping cloned study repos and generated caches ignored. Do not broaden this to whole upstream repos without an explicit packaging/license decision.
+Files affected: `.gitignore`, `.gitattributes`, `source\hwdata\pci.ids`, `source\hwdata\usb.ids`, `source\hwdata\pnp.ids`, `source\hwdata\README`, `source\hwdata\LICENSE`, `source\hwdata\COPYING`, `README.md`, `CHANGELOG.md`, `docs\HARDWARE_SOURCE_INTAKE.md`, `PROJECT_RULES.md`.
+Validation/tests run: `git check-ignore -v` confirmed only the adopted `source\hwdata` ID/license/readme files are unignored while study repos and non-adopted upstream files remain ignored; parent repo untracked-file check now shows the six adopted files after removing nested `source\hwdata\.git`; `git diff --check`; `git ls-files --eol` for tracked text policy.
+
+Date: 2026-06-03
+Problem: The user's desktop GPU exact marketing model is known, but local `pci.ids` only resolves chip and MSI board vendor/subdevice, not `MSI RTX 4060 Ti Ventus 2X Black OC 16 GB`.
+Root cause: Public `pci.ids` subsystem coverage is incomplete for exact board marketing names, and search hints are not strong enough to present as exact identity.
+Guardrail/rule: Store exact board/marketing names in a separate read-only board-model evidence layer with explicit source/confidence, and only display them when the PCI tuple matches. Do not convert search hints into exact model claims, and do not scrape/licensed GPU databases without a separate adapter/licensing decision.
+Files affected: `DeviceCheck.ps1`, `config\board-model-evidence.json`, `docs\GEMINI_NEXT_STEP_GPU_BOARD_MODEL_EVIDENCE.md`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and `internal\HardwareIdResolver.psm1`; JSON parse for `config\board-model-evidence.json`; resolver smoke for `PCI\VEN_10DE&DEV_2803&SUBSYS_51741462&REV_A1`; extracted detail-row smoke confirmed `Exact Model` remains local-missing while `Board Model`, `Board Evidence`, and `Evidence URL` render from local evidence; `git diff --check`.
+
+Date: 2026-06-03
 Problem: The desktop TUI showed `Local ID: Unavailable; run internal\Update-HardwareIdDatabases.ps1` even after the resolver UI work, so the user saw no GPU identity improvement.
 Root cause: `data\hwdb` is a generated/ignored cache and may not exist on another machine even when `source\hwdata` is present. Startup only tried to load the generated cache and did not bootstrap it.
 Guardrail/rule: Generated local database caches must be self-healing when their source folder exists. At startup, DeviceCheck may build `data\hwdb` from `source\hwdata` before entering the TUI; only show an unavailable local-ID message when both generated cache loading and source-based rebuild fail.

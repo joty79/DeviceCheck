@@ -356,6 +356,9 @@ $script:HardwareIdResolverError = ''
 $script:HardwareIdDatabaseCache = $null
 $script:HardwareIdResolutionDisplayCache = @{}
 $script:HardwareIdResolutionDetailCache = @{}
+$script:BoardModelEvidenceState = 'NotLoaded'
+$script:BoardModelEvidenceError = ''
+$script:BoardModelEvidenceIndex = @{}
 
 function Test-HardwareIdCacheReady {
     param(
@@ -512,6 +515,162 @@ function New-HardwareIdentityRow {
     }
 }
 
+function Normalize-HardwareEvidenceId {
+    param(
+        [AllowEmptyString()][string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    return (($Value -replace '^(?i:0x)', '').Trim()).ToUpperInvariant()
+}
+
+function Get-BoardModelEvidenceKey {
+    param(
+        [AllowEmptyString()][string]$Bus,
+        [AllowEmptyString()][string]$VendorId,
+        [AllowEmptyString()][string]$DeviceId,
+        [AllowEmptyString()][string]$SubvendorId,
+        [AllowEmptyString()][string]$SubdeviceId,
+        [AllowEmptyString()][string]$Revision
+    )
+
+    $keyParts = @(
+        (Normalize-HardwareEvidenceId -Value $Bus),
+        (Normalize-HardwareEvidenceId -Value $VendorId),
+        (Normalize-HardwareEvidenceId -Value $DeviceId),
+        (Normalize-HardwareEvidenceId -Value $SubvendorId),
+        (Normalize-HardwareEvidenceId -Value $SubdeviceId),
+        (Normalize-HardwareEvidenceId -Value $Revision)
+    )
+
+    return ($keyParts -join '|')
+}
+
+function Add-BoardModelEvidenceIndexEntry {
+    param(
+        [object]$Entry
+    )
+
+    $bus = [string](Get-NotePropertyValue -Object $Entry -Name 'Bus')
+    $vendorId = [string](Get-NotePropertyValue -Object $Entry -Name 'VendorId')
+    $deviceId = [string](Get-NotePropertyValue -Object $Entry -Name 'DeviceId')
+    $subvendorId = [string](Get-NotePropertyValue -Object $Entry -Name 'SubvendorId')
+    $subdeviceId = [string](Get-NotePropertyValue -Object $Entry -Name 'SubdeviceId')
+    $revision = [string](Get-NotePropertyValue -Object $Entry -Name 'Revision')
+
+    if ([string]::IsNullOrWhiteSpace($bus) -or
+        [string]::IsNullOrWhiteSpace($vendorId) -or
+        [string]::IsNullOrWhiteSpace($deviceId) -or
+        [string]::IsNullOrWhiteSpace($subvendorId) -or
+        [string]::IsNullOrWhiteSpace($subdeviceId)) {
+        return
+    }
+
+    foreach ($entryRevision in @($revision, '')) {
+        $key = Get-BoardModelEvidenceKey -Bus $bus -VendorId $vendorId -DeviceId $deviceId -SubvendorId $subvendorId -SubdeviceId $subdeviceId -Revision $entryRevision
+        if (-not [string]::IsNullOrWhiteSpace($key)) {
+            $script:BoardModelEvidenceIndex[$key] = $Entry
+        }
+    }
+}
+
+function Initialize-BoardModelEvidenceStore {
+    if ($script:BoardModelEvidenceState -ne 'NotLoaded') {
+        return
+    }
+
+    $script:BoardModelEvidenceState = 'Unavailable'
+    $script:BoardModelEvidenceError = ''
+    $script:BoardModelEvidenceIndex = @{}
+
+    $evidencePath = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'config\board-model-evidence.json'
+    if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+        $script:BoardModelEvidenceState = 'Ready'
+        return
+    }
+
+    try {
+        $payload = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($entry in @($payload.Evidence)) {
+            Add-BoardModelEvidenceIndexEntry -Entry $entry
+        }
+        $script:BoardModelEvidenceState = 'Ready'
+    }
+    catch {
+        $script:BoardModelEvidenceError = $_.Exception.Message
+        $script:BoardModelEvidenceState = 'Unavailable'
+    }
+}
+
+function Get-BoardModelEvidenceForResolution {
+    param(
+        [object]$Resolution
+    )
+
+    if ($script:BoardModelEvidenceState -ne 'Ready') {
+        return $null
+    }
+
+    $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
+    $bus = [string](Get-NotePropertyValue -Object $Resolution -Name 'Bus')
+    $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+    $deviceId = [string](Get-NotePropertyValue -Object $fields -Name 'DeviceId')
+    $subvendorId = [string](Get-NotePropertyValue -Object $fields -Name 'SubvendorId')
+    $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
+    $revision = [string](Get-NotePropertyValue -Object $fields -Name 'Revision')
+
+    foreach ($candidateRevision in @($revision, '')) {
+        $key = Get-BoardModelEvidenceKey -Bus $bus -VendorId $vendorId -DeviceId $deviceId -SubvendorId $subvendorId -SubdeviceId $subdeviceId -Revision $candidateRevision
+        if ($script:BoardModelEvidenceIndex.ContainsKey($key)) {
+            return $script:BoardModelEvidenceIndex[$key]
+        }
+    }
+
+    return $null
+}
+
+function Add-BoardModelEvidenceRows {
+    param(
+        [System.Collections.Generic.List[object]]$Rows,
+        [object]$Resolution
+    )
+
+    $evidence = Get-BoardModelEvidenceForResolution -Resolution $Resolution
+    if ($null -eq $evidence) {
+        return
+    }
+
+    $modelName = [string](Get-NotePropertyValue -Object $evidence -Name 'ModelName')
+    $source = Get-NotePropertyValue -Object $evidence -Name 'Source'
+    $sourceName = [string](Get-NotePropertyValue -Object $source -Name 'Name')
+    $sourceUrl = [string](Get-NotePropertyValue -Object $source -Name 'Url')
+    $confidence = [string](Get-NotePropertyValue -Object $evidence -Name 'Confidence')
+    $confidenceScore = [string](Get-NotePropertyValue -Object $evidence -Name 'ConfidenceScore')
+
+    if (-not [string]::IsNullOrWhiteSpace($modelName)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Board Model' -Value $modelName -Color 'OK'))
+    }
+
+    $confidenceText = @(
+        $confidence
+        $(if (-not [string]::IsNullOrWhiteSpace($confidenceScore)) { "$confidenceScore/100" })
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($confidenceText).Count -gt 0) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Board Evidence' -Value ($confidenceText -join ' / ') -Color 'OK'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($sourceName)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Evidence Source' -Value $sourceName -Color 'White'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($sourceUrl)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Evidence URL' -Value $sourceUrl -Color 'Info'))
+    }
+}
+
 function Get-HardwareResolutionDetailRows {
     param(
         [object]$Resolution
@@ -565,6 +724,8 @@ function Get-HardwareResolutionDetailRows {
     elseif (-not [string]::IsNullOrWhiteSpace($subvendorName) -or -not [string]::IsNullOrWhiteSpace($subdeviceId)) {
         $rows.Add((New-HardwareIdentityRow -Key 'Exact Model' -Value 'Not in local pci.ids subsystem table' -Color 'Dim'))
     }
+
+    Add-BoardModelEvidenceRows -Rows $rows -Resolution $Resolution
 
     $searchParts = @(
         (Get-ShortHardwareVendorName -Name $subvendorName)
@@ -3497,12 +3658,16 @@ function Read-ConsoleKey {
 # Initial categories detection
 Write-Host 'Loading local hardware ID cache...' -ForegroundColor DarkCyan
 Initialize-HardwareIdResolver
+Initialize-BoardModelEvidenceStore
 if ($script:HardwareIdResolverState -eq 'Ready') {
     Write-Host 'Local hardware ID cache ready.' -ForegroundColor DarkCyan
 } elseif (-not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
     Write-Host "Local hardware ID cache unavailable: $($script:HardwareIdResolverError)" -ForegroundColor Yellow
 } else {
     Write-Host 'Local hardware ID cache unavailable.' -ForegroundColor Yellow
+}
+if ($script:BoardModelEvidenceState -eq 'Unavailable' -and -not [string]::IsNullOrWhiteSpace($script:BoardModelEvidenceError)) {
+    Write-Host "Board model evidence unavailable: $($script:BoardModelEvidenceError)" -ForegroundColor Yellow
 }
 Invoke-SystemScan
 $selectedIndex = 0

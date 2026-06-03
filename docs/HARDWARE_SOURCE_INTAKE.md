@@ -25,6 +25,8 @@ Driver install/update automation is intentionally out of scope for this phase.
 
 The runtime code must consume the generated normalized cache under `data\hwdb\`, not the upstream repo directly.
 
+The repo tracks only the runtime-critical `source\hwdata\pci.ids`, `usb.ids`, `pnp.ids`, and license/readme files. The full cloned `hwdata` repo, plus study repos under `source\`, remain local inputs and are not broadly vendored.
+
 ## Intake Tiers
 
 | Tier | Sources | Decision |
@@ -101,6 +103,7 @@ Ask the user for SDIO / Snappy Driver Installer Origin only when offline driverp
 
 - Do not scrape web pages during normal inventory or candidate-report runs.
 - Do not vendor upstream database files into Git unless there is an explicit packaging/license decision.
+- `source\hwdata` is the explicit packaging exception for the current runtime-critical ID files only; do not expand it to whole cloned source repos without another decision.
 - Do not treat vendor/device lookup as driver correctness.
 - Prefer `SUBSYS` / OEM specificity when moving into real driver matching.
 - Keep Microsoft Catalog and web results as links until package authenticity, OS targeting, signature verification, and rollback strategy are implemented.
