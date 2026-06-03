@@ -1,0 +1,134 @@
+{
+  "SchemaVersion": 1,
+  "Safety": {
+    "Mode": "MetadataAdapterSkeletonsOnly",
+    "AllowsNetwork": false,
+    "AllowsDownload": false,
+    "AllowsAutomaticInstall": false,
+    "AllowsDriverRemoval": false
+  },
+  "Adapters": [
+    {
+      "Id": "MicrosoftCatalog",
+      "SourceType": "MicrosoftUpdateCatalog",
+      "DisplayName": "Microsoft Update Catalog",
+      "Status": "SkeletonOnly",
+      "Priority": 10,
+      "Description": "Future adapter for Microsoft Update Catalog package metadata. Current implementation must stay link/manual metadata only.",
+      "QueryInputFields": [
+        "BestSearchId",
+        "FriendlyName",
+        "Class"
+      ],
+      "RequiredMetadataFields": [
+        "Source.Name",
+        "Source.Url",
+        "Source.ResultId",
+        "Package.Provider",
+        "Package.Version",
+        "Package.ReleaseDate",
+        "Package.Architecture",
+        "Package.OsTargets",
+        "Package.Sha256",
+        "Package.CatalogFile",
+        "Package.InfFiles",
+        "Identity.MatchedHardwareId",
+        "Identity.MatchType",
+        "Verification.HashVerified",
+        "Verification.SignatureVerified",
+        "Verification.CatalogVerified",
+        "Verification.OsTargetVerified",
+        "Verification.VersionCompared",
+        "Verification.SourceTrustVerified",
+        "Verification.RollbackPlanVerified"
+      ],
+      "ManualCollectionSteps": [
+        "Open the existing Microsoft Update Catalog search link from the evidence bundle.",
+        "Record the exact result title, support URL/result ID, version, release date, architecture, and supported OS list.",
+        "Do not download through DeviceCheck yet; package download and signature verification need a separate workflow."
+      ],
+      "NextImplementationGate": "Design a read-only catalog parser that extracts metadata without downloading packages."
+    },
+    {
+      "Id": "OEM",
+      "SourceType": "OEM",
+      "DisplayName": "OEM or vendor support page",
+      "Status": "SkeletonOnly",
+      "Priority": 20,
+      "Description": "Future adapter for OEM/vendor support metadata. Current implementation must stay manual metadata only.",
+      "QueryInputFields": [
+        "BestSearchId",
+        "FriendlyName",
+        "DeviceContext.CurrentDriver.Provider"
+      ],
+      "RequiredMetadataFields": [
+        "Source.Name",
+        "Source.Url",
+        "Package.Provider",
+        "Package.Manufacturer",
+        "Package.Version",
+        "Package.ReleaseDate",
+        "Package.Architecture",
+        "Package.OsTargets",
+        "Package.Sha256",
+        "Package.CatalogFile",
+        "Package.InfFiles",
+        "Identity.MatchedHardwareId",
+        "Identity.MatchType",
+        "Verification.HashVerified",
+        "Verification.SignatureVerified",
+        "Verification.CatalogVerified",
+        "Verification.OsTargetVerified",
+        "Verification.SourceTrustVerified",
+        "Verification.RollbackPlanVerified"
+      ],
+      "ManualCollectionSteps": [
+        "Use the evidence bundle hardware ID and current provider/device name to find the official OEM support page.",
+        "Record only metadata from the official OEM/vendor domain.",
+        "Do not run OEM installers from this layer; installer behavior needs snapshot/rollback planning first."
+      ],
+      "NextImplementationGate": "Design domain allow-listing and vendor page metadata extraction before any download support."
+    },
+    {
+      "Id": "DriverPack",
+      "SourceType": "DriverPack",
+      "DisplayName": "Offline driverpack index",
+      "Status": "SkeletonOnly",
+      "Priority": 30,
+      "Description": "Future adapter for offline SDIO-style driverpack indexes. Current implementation has no driverpack parser.",
+      "QueryInputFields": [
+        "BestSearchId",
+        "Class",
+        "Architecture"
+      ],
+      "RequiredMetadataFields": [
+        "Source.Name",
+        "Source.Url",
+        "Package.Provider",
+        "Package.Version",
+        "Package.ReleaseDate",
+        "Package.Architecture",
+        "Package.OsTargets",
+        "Package.Sha256",
+        "Package.CatalogFile",
+        "Package.InfFiles",
+        "Identity.MatchedHardwareId",
+        "Identity.MatchType",
+        "Verification.HashVerified",
+        "Verification.SignatureVerified",
+        "Verification.CatalogVerified",
+        "Verification.InfParsed",
+        "Verification.OsTargetVerified",
+        "Verification.VersionCompared",
+        "Verification.SourceTrustVerified",
+        "Verification.RollbackPlanVerified"
+      ],
+      "ManualCollectionSteps": [
+        "Do not use this adapter until a local driverpack/index source is intentionally cloned and studied.",
+        "When available, parse only local index metadata first; do not extract or install packages.",
+        "Compare INF Hardware IDs against the evidence bundle before considering package metadata review."
+      ],
+      "NextImplementationGate": "Study SDIO/offline driverpack index format locally and build a read-only parser."
+    }
+  ]
+}

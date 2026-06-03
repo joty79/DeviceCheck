@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Migrated the audit-only hardware ID and driver-research engine prototype into `DeviceCheck\internal` from the accidental sibling `drivercheck` work.
+- Added offline hardware ID cache tooling: `internal\Update-HardwareIdDatabases.ps1`, `internal\HardwareIdResolver.psm1`, and `internal\Resolve-HardwareIds.ps1`.
+- Added local audit-only driver research tooling: device inventory report, candidate search-link report, installed INF matching, evidence bundle, readable evidence view, package metadata gate, and adapter collection plan.
+- Added source/metadata manifests under `config\`, including `hardware-sources.json`, `driver-candidate-package.schema.json`, and `driver-package-source-adapters.json`.
+- Added generated artifact ignores for `data\hwdb`, `devices`, `driver-candidates`, `inf-matches`, `driver-evidence`, and `driver-package-metadata`.
+- Integrated the migrated `HardwareIdResolver` into the `DeviceCheck.ps1` selected-device details pane, showing read-only local Hardware ID identity summaries from the offline `hwdata` cache when cached device evidence exists.
+- Added optional candidate `Recommendation` metadata fields for version comparison, trust level/score/factors, and candidate flags inspired by the local OpenDriverUpdater source audit.
+
+### Changed
+- Expanded selected-device cached evidence in the TUI with a readable `Installed Driver` section for provider, version, date, INF, INF section, service, driver key, driver name, and manufacturer when those fields are available.
+- Updated the local evidence pipeline so pressing `E` marks selected-device evidence as cached as soon as the evidence output arrives, allowing the details pane to refresh immediately without moving the selection.
+- Improved PCI Hardware ID resolution when exact `SUBSYS` model data is missing: DeviceCheck now resolves the subsystem vendor from the PCI vendor table and shows chip, board vendor, board IDs, exact-model availability, and a search hint in local identity summaries.
+
+### Fixed
+- Prevented first-selection TUI lag/black frames by preloading the local Hardware ID resolver/cache at startup and keeping cache/database load work out of the selected-device details render path.
+
+### Documented
+- Documented the migrated Hardware ID Foundation in `README.md`.
+- Documented the first read-only TUI integration for local Hardware ID resolution.
+- Added `docs\HARDWARE_SOURCE_INTAKE.md` and `docs\GEMINI_NEXT_STEP_DRIVER_PACKAGE_ADAPTERS.md` for source strategy and continuation handoff.
+- Added `docs\LOCAL_SOURCE_PROJECT_AUDIT.md` to record what should and should not transfer from local OpenDriverUpdater and wininfparser sources.
+
 ## [0.2.0] - 2026-05-31
 
 ### Added

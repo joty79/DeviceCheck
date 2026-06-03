@@ -350,6 +350,472 @@ $script:MachineEvidence = Get-MachineEvidence
 $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
 try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
 $script:SystemScanMessage = "System: $(Get-MachineSummary -MachineEvidence $script:MachineEvidence)"
+$script:HardwareIdResolverState = 'NotLoaded'
+$script:HardwareIdResolverError = ''
+$script:HardwareIdDatabaseCache = $null
+$script:HardwareIdResolutionDisplayCache = @{}
+$script:HardwareIdResolutionDetailCache = @{}
+
+function Initialize-HardwareIdResolver {
+    if ($script:HardwareIdResolverState -ne 'NotLoaded') {
+        return
+    }
+
+    $script:HardwareIdResolverState = 'Unavailable'
+    $script:HardwareIdResolverError = ''
+
+    try {
+        $modulePath = Join-Path -Path $PSScriptRoot -ChildPath 'internal\HardwareIdResolver.psm1'
+        if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+            $script:HardwareIdResolverError = "Resolver module not found: $modulePath"
+            return
+        }
+
+        Import-Module -Name $modulePath -Force -ErrorAction Stop
+        $cacheRoot = Join-Path -Path $PSScriptRoot -ChildPath 'data\hwdb'
+        $script:HardwareIdDatabaseCache = Import-HardwareIdDatabaseCache -CacheRoot $cacheRoot
+        $script:HardwareIdResolverState = 'Ready'
+    }
+    catch {
+        $script:HardwareIdResolverError = $_.Exception.Message
+        $script:HardwareIdResolverState = 'Unavailable'
+    }
+}
+
+function Get-HardwareResolutionDisplayName {
+    param(
+        [object]$Resolution
+    )
+
+    $lookup = Get-NotePropertyValue -Object $Resolution -Name 'Lookup'
+    foreach ($name in @('SubsystemName', 'DeviceName', 'ProductName', 'InterfaceName', 'VendorName')) {
+        $value = [string](Get-NotePropertyValue -Object $lookup -Name $name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return ''
+}
+
+function Get-HardwareResolutionDisplayText {
+    param(
+        [object]$Resolution
+    )
+
+    $bus = [string](Get-NotePropertyValue -Object $Resolution -Name 'Bus')
+    $confidence = [string](Get-NotePropertyValue -Object $Resolution -Name 'Confidence')
+    $displayName = Get-HardwareResolutionDisplayName -Resolution $Resolution
+    $lookup = Get-NotePropertyValue -Object $Resolution -Name 'Lookup'
+    $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
+    $subvendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubvendorName')
+    $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
+    $textParts = [System.Collections.Generic.List[string]]::new()
+
+    if (-not [string]::IsNullOrWhiteSpace($bus)) {
+        $textParts.Add($bus)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($confidence)) {
+        $textParts.Add($confidence)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($displayName)) {
+        $textParts.Add($displayName)
+    }
+    if ([string]::IsNullOrWhiteSpace([string](Get-NotePropertyValue -Object $lookup -Name 'SubsystemName')) -and
+        -not [string]::IsNullOrWhiteSpace($subvendorName)) {
+        $boardText = "board $subvendorName"
+        if (-not [string]::IsNullOrWhiteSpace($subdeviceId)) {
+            $boardText = "$boardText $subdeviceId"
+        }
+        $textParts.Add($boardText)
+    }
+
+    if ($textParts.Count -eq 0) {
+        return ''
+    }
+
+    return ($textParts -join ' / ')
+}
+
+function Get-ShortHardwareVendorName {
+    param(
+        [AllowEmptyString()][string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return ''
+    }
+    if ($Name -match '\[([^\]]+)\]\s*$') {
+        return $Matches[1]
+    }
+
+    $shortName = $Name -replace '\s+Corporation$', ''
+    $shortName = $shortName -replace '\s+Co\.,?\s+Ltd\.?$', ''
+    $shortName = $shortName -replace ',.*$', ''
+    return $shortName.Trim()
+}
+
+function New-HardwareIdentityRow {
+    param(
+        [string]$Key,
+        [AllowEmptyString()][string]$Value,
+        [string]$Color = 'White'
+    )
+
+    return [PSCustomObject]@{
+        Key   = $Key
+        Value = $Value
+        Color = $Color
+    }
+}
+
+function Get-HardwareResolutionDetailRows {
+    param(
+        [object]$Resolution
+    )
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $lookup = Get-NotePropertyValue -Object $Resolution -Name 'Lookup'
+    $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
+    $bus = [string](Get-NotePropertyValue -Object $Resolution -Name 'Bus')
+    $localId = Get-HardwareResolutionDisplayText -Resolution $Resolution
+    if (-not [string]::IsNullOrWhiteSpace($localId)) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Local ID' -Value $localId -Color 'Info'))
+    }
+
+    if ($bus -ne 'PCI') {
+        return @($rows)
+    }
+
+    $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+    $deviceName = [string](Get-NotePropertyValue -Object $lookup -Name 'DeviceName')
+    $subsystemName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubsystemName')
+    $subvendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubvendorName')
+    $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+    $deviceId = [string](Get-NotePropertyValue -Object $fields -Name 'DeviceId')
+    $subvendorId = [string](Get-NotePropertyValue -Object $fields -Name 'SubvendorId')
+    $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
+
+    if (-not [string]::IsNullOrWhiteSpace($vendorName) -or -not [string]::IsNullOrWhiteSpace($deviceName)) {
+        $chipParts = @($vendorName, $deviceName) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $rows.Add((New-HardwareIdentityRow -Key 'Chip' -Value ($chipParts -join ' / ') -Color 'White'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Board Vendor' -Value $subvendorName -Color 'White'))
+    }
+
+    $boardIdParts = @()
+    if (-not [string]::IsNullOrWhiteSpace($subdeviceId)) {
+        $boardIdParts += "subdevice $subdeviceId"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($subvendorId)) {
+        $boardIdParts += "subvendor $subvendorId"
+    }
+    if ($boardIdParts.Count -gt 0) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Board IDs' -Value ($boardIdParts -join ' / ') -Color 'Info'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($subsystemName)) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Exact Model' -Value $subsystemName -Color 'OK'))
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($subvendorName) -or -not [string]::IsNullOrWhiteSpace($subdeviceId)) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Exact Model' -Value 'Not in local pci.ids subsystem table' -Color 'Dim'))
+    }
+
+    $searchParts = @(
+        (Get-ShortHardwareVendorName -Name $subvendorName)
+        (Get-ShortHardwareVendorName -Name $vendorName)
+        $deviceName
+        $subdeviceId
+        $subvendorId
+        $deviceId
+        $vendorId
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($searchParts).Count -gt 0) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
+    }
+
+    return @($rows)
+}
+
+function Get-CandidateEvidenceHardwareIds {
+    param(
+        [object]$Evidence,
+        [string]$InstanceId
+    )
+
+    $idSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $ids = [System.Collections.Generic.List[string]]::new()
+
+    function Add-DeviceCheckHardwareId {
+        param([AllowEmptyString()][string]$Value)
+        if (-not [string]::IsNullOrWhiteSpace($Value) -and $idSet.Add($Value)) {
+            $ids.Add($Value)
+        }
+    }
+
+    $importantProperties = Get-NotePropertyValue -Object $Evidence -Name 'ImportantProperties'
+    foreach ($propertyName in @('DEVPKEY_Device_HardwareIds', 'DEVPKEY_Device_CompatibleIds', 'DEVPKEY_Device_MatchingDeviceId')) {
+        $propertyValue = Get-NotePropertyValue -Object $importantProperties -Name $propertyName
+        foreach ($item in @($propertyValue)) {
+            Add-DeviceCheckHardwareId -Value ([string]$item)
+        }
+    }
+
+    $signedDriver = Get-NotePropertyValue -Object $Evidence -Name 'SignedDriver'
+    foreach ($propertyName in @('HardwareID', 'CompatID')) {
+        $propertyValue = Get-NotePropertyValue -Object $signedDriver -Name $propertyName
+        foreach ($item in @($propertyValue)) {
+            Add-DeviceCheckHardwareId -Value ([string]$item)
+        }
+    }
+
+    Add-DeviceCheckHardwareId -Value $InstanceId
+    return @($ids)
+}
+
+function Get-LocalHardwareIdentitySummaries {
+    param(
+        [object]$Evidence,
+        [string]$InstanceId,
+        [int]$MaxCount = 3
+    )
+
+    if ($script:HardwareIdResolverState -ne 'Ready') {
+        return @()
+    }
+
+    $ids = @(Get-CandidateEvidenceHardwareIds -Evidence $Evidence -InstanceId $InstanceId | Select-Object -First 12)
+    if ($ids.Count -eq 0) {
+        return @()
+    }
+
+    $cacheKey = ($ids | ForEach-Object { [string]$_ }) -join "`n"
+    if ($script:HardwareIdResolutionDisplayCache.ContainsKey($cacheKey)) {
+        return @($script:HardwareIdResolutionDisplayCache[$cacheKey])
+    }
+
+    $summaries = [System.Collections.Generic.List[string]]::new()
+    try {
+        $resolutions = @(Resolve-HardwareId -HardwareId $ids -Cache $script:HardwareIdDatabaseCache)
+        foreach ($resolution in @($resolutions)) {
+            $confidence = [string](Get-NotePropertyValue -Object $resolution -Name 'Confidence')
+            if ($confidence -in @('UNSUPPORTED', 'NO-ID')) {
+                continue
+            }
+
+            $displayText = Get-HardwareResolutionDisplayText -Resolution $resolution
+            if (-not [string]::IsNullOrWhiteSpace($displayText) -and -not $summaries.Contains($displayText)) {
+                $summaries.Add($displayText)
+            }
+            if ($summaries.Count -ge $MaxCount) {
+                break
+            }
+        }
+    }
+    catch {
+        $script:HardwareIdResolverError = $_.Exception.Message
+        $script:HardwareIdResolverState = 'Unavailable'
+        return @()
+    }
+
+    $script:HardwareIdResolutionDisplayCache[$cacheKey] = @($summaries)
+    return @($summaries)
+}
+
+function Get-LocalHardwareIdentityRows {
+    param(
+        [object]$Evidence,
+        [string]$InstanceId,
+        [int]$MaxCount = 3
+    )
+
+    if ($script:HardwareIdResolverState -ne 'Ready') {
+        return @()
+    }
+
+    $ids = @(Get-CandidateEvidenceHardwareIds -Evidence $Evidence -InstanceId $InstanceId | Select-Object -First 12)
+    if ($ids.Count -eq 0) {
+        return @()
+    }
+
+    $cacheKey = ($ids | ForEach-Object { [string]$_ }) -join "`n"
+    if ($script:HardwareIdResolutionDetailCache.ContainsKey($cacheKey)) {
+        return @($script:HardwareIdResolutionDetailCache[$cacheKey])
+    }
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    try {
+        $resolutions = @(Resolve-HardwareId -HardwareId $ids -Cache $script:HardwareIdDatabaseCache)
+        foreach ($resolution in @($resolutions)) {
+            $confidence = [string](Get-NotePropertyValue -Object $resolution -Name 'Confidence')
+            if ($confidence -in @('UNSUPPORTED', 'NO-ID')) {
+                continue
+            }
+
+            foreach ($row in @(Get-HardwareResolutionDetailRows -Resolution $resolution)) {
+                $duplicate = @($rows | Where-Object { $_.Key -eq $row.Key -and $_.Value -eq $row.Value }).Count -gt 0
+                if (-not $duplicate) {
+                    $rows.Add($row)
+                }
+            }
+
+            $localIdCount = @($rows | Where-Object { $_.Key -eq 'Local ID' }).Count
+            if ($localIdCount -ge $MaxCount) {
+                break
+            }
+        }
+    }
+    catch {
+        $script:HardwareIdResolverError = $_.Exception.Message
+        $script:HardwareIdResolverState = 'Unavailable'
+        return @()
+    }
+
+    $script:HardwareIdResolutionDetailCache[$cacheKey] = @($rows)
+    return @($rows)
+}
+
+function Get-FirstNonEmptyEvidenceValue {
+    param(
+        [object[]]$Values
+    )
+
+    foreach ($value in @($Values)) {
+        foreach ($item in @($value)) {
+            if ($null -eq $item) {
+                continue
+            }
+
+            $text = [string]$item
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                return $text.Trim()
+            }
+        }
+    }
+
+    return ''
+}
+
+function Get-InstalledDriverEvidenceFields {
+    param(
+        [object]$Evidence
+    )
+
+    $importantProperties = Get-NotePropertyValue -Object $Evidence -Name 'ImportantProperties'
+    $signedDriver = Get-NotePropertyValue -Object $Evidence -Name 'SignedDriver'
+
+    $provider = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $signedDriver -Name 'DriverProviderName'),
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DriverProvider')
+    )
+    $version = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $signedDriver -Name 'DriverVersion'),
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DriverVersion')
+    )
+    $date = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $signedDriver -Name 'DriverDate'),
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DriverDate')
+    )
+    $infName = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $signedDriver -Name 'InfName'),
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DriverInfPath')
+    )
+    $deviceName = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $signedDriver -Name 'DeviceName')
+    )
+    $manufacturer = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $signedDriver -Name 'Manufacturer'),
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer')
+    )
+    $service = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Service')
+    )
+    $driverKey = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Driver')
+    )
+    $infSection = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DriverInfSection')
+    )
+    $signedDriverError = Get-FirstNonEmptyEvidenceValue -Values @(
+        (Get-NotePropertyValue -Object $Evidence -Name 'SignedDriverError')
+    )
+
+    $hasAny = -not [string]::IsNullOrWhiteSpace((@(
+        $provider
+        $version
+        $date
+        $infName
+        $deviceName
+        $manufacturer
+        $service
+        $driverKey
+        $infSection
+        $signedDriverError
+    ) -join ''))
+
+    return [PSCustomObject]@{
+        HasAny            = $hasAny
+        DeviceName        = $deviceName
+        Manufacturer      = $manufacturer
+        Provider          = $provider
+        Version           = $version
+        Date              = $date
+        InfName           = $infName
+        InfSection        = $infSection
+        Service           = $service
+        DriverKey         = $driverKey
+        SignedDriverError = $signedDriverError
+    }
+}
+
+function Add-InstalledDriverDetailLines {
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.List[string]]$Lines,
+        [object]$Evidence,
+        [int]$Width
+    )
+
+    $driver = Get-InstalledDriverEvidenceFields -Evidence $Evidence
+    if (-not $driver.HasAny) {
+        return
+    }
+
+    $Lines.Add((New-SectionLine -Title 'Installed Driver' -Width $Width))
+
+    if (-not [string]::IsNullOrWhiteSpace($driver.Provider)) {
+        $Lines.Add((New-KeyValueLine -Key 'Provider' -Value $driver.Provider -Width $Width))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.Version)) {
+        $Lines.Add((New-KeyValueLine -Key 'Version' -Value $driver.Version -Width $Width -ValueColor $_C.OK))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.Date)) {
+        $Lines.Add((New-KeyValueLine -Key 'Date' -Value $driver.Date -Width $Width))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.InfName)) {
+        $Lines.Add((New-KeyValueLine -Key 'INF' -Value $driver.InfName -Width $Width -ValueColor $_C.Info))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.InfSection)) {
+        $Lines.Add((New-KeyValueLine -Key 'INF Section' -Value $driver.InfSection -Width $Width -ValueColor $_C.Info))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.Service)) {
+        $Lines.Add((New-KeyValueLine -Key 'Service' -Value $driver.Service -Width $Width))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.DriverKey)) {
+        $Lines.Add((New-KeyValueLine -Key 'Driver Key' -Value $driver.DriverKey -Width $Width -ValueColor $_C.Dim))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.DeviceName)) {
+        $Lines.Add((New-KeyValueLine -Key 'Driver Name' -Value $driver.DeviceName -Width $Width))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.Manufacturer) -and $driver.Manufacturer -ne $driver.Provider) {
+        $Lines.Add((New-KeyValueLine -Key 'Maker' -Value $driver.Manufacturer -Width $Width))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($driver.SignedDriverError)) {
+        $Lines.Add((New-KeyValueLine -Key 'Driver CIM' -Value $driver.SignedDriverError -Width $Width -ValueColor $_C.Warn))
+    }
+}
 
 function Get-DeviceEvidenceCachePath {
     param([string]$InstanceId)
@@ -1101,12 +1567,13 @@ function Get-DetailDisplayLines {
 
         $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $SelectedRow.Ref.InstanceId
         if ($null -ne $cachedEvidence) {
-            $capturedText = if ($cachedEvidence.CapturedAt) { $cachedEvidence.CapturedAt } else { 'unknown time' }
+            $capturedAt = Get-NotePropertyValue -Object $cachedEvidence -Name 'CapturedAt'
+            $capturedText = if ($capturedAt) { $capturedAt } else { 'unknown time' }
             if ($null -eq $activeSearch -or $activeSearch.EvidenceState -ne 'Searching') {
                 $lines.Add((New-KeyValueLine -Key 'Evidence' -Value "Cached ($capturedText)" -Width $Width -ValueColor $_C.OK))
             }
 
-            $importantProperties = $cachedEvidence.ImportantProperties
+            $importantProperties = Get-NotePropertyValue -Object $cachedEvidence -Name 'ImportantProperties'
             $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
@@ -1124,16 +1591,20 @@ function Get-DetailDisplayLines {
                 $lines.Add((New-KeyValueLine -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width))
             }
 
-            $service = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Service'
-            if ($service) {
-                $lines.Add((New-KeyValueLine -Key 'Service' -Value $service -Width $Width))
+            $localIdentityRows = @(Get-LocalHardwareIdentityRows -Evidence $cachedEvidence -InstanceId $SelectedRow.Ref.InstanceId -MaxCount 3)
+            if ($localIdentityRows.Count -gt 0) {
+                $lines.Add((New-SectionLine -Title 'Local Hardware Identity' -Width $Width))
+                foreach ($row in $localIdentityRows) {
+                    $rowColorName = [string](Get-NotePropertyValue -Object $row -Name 'Color')
+                    $rowColor = if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White }
+                    $lines.Add((New-KeyValueLine -Key ([string]$row.Key) -Value ([string]$row.Value) -Width $Width -ValueColor $rowColor))
+                }
+            }
+            elseif ($script:HardwareIdResolverState -eq 'Unavailable' -and -not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
+                $lines.Add((New-KeyValueLine -Key 'Local ID' -Value 'Unavailable; run internal\Update-HardwareIdDatabases.ps1' -Width $Width -ValueColor $_C.Dim))
             }
 
-            if ($cachedEvidence.SignedDriver) {
-                $driver = $cachedEvidence.SignedDriver
-                $driverText = "$($driver.DriverProviderName) $($driver.DriverVersion) ($($driver.InfName))"
-                $lines.Add((New-KeyValueLine -Key 'Driver' -Value $driverText -Width $Width))
-            }
+            Add-InstalledDriverDetailLines -Lines $lines -Evidence $cachedEvidence -Width $Width
 
             $cachePath = Get-DeviceEvidenceCachePath -InstanceId $SelectedRow.Ref.InstanceId
             Add-WrappedPathLine -Lines $lines -Key 'Cache' -Path $cachePath -Width $Width
@@ -1537,35 +2008,43 @@ function Render-FrameLegacy {
 
         $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $selectedRow.Ref.InstanceId
         if ($null -ne $cachedEvidence) {
-            $capturedText = if ($cachedEvidence.CapturedAt) { $cachedEvidence.CapturedAt } else { 'unknown time' }
+            $capturedAt = Get-NotePropertyValue -Object $cachedEvidence -Name 'CapturedAt'
+            $capturedText = if ($capturedAt) { $capturedAt } else { 'unknown time' }
             Write-Host "  $($_C.Dim)Evidence     :$($_C.Reset) $($_C.OK)Cached ($capturedText)$($_C.Reset)$($_C.EraseLn)"
 
-            $hardwareIds = $cachedEvidence.ImportantProperties.DEVPKEY_Device_HardwareIds
+            $importantProperties = Get-NotePropertyValue -Object $cachedEvidence -Name 'ImportantProperties'
+            $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
                 Write-Host "  $($_C.Dim)HardwareId   :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstHardwareId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
             }
 
-            $manufacturer = $cachedEvidence.ImportantProperties.DEVPKEY_Device_Manufacturer
+            $manufacturer = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer'
             if ($manufacturer) {
                 Write-Host "  $($_C.Dim)Manufacturer :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $manufacturer -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
             }
 
-            $compatibleIds = $cachedEvidence.ImportantProperties.DEVPKEY_Device_CompatibleIds
+            $compatibleIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_CompatibleIds'
             if ($compatibleIds) {
                 $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
                 Write-Host "  $($_C.Dim)CompatibleId :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstCompatibleId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
             }
 
-            $service = $cachedEvidence.ImportantProperties.DEVPKEY_Device_Service
-            if ($service) {
-                Write-Host "  $($_C.Dim)Service      :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $service -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            $localIdentityRows = @(Get-LocalHardwareIdentityRows -Evidence $cachedEvidence -InstanceId $selectedRow.Ref.InstanceId -MaxCount 3)
+            if ($localIdentityRows.Count -gt 0) {
+                Write-Host "  $($_C.H1)Local Hardware Identity$($_C.Reset)$($_C.EraseLn)"
+                foreach ($row in $localIdentityRows) {
+                    $rowColorName = [string](Get-NotePropertyValue -Object $row -Name 'Color')
+                    $rowColor = if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White }
+                    $keyText = Format-PlainToWidth -Text ([string]$row.Key) -Width 13
+                    Write-Host "  $($_C.Dim)$keyText :$($_C.Reset) $rowColor$(Format-UiValue -Text ([string]$row.Value) -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+                }
             }
 
-            if ($cachedEvidence.SignedDriver) {
-                $driver = $cachedEvidence.SignedDriver
-                $driverText = "$($driver.DriverProviderName) $($driver.DriverVersion) ($($driver.InfName))"
-                Write-Host "  $($_C.Dim)Driver       :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $driverText -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+            $installedDriverLines = [System.Collections.Generic.List[string]]::new()
+            Add-InstalledDriverDetailLines -Lines $installedDriverLines -Evidence $cachedEvidence -Width (Get-UiWidth)
+            foreach ($installedDriverLine in $installedDriverLines) {
+                Write-Host "$installedDriverLine$($_C.EraseLn)"
             }
 
             $cachePath = Get-DeviceEvidenceCachePath -InstanceId $selectedRow.Ref.InstanceId
@@ -1959,7 +2438,10 @@ function Start-DeviceLookup {
                     'DEVPKEY_Device_ClassGuid',
                     'DEVPKEY_Device_Driver',
                     'DEVPKEY_Device_DriverInfPath',
+                    'DEVPKEY_Device_DriverInfSection',
+                    'DEVPKEY_Device_DriverProvider',
                     'DEVPKEY_Device_DriverVersion',
+                    'DEVPKEY_Device_DriverDate',
                     'DEVPKEY_Device_ProblemCode',
                     'DEVPKEY_Device_Parent',
                     'DEVPKEY_Device_LocationPaths',
@@ -2410,6 +2892,41 @@ function Stop-DeviceLookup {
     $script:ActiveSearches.Remove($InstanceId)
 }
 
+function Update-SearchFromPipelineOutput {
+    param(
+        [Parameter(Mandatory)]$Search,
+        [Parameter(Mandatory)]$Data
+    )
+
+    if ($Data.Source -eq 'Local') {
+        $Search.LocalVal = $Data.Result
+        $Search.LocalState = $Data.Status
+    }
+    elseif ($Data.Source -eq 'Evidence') {
+        $Search.EvidenceVal = $Data.Result
+        $Search.EvidenceState = $Data.Status
+        $Search.EvidencePath = $Data.Path
+        $Search.DeviceEvidence = $Data.Evidence
+
+        if ($Data.Status -eq 'Done' -and -not [string]::IsNullOrWhiteSpace([string]$Data.Path)) {
+            $Search.Device.EvidenceCached = $true
+            if ([bool](Get-NotePropertyValue -Object $Search -Name 'EvidenceOnly') -and
+                [string]::IsNullOrWhiteSpace([string](Get-NotePropertyValue -Object $Search -Name 'EvidenceBatchId'))) {
+                $deviceName = [string](Get-NotePropertyValue -Object $Search.Device -Name 'FriendlyName')
+                if ([string]::IsNullOrWhiteSpace($deviceName)) { $deviceName = 'selected device' }
+                $script:SystemScanMessage = "Local evidence updated: $deviceName | $(Get-Date -Format 'HH:mm:ss')"
+            }
+        }
+    }
+    elseif ($Data.Source -eq 'Web') {
+        $Search.WebVal = $Data.Result
+        $Search.WebState = $Data.Status
+        if ($Data.Snippets) {
+            $Search.WebSnippets = $Data.Snippets
+        }
+    }
+}
+
 # Update all active background lookups (Invoked inside key polling)
 function Update-ActiveSearches {
     $completedIds = [System.Collections.Generic.List[string]]::new()
@@ -2428,23 +2945,7 @@ function Update-ActiveSearches {
                 $data = $search.OutputWeb[0]
                 $search.OutputWeb.RemoveAt(0)
                 if ($null -ne $data) {
-                    if ($data.Source -eq 'Local') {
-                        $search.LocalVal = $data.Result
-                        $search.LocalState = $data.Status
-                    }
-                    elseif ($data.Source -eq 'Evidence') {
-                        $search.EvidenceVal = $data.Result
-                        $search.EvidenceState = $data.Status
-                        $search.EvidencePath = $data.Path
-                        $search.DeviceEvidence = $data.Evidence
-                    }
-                    elseif ($data.Source -eq 'Web') {
-                        $search.WebVal = $data.Result
-                        $search.WebState = $data.Status
-                        if ($data.Snippets) {
-                            $search.WebSnippets = $data.Snippets
-                        }
-                    }
+                    Update-SearchFromPipelineOutput -Search $search -Data $data
                 }
             }
 
@@ -2454,23 +2955,7 @@ function Update-ActiveSearches {
                     if ($null -ne $resList) {
                         foreach ($data in $resList) {
                             if ($null -ne $data) {
-                                if ($data.Source -eq 'Local') {
-                                    $search.LocalVal = $data.Result
-                                    $search.LocalState = $data.Status
-                                }
-                                elseif ($data.Source -eq 'Evidence') {
-                                    $search.EvidenceVal = $data.Result
-                                    $search.EvidenceState = $data.Status
-                                    $search.EvidencePath = $data.Path
-                                    $search.DeviceEvidence = $data.Evidence
-                                }
-                                elseif ($data.Source -eq 'Web') {
-                                    $search.WebVal = $data.Result
-                                    $search.WebState = $data.Status
-                                    if ($data.Snippets) {
-                                        $search.WebSnippets = $data.Snippets
-                                    }
-                                }
+                                Update-SearchFromPipelineOutput -Search $search -Data $data
                             }
                         }
                     }
@@ -2967,6 +3452,15 @@ function Read-ConsoleKey {
 }
 
 # Initial categories detection
+Write-Host 'Loading local hardware ID cache...' -ForegroundColor DarkCyan
+Initialize-HardwareIdResolver
+if ($script:HardwareIdResolverState -eq 'Ready') {
+    Write-Host 'Local hardware ID cache ready.' -ForegroundColor DarkCyan
+} elseif (-not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
+    Write-Host "Local hardware ID cache unavailable: $($script:HardwareIdResolverError)" -ForegroundColor Yellow
+} else {
+    Write-Host 'Local hardware ID cache unavailable.' -ForegroundColor Yellow
+}
 Invoke-SystemScan
 $selectedIndex = 0
 $running = $true

@@ -1,0 +1,272 @@
+{
+  "SchemaVersion": 1,
+  "UpdatedOn": "2026-06-03",
+  "SourceRootHint": "%USERPROFILE%\\scripts\\DeviceCheck\\source",
+  "Principles": [
+    "Use local normalized cache for runtime lookup.",
+    "Treat upstream repositories as source inputs or study references, not runtime dependencies.",
+    "Do not scrape sites during normal runs unless no stable source exists.",
+    "Keep driver finding audit-only until matching, signature, OS targeting, and rollback behavior are designed."
+  ],
+  "Sources": [
+    {
+      "Id": "hwdata",
+      "Name": "Linux hwdata",
+      "Kind": "DatabaseBundle",
+      "Priority": 0,
+      "Decision": "AdoptedNow",
+      "Url": "https://github.com/vcrhonek/hwdata",
+      "RepoUrl": "https://github.com/vcrhonek/hwdata.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\hwdata"
+      ],
+      "Provides": [
+        "pci.ids",
+        "usb.ids",
+        "pnp.ids"
+      ],
+      "RuntimeUse": "Source input for internal\\Update-HardwareIdDatabases.ps1.",
+      "NextAction": "Keep using as the canonical first offline ID source."
+    },
+    {
+      "Id": "uefi-pnp-acpi-registry",
+      "Name": "UEFI PNP and ACPI ID Registry",
+      "Kind": "DatabaseSpec",
+      "Priority": 1,
+      "Decision": "TrackNext",
+      "Url": "https://uefi.org/PNP_ACPI_Registry",
+      "RepoUrl": "",
+      "LocalPathHints": [],
+      "Provides": [
+        "ACPI vendor IDs",
+        "PNP vendor IDs"
+      ],
+      "RuntimeUse": "Future enrichment for ACPI and PNP devices beyond bundled pnp.ids coverage.",
+      "NextAction": "Review available downloadable format before writing importer; avoid scraping as first choice."
+    },
+    {
+      "Id": "microsoft-devids",
+      "Name": "Microsoft Generic Device IDs",
+      "Kind": "DatabaseFile",
+      "Priority": 1,
+      "Decision": "TrackNext",
+      "Url": "https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/devids.txt",
+      "RepoUrl": "",
+      "LocalPathHints": [],
+      "Provides": [
+        "legacy PNP generic IDs"
+      ],
+      "RuntimeUse": "Future supplemental lookup for generic Windows PNP IDs.",
+      "NextAction": "Add importer only after confirming license/redistribution and actual overlap with hwdata pnp.ids."
+    },
+    {
+      "Id": "microsoft-driver-docs",
+      "Name": "Microsoft Windows Driver Docs",
+      "Kind": "FormatSpec",
+      "Priority": 1,
+      "Decision": "ReferenceOnly",
+      "Url": "https://github.com/MicrosoftDocs/windows-driver-docs/blob/staging/windows-driver-docs-pr/install/hardware-ids.md",
+      "RepoUrl": "https://github.com/MicrosoftDocs/windows-driver-docs.git",
+      "LocalPathHints": [],
+      "Provides": [
+        "Windows Hardware ID matching rules",
+        "INF matching semantics"
+      ],
+      "RuntimeUse": "Specification reference for parser priority and user-facing confidence wording.",
+      "NextAction": "Do not clone unless parser behavior needs source-level documentation review."
+    },
+    {
+      "Id": "wininfparser",
+      "Name": "wininfparser",
+      "Kind": "ImplementationReference",
+      "Priority": 2,
+      "Decision": "CloneWhenFeatureStarts",
+      "Url": "https://github.com/arutar/wininfparser",
+      "RepoUrl": "https://github.com/arutar/wininfparser.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\wininfparser"
+      ],
+      "Provides": [
+        "INF parsing ideas",
+        "Hardware ID matching examples"
+      ],
+      "RuntimeUse": "Study source for a future PowerShell/native INF indexer; do not embed GPL code.",
+      "NextAction": "Already cloned locally. Study as GPL-3.0 parser reference only; implement DeviceCheck INF extraction independently."
+    },
+    {
+      "Id": "open-driver-updater",
+      "Name": "OpenDriverUpdater",
+      "Kind": "ImplementationReference",
+      "Priority": 2,
+      "Decision": "CloneWhenFeatureStarts",
+      "Url": "https://github.com/OpenDriverUpdater/OpenDriverUpdater",
+      "RepoUrl": "https://github.com/OpenDriverUpdater/OpenDriverUpdater.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\OpenDriverUpdater"
+      ],
+      "Provides": [
+        "Microsoft Catalog search flow",
+        "driver update UX references"
+      ],
+      "RuntimeUse": "Study reference for catalog interaction and update presentation; not a runtime dependency.",
+      "NextAction": "Already cloned locally. Study architecture, trust model, and update UX; Microsoft Catalog parser is currently a stub."
+    },
+    {
+      "Id": "snappy-driver-installer-origin",
+      "Name": "Snappy Driver Installer Origin",
+      "Kind": "MatchingEngineReference",
+      "Priority": 2,
+      "Decision": "StudyBeforeClone",
+      "Url": "https://sourceforge.net/projects/snappy-driver-installer-origin/",
+      "RepoUrl": "",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\snappy-driver-installer-origin"
+      ],
+      "Provides": [
+        "driverpack index concepts",
+        "matching/scoring concepts"
+      ],
+      "RuntimeUse": "Conceptual reference only until index format, licensing, size, and safety are reviewed.",
+      "NextAction": "Study only when moving from search links to offline driverpack candidate scoring."
+    },
+    {
+      "Id": "gtumanyan-sdi",
+      "Name": "Original SDI GitHub Mirror",
+      "Kind": "MatchingEngineReference",
+      "Priority": 3,
+      "Decision": "Defer",
+      "Url": "https://github.com/gtumanyan/SDI",
+      "RepoUrl": "https://github.com/gtumanyan/SDI.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\SDI"
+      ],
+      "Provides": [
+        "older driver matching implementation"
+      ],
+      "RuntimeUse": "Historical reference only; prefer SDIO origin for current study.",
+      "NextAction": "Do not clone until SDIO source comparison is needed."
+    },
+    {
+      "Id": "pciids",
+      "Name": "pciutils pciids mirror",
+      "Kind": "DatabaseMirror",
+      "Priority": 3,
+      "Decision": "CoveredByHwdata",
+      "Url": "https://github.com/pciutils/pciids",
+      "RepoUrl": "https://github.com/pciutils/pciids.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\pciids"
+      ],
+      "Provides": [
+        "pci.ids"
+      ],
+      "RuntimeUse": "Overlap with hwdata; useful only if direct pci.ids update history is needed.",
+      "NextAction": "Do not clone while hwdata remains sufficient."
+    },
+    {
+      "Id": "usbids",
+      "Name": "USB ID Repository mirror",
+      "Kind": "DatabaseMirror",
+      "Priority": 3,
+      "Decision": "CoveredByHwdata",
+      "Url": "https://github.com/usbids/usbids",
+      "RepoUrl": "https://github.com/usbids/usbids.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\usbids"
+      ],
+      "Provides": [
+        "usb.ids"
+      ],
+      "RuntimeUse": "Overlap with hwdata; useful only if direct usb.ids update history is needed.",
+      "NextAction": "Do not clone while hwdata remains sufficient."
+    },
+    {
+      "Id": "pciutils",
+      "Name": "pciutils",
+      "Kind": "ImplementationReference",
+      "Priority": 3,
+      "Decision": "Defer",
+      "Url": "https://github.com/pciutils/pciutils",
+      "RepoUrl": "https://github.com/pciutils/pciutils.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\pciutils"
+      ],
+      "Provides": [
+        "pci.ids parser/updater behavior",
+        "PCI DNS lookup behavior"
+      ],
+      "RuntimeUse": "Reference for update-pciids and PCI lookup behavior; not needed for current PowerShell cache.",
+      "NextAction": "Clone only if direct pci.ids updater behavior becomes relevant."
+    },
+    {
+      "Id": "libwdi",
+      "Name": "libwdi and WCID Devices",
+      "Kind": "UsbDriverReference",
+      "Priority": 3,
+      "Decision": "ReferenceOnly",
+      "Url": "https://github.com/pbatard/libwdi",
+      "RepoUrl": "https://github.com/pbatard/libwdi.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\libwdi"
+      ],
+      "Provides": [
+        "USB WCID concepts",
+        "Windows USB driver install concepts"
+      ],
+      "RuntimeUse": "Reference for USB/WCID explanation only; not a device ID database.",
+      "NextAction": "Do not clone unless USB driver install behavior becomes a dedicated feature."
+    },
+    {
+      "Id": "fwupd",
+      "Name": "fwupd hwids",
+      "Kind": "FirmwareReference",
+      "Priority": 4,
+      "Decision": "Defer",
+      "Url": "https://github.com/fwupd/fwupd/blob/main/docs/hwids.md",
+      "RepoUrl": "https://github.com/fwupd/fwupd.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\fwupd"
+      ],
+      "Provides": [
+        "firmware hardware ID/GUID concepts"
+      ],
+      "RuntimeUse": "Firmware metadata concept reference; not a Windows driver source.",
+      "NextAction": "Defer until firmware inventory becomes a separate feature."
+    },
+    {
+      "Id": "ocsysinfo",
+      "Name": "OCSysInfo",
+      "Kind": "ImplementationReference",
+      "Priority": 4,
+      "Decision": "Defer",
+      "Url": "https://github.com/KernelWanderers/OCSysInfo",
+      "RepoUrl": "https://github.com/KernelWanderers/OCSysInfo.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\OCSysInfo"
+      ],
+      "Provides": [
+        "cross-platform hardware enumeration ideas"
+      ],
+      "RuntimeUse": "Reference only; current project is Windows-first.",
+      "NextAction": "Defer unless cross-platform inventory becomes a goal."
+    },
+    {
+      "Id": "pcidb-libraries",
+      "Name": "PCI/USB parser libraries",
+      "Kind": "LibraryReference",
+      "Priority": 4,
+      "Decision": "Defer",
+      "Url": "https://github.com/siderolabs/go-pcidb",
+      "RepoUrl": "https://github.com/siderolabs/go-pcidb.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\go-pcidb"
+      ],
+      "Provides": [
+        "generated PCI map ideas",
+        "parser API ideas"
+      ],
+      "RuntimeUse": "Reference only; PowerShell resolver already consumes normalized JSON.",
+      "NextAction": "Defer unless generated static maps become useful."
+    }
+  ]
+}

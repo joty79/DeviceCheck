@@ -1,0 +1,7 @@
+data/hwdb/
+devices/
+driver-candidates/
+inf-matches/
+driver-evidence/
+driver-package-metadata/
+source/

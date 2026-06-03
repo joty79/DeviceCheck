@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.devicecheck/schemas/driver-candidate-package.schema.json",
+  "title": "Driver Candidate Package Metadata",
+  "type": "object",
+  "required": [
+    "SchemaVersion",
+    "MetadataKind",
+    "DeviceContext",
+    "Source",
+    "Package",
+    "Identity",
+    "Verification",
+    "Safety"
+  ],
+  "properties": {
+    "SchemaVersion": {
+      "const": 1
+    },
+    "MetadataKind": {
+      "const": "DriverCandidatePackage"
+    },
+    "EvidenceBundlePath": {
+      "type": "string"
+    },
+    "DeviceContext": {
+      "type": "object",
+      "required": [
+        "FriendlyName",
+        "InstanceId",
+        "BestSearchId"
+      ],
+      "properties": {
+        "FriendlyName": { "type": "string" },
+        "InstanceId": { "type": "string" },
+        "Class": { "type": "string" },
+        "BestSearchId": { "type": "string" },
+        "CurrentDriver": { "type": "object" }
+      }
+    },
+    "Source": {
+      "type": "object",
+      "required": [
+        "Type",
+        "Name",
+        "Url"
+      ],
+      "properties": {
+        "Type": {
+          "enum": [
+            "",
+            "MicrosoftUpdateCatalog",
+            "OEM",
+            "WindowsUpdate",
+            "VendorSupport"
+          ]
+        },
+        "Name": { "type": "string" },
+        "Url": { "type": "string" },
+        "ResultId": { "type": "string" },
+        "PublishedDateUtc": { "type": "string" },
+        "TrustTier": { "type": "string" },
+        "CollectedBy": { "type": "string" },
+        "CollectionMethod": { "type": "string" }
+      }
+    },
+    "Package": {
+      "type": "object",
+      "required": [
+        "Provider",
+        "Version",
+        "ReleaseDate",
+        "Architecture",
+        "OsTargets",
+        "Sha256",
+        "CatalogFile",
+        "InfFiles"
+      ],
+      "properties": {
+        "Provider": { "type": "string" },
+        "Manufacturer": { "type": "string" },
+        "Class": { "type": "string" },
+        "Version": { "type": "string" },
+        "ReleaseDate": { "type": "string" },
+        "Architecture": { "type": "string" },
+        "OsTargets": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "DownloadUrl": { "type": "string" },
+        "FileName": { "type": "string" },
+        "SizeBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "Sha256": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$|^$"
+        },
+        "CatalogFile": { "type": "string" },
+        "InfFiles": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "required": [
+        "MatchedHardwareId",
+        "MatchType"
+      ],
+      "properties": {
+        "MatchedHardwareId": { "type": "string" },
+        "MatchType": {
+          "enum": [
+            "",
+            "ExactHardwareId",
+            "CompatibleId"
+          ]
+        },
+        "HardwareIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "CompatibleIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "Verification": {
+      "type": "object",
+      "required": [
+        "Downloaded",
+        "HashVerified",
+        "SignatureVerified",
+        "CatalogVerified",
+        "InfParsed",
+        "OsTargetVerified",
+        "VersionCompared",
+        "SourceTrustVerified",
+        "RollbackPlanVerified"
+      ],
+      "properties": {
+        "Downloaded": { "type": "boolean" },
+        "HashVerified": { "type": "boolean" },
+        "SignatureVerified": { "type": "boolean" },
+        "SignatureStatus": { "type": "string" },
+        "CatalogVerified": { "type": "boolean" },
+        "InfParsed": { "type": "boolean" },
+        "OsTargetVerified": { "type": "boolean" },
+        "VersionCompared": { "type": "boolean" },
+        "SourceTrustVerified": { "type": "boolean" },
+        "RollbackPlanVerified": { "type": "boolean" }
+      }
+    },
+    "Recommendation": {
+      "type": "object",
+      "properties": {
+        "Type": {
+          "enum": [
+            "",
+            "Skip",
+            "Optional",
+            "Recommended",
+            "Critical"
+          ]
+        },
+        "IsCandidateNewer": { "type": "boolean" },
+        "VersionComparison": { "type": "string" },
+        "TrustLevel": {
+          "enum": [
+            "",
+            "Untrusted",
+            "Unknown",
+            "Trusted",
+            "Verified"
+          ]
+        },
+        "TrustScore": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "TrustFactors": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "CandidateFlags": {
+          "type": "object",
+          "properties": {
+            "IsBeta": { "type": "boolean" },
+            "IsSignedClaimed": { "type": "boolean" },
+            "DirectHardwareIdMatch": { "type": "boolean" },
+            "OemProviderMatch": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "Safety": {
+      "type": "object",
+      "required": [
+        "MetadataOnly",
+        "AllowsDownload",
+        "AllowsAutomaticInstall",
+        "AllowsDriverRemoval"
+      ],
+      "properties": {
+        "MetadataOnly": { "const": true },
+        "AllowsDownload": { "const": false },
+        "AllowsAutomaticInstall": { "const": false },
+        "AllowsDriverRemoval": { "const": false }
+      }
+    },
+    "Notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

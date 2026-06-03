@@ -56,6 +56,62 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-03
+Problem: PCI devices with useful `SUBSYS` data, such as `PCI\VEN_10DE&DEV_2803&SUBSYS_51741462`, were only identified at chip level even though the same ID also contains board-vendor evidence.
+Root cause: The resolver only promoted exact `pci.ids` subsystem rows. When `pci.ids` had no `10DE:2803` subsystem model row, DeviceCheck ignored the fallback subvendor lookup from the PCI vendor table.
+Guardrail/rule: PCI identity must be shown in layers: chip vendor/device from `VEN/DEV`, exact subsystem model only when present, and board vendor/subdevice fallback from `SUBSYS` when exact model data is absent. Do not claim an exact board marketing model from `pci.ids` alone unless the exact subsystem row exists; use the layered identity to build better search terms and to decide which extra source database is needed.
+Files affected: `internal\HardwareIdResolver.psm1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Resolver smoke for `PCI\VEN_10DE&DEV_2803&SUBSYS_51741462&REV_A1` returned `EXACT-DEVICE+SUBVENDOR`, NVIDIA AD106/RTX 4060 Ti, subvendor `Micro-Star International Co., Ltd. [MSI]`, and subdevice `5174`; extracted detail-row smoke produced chip, board vendor, board IDs, exact-model-missing, and search-hint rows; PowerShell parser validation; `git diff --check`.
+
+Date: 2026-06-03
+Problem: Local source repos needed to inform DeviceCheck's driver-finding design without accidentally importing unsafe install/download behavior or GPL code.
+Root cause: `source\OpenDriverUpdater` has useful metadata vocabulary but mostly stubbed source adapters, while `source\wininfparser` is GPL-3.0 and cannot be copied into DeviceCheck's own parser implementation.
+Guardrail/rule: Use OpenDriverUpdater as a concept reference for `DeviceInfo`, `CandidateDriver`, `UpdateRecommendation`, version comparison, source priority, and trust-factor vocabulary only. Use wininfparser as a behavior reference only; keep `internal\InfDriverParser.psm1` independently implemented. Candidate metadata may include read-only `Recommendation` fields, but download/install/signature-verification workflows remain out of scope until a separate safety workflow exists.
+Files affected: `config\driver-candidate-package.schema.json`, `internal\Test-DriverCandidatePackageMetadata.ps1`, `docs\LOCAL_SOURCE_PROJECT_AUDIT.md`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: JSON parse for `config\*.json`; parser validation for touched PowerShell scripts/modules; template smoke confirmed the optional `Recommendation` object; validator smoke accepted the generated template as expected `IncompleteMetadata`; `git diff --check`.
+
+Date: 2026-06-03
+Problem: Pressing `E` could save selected-device evidence before the TUI clearly treated that device as evidence-cached, so the user might need another render/selection movement to trust that details were fresh.
+Root cause: `EvidenceCached` was marked only during active-search cleanup, not when the evidence pipeline output first reported a saved/loaded evidence path.
+Guardrail/rule: Local evidence output should update the selected device's in-memory cache state as soon as the evidence result arrives. Keep the left tree free of evidence bookkeeping rows; show the useful result in the details pane and status line.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1` and `HardwareIdResolver.psm1`; isolated `Update-SearchFromPipelineOutput` smoke confirmed `EvidenceCached=True` and status-line update as soon as evidence output arrives; static helper presence check; `git diff --check`; pending user visual TUI smoke.
+
+Date: 2026-06-03
+Problem: The remaining accidental `drivercheck` work needed a careful transfer audit instead of another broad copy.
+Root cause: The donor repo contains both reusable hardware/driver-research tools and drivercheck-specific cleanup/snapshot tools for a different purpose.
+Guardrail/rule: Treat the shared `internal\` hardware/driver-research scripts as migrated only when byte-identical or intentionally adapted in `DeviceCheck`. Do not copy `drivercheck` cleanup/snapshot tools such as `Compare-DriverSnapshots.ps1`, `Invoke-DriverCleanupFromSnapshots.ps1`, or `Save-DriverSnapshot.ps1` into `DeviceCheck` unless the Device Manager workflow explicitly needs them.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Hash audit confirmed all common `internal\` migrated scripts/modules are byte-identical between donor and target; config/docs are intentionally adapted for `DeviceCheck`.
+
+Date: 2026-06-03
+Problem: Selected-device cached evidence had useful installed-driver fields, but the TUI compressed them into one hard-to-read driver line.
+Root cause: The evidence collection already captured `Win32_PnPSignedDriver` and key PnP driver properties, but the details pane treated that as a summary string rather than a scan-friendly section.
+Guardrail/rule: Installed-driver evidence may be integrated into the TUI as a read-only presentation layer using already-cached fields only. Keep INF parsing, trust scoring, package metadata, downloads, installs, and rollback decisions outside the TUI until their own layer is explicitly integrated and verified.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1` and `HardwareIdResolver.psm1`; extracted-helper smoke against real cached Wi-Fi evidence resolved provider/version/INF/service; static check confirmed cached evidence driver/detail fields use safe optional-property reads; `git diff --check`; pending user visual TUI smoke.
+
+Date: 2026-06-03
+Problem: The first selected device after launch caused a 1-2 second TUI lag/black frame when cached evidence exposed local Hardware ID details.
+Root cause: `Get-LocalHardwareIdentitySummaries` initialized and loaded the Hardware ID resolver/database from inside the selected-device details render path.
+Guardrail/rule: Never load modules, parse databases, scan files, or perform other heavy cache initialization from per-frame render/detail functions. Preload required caches during startup or move them to explicit background work, then let render functions consume only already-loaded in-memory state.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1` and `HardwareIdResolver.psm1`; static check confirmed no resolver initialization inside `Get-LocalHardwareIdentitySummaries`; resolver smoke; `git diff --check`; pending user visual TUI smoke.
+
+Date: 2026-06-03
+Problem: The migrated Hardware ID resolver needed to reach the interactive DeviceCheck UI without rushing the deeper INF/trust/package layers into the TUI.
+Root cause: The migrated engine is useful, but DeviceCheck already has a complex evidence cache and rendering loop where filesystem work or broad feature wiring can cause flicker/lag.
+Guardrail/rule: Integrate migrated engine features into the TUI one layer at a time. The first allowed integration is read-only local Hardware ID resolution in the selected-device details pane, using cached resolver/database state and cached selected-device evidence only. Do not wire INF evidence, trust scoring, package metadata, downloads, or installs into the TUI until each prior layer is verified.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1` and `HardwareIdResolver.psm1`; resolver smoke; pending user visual TUI smoke.
+
+Date: 2026-06-03
+Problem: Hardware ID / driver-research prototype work was accidentally implemented in sibling repo `drivercheck` while the intended target was `DeviceCheck`.
+Root cause: The active Codex workspace was `D:\Users\joty79\scripts\drivercheck`, but the user-provided research docs and cloned source repos were under `D:\Users\joty79\scripts\DeviceCheck`.
+Guardrail/rule: Treat the migrated `internal\` engine/config/docs as DeviceCheck-owned from now on. Do not continue this feature in `drivercheck`. Keep the migrated engine audit-only until it is explicitly integrated into the existing DeviceCheck TUI and agent workflow.
+Files affected: `.gitignore`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`, `internal\*`, `config\*`, `docs\HARDWARE_SOURCE_INTAKE.md`, `docs\GEMINI_NEXT_STEP_DRIVER_PACKAGE_ADAPTERS.md`.
+Validation/tests run: Migration path audit; donor/target conflict check; mechanical file transfer; parser validation for migrated internal scripts; config JSON parse; hardware database import from `DeviceCheck\source\hwdata`; resolver smoke; inventory report smoke; candidate/INF/evidence bundle smokes; metadata template smoke; adapter plan smoke; `git diff --check`.
+
 Date: 2026-05-30
 Problem: Google AI Studio quota rows can be misread because text-out model quotas and tool-specific grounding quotas are shown in nearby dashboard sections.
 Root cause: The `Tools` section exposes high RPD values for grounding paths, but `DeviceCheck.ps1` currently calls the `generateContent` text path.
