@@ -76,7 +76,7 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 
 ### The Solution
 
-The migrated `internal\` tools build a local `hwdata` cache, resolve Hardware IDs, inspect installed INF evidence, create unified evidence bundles, and validate candidate package metadata. PCI resolution separates chip identity from board identity: for example `VEN/DEV` can identify the GPU chip, while `SUBSYS` can still expose the board vendor and board code even when the exact marketing model is missing locally. The first TUI integrations are read-only local Hardware ID resolution and readable installed-driver evidence in the selected-device details pane; the deeper INF/trust/package layers remain CLI/report-first for now.
+The migrated `internal\` tools build a local `hwdata` cache, resolve Hardware IDs, inspect installed INF evidence, create unified evidence bundles, and validate candidate package metadata. PCI resolution separates chip identity from board identity: for example `VEN/DEV` can identify the GPU chip, while `SUBSYS` can still expose the board vendor and board code even when the exact marketing model is missing locally. The TUI auto-builds the generated `data\hwdb` cache from `source\hwdata` when it is missing, so cloned source data can travel between machines without manual bootstrap. The first TUI integrations are read-only local Hardware ID resolution and readable installed-driver evidence in the selected-device details pane; the deeper INF/trust/package layers remain CLI/report-first for now.
 
 ```text
 hwdata source -> data\hwdb -> resolver -> inventory/evidence -> package metadata gate
@@ -85,7 +85,8 @@ hwdata source -> data\hwdb -> resolver -> inventory/evidence -> package metadata
 ### Usage
 
 ```powershell
-# Build local hardware ID cache from cloned DeviceCheck\source\hwdata
+# Optional: rebuild local hardware ID cache from cloned DeviceCheck\source\hwdata
+# DeviceCheck.ps1 also auto-builds this cache at startup when it is missing.
 pwsh -ExecutionPolicy Bypass -File .\internal\Update-HardwareIdDatabases.ps1
 
 # Resolve a Hardware ID from the local cache

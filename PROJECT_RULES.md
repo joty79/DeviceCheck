@@ -57,6 +57,13 @@ Quick lookup:
 ### Decision Log
 
 Date: 2026-06-03
+Problem: The desktop TUI showed `Local ID: Unavailable; run internal\Update-HardwareIdDatabases.ps1` even after the resolver UI work, so the user saw no GPU identity improvement.
+Root cause: `data\hwdb` is a generated/ignored cache and may not exist on another machine even when `source\hwdata` is present. Startup only tried to load the generated cache and did not bootstrap it.
+Guardrail/rule: Generated local database caches must be self-healing when their source folder exists. At startup, DeviceCheck may build `data\hwdb` from `source\hwdata` before entering the TUI; only show an unavailable local-ID message when both generated cache loading and source-based rebuild fail.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1`; temporary `data\hwdb` build smoke using `internal\Update-HardwareIdDatabases.ps1`; extracted helper smoke confirmed missing-cache autobuild creates normalized `pci.json`, `usb.json`, and `pnp.json`; `git diff --check`.
+
+Date: 2026-06-03
 Problem: PCI devices with useful `SUBSYS` data, such as `PCI\VEN_10DE&DEV_2803&SUBSYS_51741462`, were only identified at chip level even though the same ID also contains board-vendor evidence.
 Root cause: The resolver only promoted exact `pci.ids` subsystem rows. When `pci.ids` had no `10DE:2803` subsystem model row, DeviceCheck ignored the fallback subvendor lookup from the PCI vendor table.
 Guardrail/rule: PCI identity must be shown in layers: chip vendor/device from `VEN/DEV`, exact subsystem model only when present, and board vendor/subdevice fallback from `SUBSYS` when exact model data is absent. Do not claim an exact board marketing model from `pci.ids` alone unless the exact subsystem row exists; use the layered identity to build better search terms and to decide which extra source database is needed.

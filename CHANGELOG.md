@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded selected-device cached evidence in the TUI with a readable `Installed Driver` section for provider, version, date, INF, INF section, service, driver key, driver name, and manufacturer when those fields are available.
 - Updated the local evidence pipeline so pressing `E` marks selected-device evidence as cached as soon as the evidence output arrives, allowing the details pane to refresh immediately without moving the selection.
 - Improved PCI Hardware ID resolution when exact `SUBSYS` model data is missing: DeviceCheck now resolves the subsystem vendor from the PCI vendor table and shows chip, board vendor, board IDs, exact-model availability, and a search hint in local identity summaries.
+- Made local Hardware ID cache startup self-healing: if generated `data\hwdb` files are missing but `source\hwdata` is present, DeviceCheck builds the cache automatically before the TUI starts.
 
 ### Fixed
 - Prevented first-selection TUI lag/black frames by preloading the local Hardware ID resolver/cache at startup and keeping cache/database load work out of the selected-device details render path.

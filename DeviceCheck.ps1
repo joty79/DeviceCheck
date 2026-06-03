@@ -17,6 +17,7 @@ Initialize-TuiHost
 
 # Cache Class GUID to Friendly Name registry mappings
 Write-Host "Caching system device classes..." -ForegroundColor Cyan
+$script:DeviceCheckRepoRoot = $PSScriptRoot
 $classMap = @{}
 $script:ActiveSearches = [ordered]@{}
 $script:EvidenceBatchQueue = [System.Collections.Generic.Queue[object]]::new()
@@ -356,6 +357,47 @@ $script:HardwareIdDatabaseCache = $null
 $script:HardwareIdResolutionDisplayCache = @{}
 $script:HardwareIdResolutionDetailCache = @{}
 
+function Test-HardwareIdCacheReady {
+    param(
+        [string]$CacheRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CacheRoot)) {
+        return $false
+    }
+
+    $normalizedRoot = Join-Path -Path $CacheRoot -ChildPath 'normalized'
+    foreach ($fileName in @('pci.json', 'usb.json', 'pnp.json')) {
+        $filePath = Join-Path -Path $normalizedRoot -ChildPath $fileName
+        if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Update-HardwareIdCacheIfMissing {
+    param(
+        [string]$CacheRoot
+    )
+
+    if (Test-HardwareIdCacheReady -CacheRoot $CacheRoot) {
+        return
+    }
+
+    $updateScriptPath = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\Update-HardwareIdDatabases.ps1'
+    if (-not (Test-Path -LiteralPath $updateScriptPath -PathType Leaf)) {
+        throw "Hardware ID cache is missing and updater was not found: $updateScriptPath"
+    }
+
+    $null = & $updateScriptPath -OutputRoot $CacheRoot -ErrorAction Stop *>&1
+
+    if (-not (Test-HardwareIdCacheReady -CacheRoot $CacheRoot)) {
+        throw "Hardware ID cache updater completed, but normalized cache files are still missing under: $CacheRoot"
+    }
+}
+
 function Initialize-HardwareIdResolver {
     if ($script:HardwareIdResolverState -ne 'NotLoaded') {
         return
@@ -373,6 +415,7 @@ function Initialize-HardwareIdResolver {
 
         Import-Module -Name $modulePath -Force -ErrorAction Stop
         $cacheRoot = Join-Path -Path $PSScriptRoot -ChildPath 'data\hwdb'
+        Update-HardwareIdCacheIfMissing -CacheRoot $cacheRoot
         $script:HardwareIdDatabaseCache = Import-HardwareIdDatabaseCache -CacheRoot $cacheRoot
         $script:HardwareIdResolverState = 'Ready'
     }
