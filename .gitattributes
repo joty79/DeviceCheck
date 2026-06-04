@@ -1,12 +1,20 @@
 * text=auto
 
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
 *.ps1 text eol=lf
 *.psm1 text eol=lf
 *.md text eol=lf
 *.csv text eol=lf
+*.ids text eol=lf
 *.json text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+
+source/hwdata/README text eol=lf
+source/hwdata/LICENSE text eol=lf
+source/hwdata/COPYING text eol=lf
 
 *.cmd text eol=crlf
 *.bat text eol=crlf

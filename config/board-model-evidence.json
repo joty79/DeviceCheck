@@ -1,0 +1,29 @@
+{
+  "SchemaVersion": 1,
+  "UpdatedOn": "2026-06-03",
+  "Purpose": "Read-only local evidence for exact board/marketing models that are not present in pci.ids subsystem rows.",
+  "Evidence": [
+    {
+      "Bus": "PCI",
+      "VendorId": "10DE",
+      "DeviceId": "2803",
+      "SubvendorId": "1462",
+      "SubdeviceId": "5174",
+      "Revision": "A1",
+      "ModelName": "MSI RTX 4060 Ti Ventus 2X Black OC 16 GB",
+      "Vendor": "MSI",
+      "Source": {
+        "Name": "User-confirmed desktop GPU and TechPowerUp GPU Database page",
+        "Type": "UserConfirmedExternalPage",
+        "Url": "https://www.techpowerup.com/gpu-specs/msi-rtx-4060-ti-ventus-2x-black-oc-16-gb.b11323"
+      },
+      "MatchedIds": [
+        "PCI\\VEN_10DE&DEV_2803&SUBSYS_51741462&REV_A1",
+        "10DE:2803:1462:5174"
+      ],
+      "Confidence": "UserConfirmedExactPciTuple",
+      "ConfidenceScore": 95,
+      "Notes": "This is exact local board-model evidence because the desktop owner supplied the full model and matching PCI tuple. Do not generalize it to other 10DE:2803 boards."
+    }
+  ]
+}

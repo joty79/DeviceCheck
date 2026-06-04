@@ -64,6 +64,7 @@ Reference URL from the user:
 
 ```text
 https://www.techpowerup.com/gpu-specs/msi-rtx-4060-ti-ventus-2x-black-oc.b11157
+https://www.techpowerup.com/gpu-specs/msi-rtx-4060-ti-ventus-2x-black-oc-16-gb.b11323
 ```
 
 Device Hardware ID from the desktop screenshot:
@@ -164,7 +165,7 @@ The laptop cannot visually verify the desktop GPU because it does not have that 
 
 ## Next Engineering Step After Desktop Smoke
 
-If the layered identity rows work, the next step is exact board-model enrichment.
+If the layered identity rows work, the next step is validating and extending exact board-model enrichment.
 
 Current local `pci.ids` is not enough to map:
 
@@ -206,5 +207,11 @@ Timestamp
 Notes
 ```
 
-Start with a local/manual evidence adapter or a TechPowerUp research adapter, but do not claim exact model unless the source maps the exact PCI tuple or provides strong evidence tied to the same board/subsystem.
+The first local/manual evidence adapter now exists in:
 
+```text
+config\board-model-evidence.json
+docs\GEMINI_NEXT_STEP_GPU_BOARD_MODEL_EVIDENCE.md
+```
+
+Do not claim exact model unless the source maps the exact PCI tuple, the user confirms the tuple/model pair, or a licensed/approved database adapter returns the same board/subsystem.

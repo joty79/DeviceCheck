@@ -4,4 +4,12 @@ driver-candidates/
 inf-matches/
 driver-evidence/
 driver-package-metadata/
-source/
+source/*
+!source/hwdata/
+source/hwdata/*
+!source/hwdata/pci.ids
+!source/hwdata/usb.ids
+!source/hwdata/pnp.ids
+!source/hwdata/README
+!source/hwdata/LICENSE
+!source/hwdata/COPYING

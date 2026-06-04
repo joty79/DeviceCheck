@@ -356,6 +356,9 @@ $script:HardwareIdResolverError = ''
 $script:HardwareIdDatabaseCache = $null
 $script:HardwareIdResolutionDisplayCache = @{}
 $script:HardwareIdResolutionDetailCache = @{}
+$script:BoardModelEvidenceState = 'NotLoaded'
+$script:BoardModelEvidenceError = ''
+$script:BoardModelEvidenceIndex = @{}
 
 function Test-HardwareIdCacheReady {
     param(
@@ -498,6 +501,36 @@ function Get-ShortHardwareVendorName {
     return $shortName.Trim()
 }
 
+
+function Get-FormattedHardwareVendorName {
+    param(
+        [AllowEmptyString()][string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return ''
+    }
+
+    $bracketName = ''
+    $baseName = $Name
+    if ($Name -match '^(.*?)\s*\[([^\]]+)\]\s*$') {
+        $baseName = $Matches[1]
+        $bracketName = $Matches[2].Trim()
+    }
+
+    $baseName = $baseName -replace '\s+Corporation$', ''
+    $baseName = $baseName -replace '\s+Co\.,?\s+Ltd\.?$', ''
+    $baseName = $baseName -replace ',.*$', ''
+    $baseName = $baseName.Trim()
+
+    if ($bracketName -and $bracketName -ne $baseName) {
+        return "$baseName / $bracketName"
+    }
+
+    return $baseName
+}
+
+
 function New-HardwareIdentityRow {
     param(
         [string]$Key,
@@ -512,6 +545,197 @@ function New-HardwareIdentityRow {
     }
 }
 
+function Normalize-HardwareEvidenceId {
+    param(
+        [AllowEmptyString()][string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    return (($Value -replace '^(?i:0x)', '').Trim()).ToUpperInvariant()
+}
+
+function Get-BoardModelEvidenceKey {
+    param(
+        [AllowEmptyString()][string]$Bus,
+        [AllowEmptyString()][string]$VendorId,
+        [AllowEmptyString()][string]$DeviceId,
+        [AllowEmptyString()][string]$ProductId,
+        [AllowEmptyString()][string]$SubvendorId,
+        [AllowEmptyString()][string]$SubdeviceId,
+        [AllowEmptyString()][string]$InterfaceId,
+        [AllowEmptyString()][string]$Revision
+    )
+
+    $keyParts = @(
+        (Normalize-HardwareEvidenceId -Value $Bus),
+        (Normalize-HardwareEvidenceId -Value $VendorId),
+        (Normalize-HardwareEvidenceId -Value $DeviceId),
+        (Normalize-HardwareEvidenceId -Value $ProductId),
+        (Normalize-HardwareEvidenceId -Value $SubvendorId),
+        (Normalize-HardwareEvidenceId -Value $SubdeviceId),
+        (Normalize-HardwareEvidenceId -Value $InterfaceId),
+        (Normalize-HardwareEvidenceId -Value $Revision)
+    )
+
+    return ($keyParts -join '|')
+}
+
+function Add-BoardModelEvidenceIndexEntry {
+    param(
+        [object]$Entry
+    )
+
+    $bus = [string](Get-NotePropertyValue -Object $Entry -Name 'Bus')
+    $vendorId = [string](Get-NotePropertyValue -Object $Entry -Name 'VendorId')
+    $deviceId = [string](Get-NotePropertyValue -Object $Entry -Name 'DeviceId')
+    $productId = [string](Get-NotePropertyValue -Object $Entry -Name 'ProductId')
+    $subvendorId = [string](Get-NotePropertyValue -Object $Entry -Name 'SubvendorId')
+    $subdeviceId = [string](Get-NotePropertyValue -Object $Entry -Name 'SubdeviceId')
+    $interfaceId = [string](Get-NotePropertyValue -Object $Entry -Name 'InterfaceId')
+    $revision = [string](Get-NotePropertyValue -Object $Entry -Name 'Revision')
+
+    $normalizedBus = (Normalize-HardwareEvidenceId -Value $bus)
+    $hasPciTuple = (
+        $normalizedBus -eq 'PCI' -and
+        -not [string]::IsNullOrWhiteSpace($vendorId) -and
+        -not [string]::IsNullOrWhiteSpace($deviceId) -and
+        -not [string]::IsNullOrWhiteSpace($subvendorId) -and
+        -not [string]::IsNullOrWhiteSpace($subdeviceId)
+    )
+    $hasUsbTuple = (
+        $normalizedBus -in @('USB', 'HID') -and
+        -not [string]::IsNullOrWhiteSpace($vendorId) -and
+        -not [string]::IsNullOrWhiteSpace($productId)
+    )
+
+    if (-not ($hasPciTuple -or $hasUsbTuple)) {
+        return
+    }
+
+    foreach ($entryInterfaceId in @($interfaceId, '')) {
+        foreach ($entryRevision in @($revision, '')) {
+            $key = Get-BoardModelEvidenceKey -Bus $bus -VendorId $vendorId -DeviceId $deviceId -ProductId $productId -SubvendorId $subvendorId -SubdeviceId $subdeviceId -InterfaceId $entryInterfaceId -Revision $entryRevision
+            if (-not [string]::IsNullOrWhiteSpace($key)) {
+                $script:BoardModelEvidenceIndex[$key] = $Entry
+            }
+        }
+    }
+}
+
+function Initialize-BoardModelEvidenceStore {
+    if ($script:BoardModelEvidenceState -ne 'NotLoaded') {
+        return
+    }
+
+    $script:BoardModelEvidenceState = 'Unavailable'
+    $script:BoardModelEvidenceError = ''
+    $script:BoardModelEvidenceIndex = @{}
+
+    $evidencePath = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'config\board-model-evidence.json'
+    if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+        $script:BoardModelEvidenceState = 'Ready'
+        return
+    }
+
+    try {
+        $payload = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($entry in @($payload.Evidence)) {
+            Add-BoardModelEvidenceIndexEntry -Entry $entry
+        }
+        $script:BoardModelEvidenceState = 'Ready'
+    }
+    catch {
+        $script:BoardModelEvidenceError = $_.Exception.Message
+        $script:BoardModelEvidenceState = 'Unavailable'
+    }
+}
+
+function Get-BoardModelEvidenceForResolution {
+    param(
+        [object]$Resolution
+    )
+
+    if ($script:BoardModelEvidenceState -ne 'Ready') {
+        return $null
+    }
+
+    $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
+    $bus = [string](Get-NotePropertyValue -Object $Resolution -Name 'Bus')
+    $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+    $deviceId = [string](Get-NotePropertyValue -Object $fields -Name 'DeviceId')
+    $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
+    $subvendorId = [string](Get-NotePropertyValue -Object $fields -Name 'SubvendorId')
+    $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
+    $interfaceId = [string](Get-NotePropertyValue -Object $fields -Name 'InterfaceId')
+    $revision = [string](Get-NotePropertyValue -Object $fields -Name 'Revision')
+
+    foreach ($candidateInterfaceId in @($interfaceId, '')) {
+        foreach ($candidateRevision in @($revision, '')) {
+            $key = Get-BoardModelEvidenceKey -Bus $bus -VendorId $vendorId -DeviceId $deviceId -ProductId $productId -SubvendorId $subvendorId -SubdeviceId $subdeviceId -InterfaceId $candidateInterfaceId -Revision $candidateRevision
+            if ($script:BoardModelEvidenceIndex.ContainsKey($key)) {
+                return $script:BoardModelEvidenceIndex[$key]
+            }
+        }
+    }
+
+    return $null
+}
+
+function Add-BoardModelEvidenceRows {
+    param(
+        [System.Collections.Generic.List[object]]$Rows,
+        [object]$Resolution
+    )
+
+    $evidence = Get-BoardModelEvidenceForResolution -Resolution $Resolution
+    if ($null -eq $evidence) {
+        return $false
+    }
+
+    $resolutionBus = [string](Get-NotePropertyValue -Object $Resolution -Name 'Bus')
+    $modelName = [string](Get-NotePropertyValue -Object $evidence -Name 'ModelName')
+    $modelKey = [string](Get-NotePropertyValue -Object $evidence -Name 'ModelKey')
+    $source = Get-NotePropertyValue -Object $evidence -Name 'Source'
+    $sourceName = [string](Get-NotePropertyValue -Object $source -Name 'Name')
+    $sourceType = [string](Get-NotePropertyValue -Object $source -Name 'Type')
+    $sourceUrl = [string](Get-NotePropertyValue -Object $source -Name 'Url')
+    $confidence = [string](Get-NotePropertyValue -Object $evidence -Name 'Confidence')
+    $confidenceScore = [string](Get-NotePropertyValue -Object $evidence -Name 'ConfidenceScore')
+    $sourceDisplay = if ($sourceType -eq 'UserConfirmedExternalPage' -and $sourceUrl -match 'techpowerup\.com') {
+        'User-confirmed + TechPowerUp GPU Database'
+    } else {
+        $sourceName
+    }
+    if ([string]::IsNullOrWhiteSpace($modelKey)) {
+        $modelKey = if ($resolutionBus -in @('USB', 'HID')) { 'Product Model' } else { 'Board Model' }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($modelName)) {
+        $Rows.Add((New-HardwareIdentityRow -Key $modelKey -Value $modelName -Color 'OK'))
+    }
+
+    $confidenceText = @(
+        $confidence
+        $(if (-not [string]::IsNullOrWhiteSpace($confidenceScore)) { "$confidenceScore/100" })
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($confidenceText).Count -gt 0) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Confidence' -Value ($confidenceText -join ' / ') -Color 'OK'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($sourceDisplay)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Source' -Value $sourceDisplay -Color 'White'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($sourceUrl)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'URL' -Value $sourceUrl -Color 'Info'))
+    }
+
+    return $true
+}
+
 function Get-HardwareResolutionDetailRows {
     param(
         [object]$Resolution
@@ -521,16 +745,47 @@ function Get-HardwareResolutionDetailRows {
     $lookup = Get-NotePropertyValue -Object $Resolution -Name 'Lookup'
     $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
     $bus = [string](Get-NotePropertyValue -Object $Resolution -Name 'Bus')
-    $localId = Get-HardwareResolutionDisplayText -Resolution $Resolution
-    if (-not [string]::IsNullOrWhiteSpace($localId)) {
-        $rows.Add((New-HardwareIdentityRow -Key 'Local ID' -Value $localId -Color 'Info'))
+    $confidence = [string](Get-NotePropertyValue -Object $Resolution -Name 'Confidence')
+    $sourceName = [string](Get-NotePropertyValue -Object $lookup -Name 'Source')
+    $matchParts = @($bus, $confidence, $sourceName) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($matchParts).Count -gt 0) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Local Match' -Value ($matchParts -join ' / ') -Color 'Info'))
     }
 
     if ($bus -ne 'PCI') {
+        $hasEvidence = Add-BoardModelEvidenceRows -Rows $rows -Resolution $Resolution
+        if (-not $hasEvidence -and $bus -in @('USB', 'HID')) {
+            $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+            $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
+            $interfaceId = [string](Get-NotePropertyValue -Object $fields -Name 'InterfaceId')
+            $productName = [string](Get-NotePropertyValue -Object $lookup -Name 'ProductName')
+            $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+            $busPrefix = if ($bus -eq 'HID') { 'HID' } else { 'USB' }
+            $tupleHint = ''
+            if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) {
+                $tupleHint = "$busPrefix\VID_$vendorId&PID_$productId"
+                if (-not [string]::IsNullOrWhiteSpace($interfaceId)) {
+                    $tupleHint = "$tupleHint&MI_$interfaceId"
+                }
+            }
+            $searchParts = @(
+                $tupleHint
+                (Get-ShortHardwareVendorName -Name $vendorName)
+                $productName
+                $vendorId
+                $productId
+                $(if (-not [string]::IsNullOrWhiteSpace($interfaceId)) { "MI_$interfaceId" })
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            if ([string]::IsNullOrWhiteSpace($productName)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'No exact product model in local usb.ids' -Color 'Dim'))
+            }
+            if (@($searchParts).Count -gt 0) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
+            }
+        }
         return @($rows)
     }
 
-    $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
     $deviceName = [string](Get-NotePropertyValue -Object $lookup -Name 'DeviceName')
     $subsystemName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubsystemName')
     $subvendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubvendorName')
@@ -539,43 +794,26 @@ function Get-HardwareResolutionDetailRows {
     $subvendorId = [string](Get-NotePropertyValue -Object $fields -Name 'SubvendorId')
     $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
 
-    if (-not [string]::IsNullOrWhiteSpace($vendorName) -or -not [string]::IsNullOrWhiteSpace($deviceName)) {
-        $chipParts = @($vendorName, $deviceName) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        $rows.Add((New-HardwareIdentityRow -Key 'Chip' -Value ($chipParts -join ' / ') -Color 'White'))
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
-        $rows.Add((New-HardwareIdentityRow -Key 'Board Vendor' -Value $subvendorName -Color 'White'))
-    }
-
-    $boardIdParts = @()
-    if (-not [string]::IsNullOrWhiteSpace($subdeviceId)) {
-        $boardIdParts += "subdevice $subdeviceId"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($subvendorId)) {
-        $boardIdParts += "subvendor $subvendorId"
-    }
-    if ($boardIdParts.Count -gt 0) {
-        $rows.Add((New-HardwareIdentityRow -Key 'Board IDs' -Value ($boardIdParts -join ' / ') -Color 'Info'))
-    }
-
     if (-not [string]::IsNullOrWhiteSpace($subsystemName)) {
         $rows.Add((New-HardwareIdentityRow -Key 'Exact Model' -Value $subsystemName -Color 'OK'))
     }
-    elseif (-not [string]::IsNullOrWhiteSpace($subvendorName) -or -not [string]::IsNullOrWhiteSpace($subdeviceId)) {
-        $rows.Add((New-HardwareIdentityRow -Key 'Exact Model' -Value 'Not in local pci.ids subsystem table' -Color 'Dim'))
+
+    $hasBoardEvidence = Add-BoardModelEvidenceRows -Rows $rows -Resolution $Resolution
+
+    if (-not $hasBoardEvidence -and [string]::IsNullOrWhiteSpace($subsystemName) -and
+        (-not [string]::IsNullOrWhiteSpace($subvendorName) -or -not [string]::IsNullOrWhiteSpace($subdeviceId))) {
+        $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'No exact board model in local pci.ids' -Color 'Dim'))
     }
 
     $searchParts = @(
         (Get-ShortHardwareVendorName -Name $subvendorName)
-        (Get-ShortHardwareVendorName -Name $vendorName)
         $deviceName
         $subdeviceId
         $subvendorId
         $deviceId
         $vendorId
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if (@($searchParts).Count -gt 0) {
+    if (-not $hasBoardEvidence -and [string]::IsNullOrWhiteSpace($subsystemName) -and @($searchParts).Count -gt 0) {
         $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
     }
 
@@ -704,10 +942,8 @@ function Get-LocalHardwareIdentityRows {
                 }
             }
 
-            $localIdCount = @($rows | Where-Object { $_.Key -eq 'Local ID' }).Count
-            if ($localIdCount -ge $MaxCount) {
-                break
-            }
+            # Stop after the first successfully resolved hardware ID to avoid duplicate and overlapping rows
+            break
         }
     }
     catch {
@@ -1042,6 +1278,170 @@ function Add-WrappedPathLine {
         $Lines.Add("$indent$($_C.White)$clickableChunk$($_C.Reset)")
     }
 }
+
+
+function Get-HardwareIdBreakdownLines {
+    param(
+        [string]$HardwareId,
+        [int]$Width
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($HardwareId) -or $script:HardwareIdResolverState -ne 'Ready') {
+        return @()
+    }
+
+    try {
+        $resolutions = @(Resolve-HardwareId -HardwareId $HardwareId -Cache $script:HardwareIdDatabaseCache)
+        if ($resolutions.Count -eq 0) {
+            return @()
+        }
+
+        $res = $resolutions[0]
+        $pad = ' ' * 17
+        $valueWidth = [Math]::Max(8, $Width - 35)
+
+        if ($res.Bus -eq 'PCI') {
+            $vendorId = $res.Fields.VendorId
+            $deviceId = $res.Fields.DeviceId
+            $subsysRaw = $res.Fields.SubsystemRaw
+            $subvendorId = $res.Fields.SubvendorId
+            $subdeviceId = $res.Fields.SubdeviceId
+            $revision = $res.Fields.Revision
+
+            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' }
+            $deviceName = if ($res.Lookup.DeviceName) { $res.Lookup.DeviceName } else { 'Unknown Device' }
+            $subvendorName = if ($res.Lookup.SubvendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.SubvendorName } else { '' }
+            $subsystemName = if ($res.Lookup.SubsystemName) { $res.Lookup.SubsystemName } else { '' }
+
+            # 1. VEN
+            $venText = "VEN_$vendorId"
+            $venVal = Format-UiValue -Text $vendorName -MaxLength $valueWidth
+            $venLine = "{0,-15} = {1}" -f $venText, $venVal
+            $lines.Add("$pad$($_C.Dim)$($venLine)$($_C.Reset)")
+
+            # 2. DEV
+            $devText = "DEV_$deviceId"
+            $devVal = Format-UiValue -Text $deviceName -MaxLength $valueWidth
+            $devLine = "{0,-15} = {1}" -f $devText, $devVal
+            $lines.Add("$pad$($_C.White)$($devLine)$($_C.Reset)")
+
+            # 3. SUBSYS (if present)
+            if (-not [string]::IsNullOrWhiteSpace($subsysRaw)) {
+                $subvendorShort = Get-ShortHardwareVendorName -Name $subvendorName
+                $subsysDesc = if (-not [string]::IsNullOrWhiteSpace($subsystemName)) {
+                    $subsystemName
+                } elseif (-not [string]::IsNullOrWhiteSpace($subvendorShort)) {
+                    "$subvendorShort board-specific model"
+                } else {
+                    "board-specific model"
+                }
+
+                $subsysText = "SUBSYS_$subsysRaw"
+                $subsysVal = Format-UiValue -Text $subsysDesc -MaxLength $valueWidth
+                $subsysLine = "{0,-15} = {1}" -f $subsysText, $subsysVal
+                $lines.Add("$pad$($_C.Info)$($subsysLine)$($_C.Reset)")
+
+                # Subdevice ID
+                $subdevDesc = "subsystem / board ID"
+                $subdevLine = "   {0,-12} = {1}" -f $subdeviceId, $subdevDesc
+                $lines.Add("$pad$($_C.Dim)$($subdevLine)$($_C.Reset)")
+
+                # Subvendor ID
+                $subvendorDesc = if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+                    "subvendor = $subvendorName"
+                } else {
+                    "subvendor"
+                }
+                $subvendorVal = Format-UiValue -Text $subvendorDesc -MaxLength ($valueWidth - 3)
+                $subvendorLine = "   {0,-12} = {1}" -f $subvendorId, $subvendorVal
+                $lines.Add("$pad$($_C.Dim)$($subvendorLine)$($_C.Reset)")
+            }
+
+            # 4. REV (if present)
+            if (-not [string]::IsNullOrWhiteSpace($revision)) {
+                $revText = "REV_$revision"
+                $revLine = "{0,-15} = {1}" -f $revText, "hardware rev"
+                $lines.Add("$pad$($_C.Dim)$($revLine)$($_C.Reset)")
+            }
+        }
+        elseif ($res.Bus -in @('USB', 'HID')) {
+            $vendorId = $res.Fields.VendorId
+            $productId = $res.Fields.ProductId
+            $interfaceId = $res.Fields.InterfaceId
+            $revision = $res.Fields.Revision
+            $evidence = Get-BoardModelEvidenceForResolution -Resolution $res
+
+            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' }
+            $productName = if ($res.Lookup.ProductName) {
+                $res.Lookup.ProductName
+            } elseif ($null -ne $evidence) {
+                [string](Get-NotePropertyValue -Object $evidence -Name 'ModelName')
+            } else {
+                'Unknown Product'
+            }
+            $interfaceName = if ($res.Lookup.InterfaceName) {
+                $res.Lookup.InterfaceName
+            } elseif ($null -ne $evidence) {
+                [string](Get-NotePropertyValue -Object $evidence -Name 'InterfaceName')
+            } else {
+                ''
+            }
+
+            # 1. VID
+            $vidText = "VID_$vendorId"
+            $vidVal = Format-UiValue -Text $vendorName -MaxLength $valueWidth
+            $vidLine = "{0,-15} = {1}" -f $vidText, $vidVal
+            $lines.Add("$pad$($_C.Dim)$($vidLine)$($_C.Reset)")
+
+            # 2. PID
+            $pidText = "PID_$productId"
+            $pidVal = Format-UiValue -Text $productName -MaxLength $valueWidth
+            $pidLine = "{0,-15} = {1}" -f $pidText, $pidVal
+            $lines.Add("$pad$($_C.White)$($pidLine)$($_C.Reset)")
+
+            # 3. MI (if present)
+            if (-not [string]::IsNullOrWhiteSpace($interfaceId)) {
+                $miText = "MI_$interfaceId"
+                $miVal = if ($interfaceName) { $interfaceName } else { "interface" }
+                $miLine = "{0,-15} = {1}" -f $miText, (Format-UiValue -Text $miVal -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($miLine)$($_C.Reset)")
+            }
+
+            # 4. REV (if present)
+            if (-not [string]::IsNullOrWhiteSpace($revision)) {
+                $revText = "REV_$revision"
+                $revLine = "{0,-15} = {1}" -f $revText, "revision"
+                $lines.Add("$pad$($_C.Dim)$($revLine)$($_C.Reset)")
+            }
+        }
+        elseif ($res.Bus -in @('ACPI', 'PNP')) {
+            $vendorId = $res.Fields.VendorId
+            $deviceId = $res.Fields.DeviceId
+            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' }
+            $deviceName = if ($res.Lookup.DeviceName) { $res.Lookup.DeviceName } else { '' }
+
+            # 1. VEN
+            $venText = "VEN_$vendorId"
+            $venVal = Format-UiValue -Text $vendorName -MaxLength $valueWidth
+            $venLine = "{0,-15} = {1}" -f $venText, $venVal
+            $lines.Add("$pad$($_C.Dim)$($venLine)$($_C.Reset)")
+
+            # 2. DEV
+            $devText = "DEV_$deviceId"
+            $devVal = if ($deviceName) { $deviceName } else { "device code" }
+            $devLine = "{0,-15} = {1}" -f $devText, (Format-UiValue -Text $devVal -MaxLength $valueWidth)
+            $lines.Add("$pad$($_C.White)$($devLine)$($_C.Reset)")
+        }
+    }
+    catch {
+        # Silent fail
+    }
+
+    return @($lines)
+}
+
+
 
 
 function Get-CompactSystemStatus {
@@ -1621,6 +2021,9 @@ function Get-DetailDisplayLines {
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
                 $lines.Add((New-KeyValueLine -Key 'HardwareId' -Value $firstHardwareId -Width $Width))
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width $Width)) {
+                    $lines.Add($breakdownLine)
+                }
             }
 
             $manufacturer = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer'
@@ -2060,6 +2463,9 @@ function Render-FrameLegacy {
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
                 Write-Host "  $($_C.Dim)HardwareId   :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstHardwareId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width (Get-UiWidth))) {
+                    Write-Host "$breakdownLine$($_C.EraseLn)"
+                }
             }
 
             $manufacturer = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer'
@@ -2205,9 +2611,19 @@ function Render-Frame {
     }
 
     if ($useDualPane) {
-        $leftTitle = New-SectionLine -Title 'Device Connection Tree' -Width $leftWidth
-        $rightTitle = New-SectionLine -Title 'Selected Details' -Width $rightWidth
-        Write-Host "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) │ $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
+        $leftTitleColor = if ($script:ActivePane -eq 'Tree') { $_C.H1 } else { $_C.Dim }
+        $rightTitleColor = if ($script:ActivePane -eq 'Detail') { $_C.H1 } else { $_C.Dim }
+        $leftIndicator = if ($script:ActivePane -eq 'Tree') { "$([char]0x25C6) " } else { '  ' }
+        $rightIndicator = if ($script:ActivePane -eq 'Detail') { "$([char]0x25C6) " } else { '  ' }
+        $leftTitleText = "${leftIndicator}Device Connection Tree"
+        $rightTitleText = "${rightIndicator}Selected Details"
+        $leftPrefix = " $leftTitleText "
+        $leftLine = [string]::new([char]0x2500, [Math]::Max(0, $leftWidth - $leftPrefix.Length))
+        $leftTitle = "$leftTitleColor$leftPrefix$($_C.Dim)$leftLine$($_C.Reset)"
+        $rightPrefix = " $rightTitleText "
+        $rightLine = [string]::new([char]0x2500, [Math]::Max(0, $rightWidth - $rightPrefix.Length))
+        $rightTitle = "$rightTitleColor$rightPrefix$($_C.Dim)$rightLine$($_C.Reset)"
+        Write-Host "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
 
         $treeLines = [System.Collections.Generic.List[string]]::new()
         $aboveCount = $viewTop
@@ -2223,17 +2639,77 @@ function Render-Frame {
         $belowMessage = if ($belowCount -gt 0) { "$([char]0x2193) $belowCount more below" } else { '' }
         $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)")
 
-        $detailLines = if ($null -ne $selectedRow) {
-            Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines $treeLines.Count
+        # Generate all detail lines (generous MaxLines for scrolling)
+        $detailMaxLines = [Math]::Max($treeLines.Count, 200)
+        $allDetailLines = if ($null -ne $selectedRow) {
+            @(Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines $detailMaxLines)
         } else {
             @((New-SectionLine -Title 'Selected Details' -Width $rightWidth))
         }
+        # Trim trailing empty lines to get true content count
+        $detailContentCount = $allDetailLines.Count
+        while ($detailContentCount -gt 0 -and [string]::IsNullOrWhiteSpace($allDetailLines[$detailContentCount - 1])) {
+            $detailContentCount--
+        }
+        $script:LastDetailLineCount = $detailContentCount
 
-        $lineCount = [Math]::Max($treeLines.Count, $detailLines.Count)
+        # Clamp cursor within content bounds
+        if ($script:DetailCursorIndex -ge $detailContentCount) {
+            $script:DetailCursorIndex = [Math]::Max(0, $detailContentCount - 1)
+        }
+
+        # Auto-scroll viewport to keep cursor visible
+        $detailViewSize = $treeLines.Count
+        $maxDetailScroll = [Math]::Max(0, $detailContentCount - $detailViewSize)
+        # Ensure cursor is within visible slice
+        if ($script:DetailCursorIndex -lt $script:DetailScrollOffset) {
+            $script:DetailScrollOffset = $script:DetailCursorIndex
+        } elseif ($script:DetailCursorIndex -ge ($script:DetailScrollOffset + $detailViewSize)) {
+            $script:DetailScrollOffset = $script:DetailCursorIndex - $detailViewSize + 1
+        }
+        if ($script:DetailScrollOffset -gt $maxDetailScroll) {
+            $script:DetailScrollOffset = $maxDetailScroll
+        }
+        if ($script:DetailScrollOffset -lt 0) {
+            $script:DetailScrollOffset = 0
+        }
+
+        # Slice visible detail lines
+        $detailSlice = @()
+        if ($allDetailLines.Count -gt 0) {
+            $sliceEnd = [Math]::Min($script:DetailScrollOffset + $detailViewSize - 1, $allDetailLines.Count - 1)
+            $detailSlice = @($allDetailLines[$script:DetailScrollOffset..$sliceEnd])
+        }
+
+        # Apply cursor highlight when detail pane is focused
+        if ($script:ActivePane -eq 'Detail' -and $detailSlice.Count -gt 0) {
+            $cursorInSlice = $script:DetailCursorIndex - $script:DetailScrollOffset
+            if ($cursorInSlice -ge 0 -and $cursorInSlice -lt $detailSlice.Count) {
+                $detailSlice[$cursorInSlice] = New-SelectedLine -Text $detailSlice[$cursorInSlice] -Width $rightWidth
+            }
+        }
+
+        # Add detail scroll indicators
+        if ($script:DetailScrollOffset -gt 0 -and $detailSlice.Count -gt 0) {
+            # Only show if the cursor is not on the first visible line
+            $cursorInSlice = $script:DetailCursorIndex - $script:DetailScrollOffset
+            if ($cursorInSlice -ne 0) {
+                $detailSlice[0] = "$($_C.Dim)$(Format-PlainToWidth -Text "$([char]0x2191) $($script:DetailScrollOffset) more above" -Width $rightWidth)$($_C.Reset)"
+            }
+        }
+        if ($script:DetailScrollOffset -lt $maxDetailScroll -and $detailSlice.Count -gt 1) {
+            $cursorInSlice = $script:DetailCursorIndex - $script:DetailScrollOffset
+            if ($cursorInSlice -ne ($detailSlice.Count - 1)) {
+                $belowDetailCount = $detailContentCount - $script:DetailScrollOffset - $detailViewSize
+                $detailSlice[$detailSlice.Count - 1] = "$($_C.Dim)$(Format-PlainToWidth -Text "$([char]0x2193) $belowDetailCount more below" -Width $rightWidth)$($_C.Reset)"
+            }
+        }
+
+        $lineCount = [Math]::Max($treeLines.Count, $detailSlice.Count)
         for ($i = 0; $i -lt $lineCount; $i++) {
             $leftLine = if ($i -lt $treeLines.Count) { $treeLines[$i] } else { '' }
-            $rightLine = if ($i -lt $detailLines.Count) { $detailLines[$i] } else { '' }
-            Write-Host "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) │ $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
+            $rightLine = if ($i -lt $detailSlice.Count) { $detailSlice[$i] } else { '' }
+            Write-Host "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
         }
     } else {
         Write-UiSection -Title 'Device Connection Tree'
@@ -2262,6 +2738,8 @@ function Render-Frame {
     $segments = @(
         New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text "$([char]0x2190)$([char]0x2192)" -Color $_C.White
+        New-UiShortcutSegment -Text ' pane   ' -Color $_C.Dim
         New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'R' -Color $_C.Info
@@ -2293,6 +2771,9 @@ function Invoke-SystemScanWithFeedback {
 
     Invoke-SystemScan -Quiet:$Quiet
     $script:selectedIndex = 0
+    $script:DetailScrollOffset = 0
+    $script:DetailCursorIndex = 0
+    $script:ActivePane = 'Tree'
     $script:visibleRows = Update-VisibleRows
 }
 
@@ -3497,6 +3978,7 @@ function Read-ConsoleKey {
 # Initial categories detection
 Write-Host 'Loading local hardware ID cache...' -ForegroundColor DarkCyan
 Initialize-HardwareIdResolver
+Initialize-BoardModelEvidenceStore
 if ($script:HardwareIdResolverState -eq 'Ready') {
     Write-Host 'Local hardware ID cache ready.' -ForegroundColor DarkCyan
 } elseif (-not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
@@ -3504,8 +3986,15 @@ if ($script:HardwareIdResolverState -eq 'Ready') {
 } else {
     Write-Host 'Local hardware ID cache unavailable.' -ForegroundColor Yellow
 }
+if ($script:BoardModelEvidenceState -eq 'Unavailable' -and -not [string]::IsNullOrWhiteSpace($script:BoardModelEvidenceError)) {
+    Write-Host "Board model evidence unavailable: $($script:BoardModelEvidenceError)" -ForegroundColor Yellow
+}
 Invoke-SystemScan
 $selectedIndex = 0
+$script:ActivePane = 'Tree'
+$script:DetailScrollOffset = 0
+$script:DetailCursorIndex = 0
+$script:LastDetailLineCount = 0
 $running = $true
 
 try {
@@ -3538,56 +4027,93 @@ try {
         }
         switch ($key.Key) {
             'UpArrow' {
-                if ($selectedIndex -gt 0) {
-                    $idx = $selectedIndex - 1
-                    while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Root', 'Category', 'Device', 'Result')) {
-                        $idx--
+                if ($script:ActivePane -eq 'Detail') {
+                    $script:DetailCursorIndex = [Math]::Max(0, $script:DetailCursorIndex - 1)
+                } else {
+                    if ($selectedIndex -gt 0) {
+                        $idx = $selectedIndex - 1
+                        while ($idx -gt 0 -and $visibleRows[$idx].Type -notin @('Root', 'Category', 'Device', 'Result')) {
+                            $idx--
+                        }
+                        if ($visibleRows[$idx].Type -in @('Root', 'Category', 'Device', 'Result')) {
+                            $selectedIndex = $idx
+                        }
                     }
-                    if ($visibleRows[$idx].Type -in @('Root', 'Category', 'Device', 'Result')) {
-                        $selectedIndex = $idx
-                    }
+                    $script:DetailScrollOffset = 0
+                    $script:DetailCursorIndex = 0
                 }
             }
             'DownArrow' {
-                if ($selectedIndex -lt ($visibleRows.Count - 1)) {
-                    $idx = $selectedIndex + 1
-                    while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Root', 'Category', 'Device', 'Result')) {
-                        $idx++
+                if ($script:ActivePane -eq 'Detail') {
+                    $maxCursor = [Math]::Max(0, $script:LastDetailLineCount - 1)
+                    $script:DetailCursorIndex = [Math]::Min($maxCursor, $script:DetailCursorIndex + 1)
+                } else {
+                    if ($selectedIndex -lt ($visibleRows.Count - 1)) {
+                        $idx = $selectedIndex + 1
+                        while ($idx -lt ($visibleRows.Count - 1) -and $visibleRows[$idx].Type -notin @('Root', 'Category', 'Device', 'Result')) {
+                            $idx++
+                        }
+                        if ($visibleRows[$idx].Type -in @('Root', 'Category', 'Device', 'Result')) {
+                            $selectedIndex = $idx
+                        }
                     }
-                    if ($visibleRows[$idx].Type -in @('Root', 'Category', 'Device', 'Result')) {
-                        $selectedIndex = $idx
-                    }
+                    $script:DetailScrollOffset = 0
+                    $script:DetailCursorIndex = 0
                 }
             }
             'PageUp' {
-                $selectedIndex = [Math]::Max(0, $selectedIndex - 10)
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
-                    $selectedIndex--
+                if ($script:ActivePane -eq 'Detail') {
+                    $script:DetailCursorIndex = [Math]::Max(0, $script:DetailCursorIndex - 10)
+                } else {
+                    $selectedIndex = [Math]::Max(0, $selectedIndex - 10)
+                    while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
+                        $selectedIndex--
+                    }
+                    $script:DetailScrollOffset = 0
+                    $script:DetailCursorIndex = 0
                 }
             }
             'PageDown' {
-                $selectedIndex = [Math]::Min($visibleRows.Count - 1, $selectedIndex + 10)
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
-                    $selectedIndex--
+                if ($script:ActivePane -eq 'Detail') {
+                    $maxCursor = [Math]::Max(0, $script:LastDetailLineCount - 1)
+                    $script:DetailCursorIndex = [Math]::Min($maxCursor, $script:DetailCursorIndex + 10)
+                } else {
+                    $selectedIndex = [Math]::Min($visibleRows.Count - 1, $selectedIndex + 10)
+                    while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
+                        $selectedIndex--
+                    }
+                    $script:DetailScrollOffset = 0
+                    $script:DetailCursorIndex = 0
                 }
             }
             'Home' {
-                $selectedIndex = 0
+                if ($script:ActivePane -eq 'Detail') {
+                    $script:DetailCursorIndex = 0
+                    $script:DetailScrollOffset = 0
+                } else {
+                    $selectedIndex = 0
+                    $script:DetailScrollOffset = 0
+                    $script:DetailCursorIndex = 0
+                }
             }
             'End' {
-                $selectedIndex = $visibleRows.Count - 1
-                while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
-                    $selectedIndex--
+                if ($script:ActivePane -eq 'Detail') {
+                    $script:DetailCursorIndex = [Math]::Max(0, $script:LastDetailLineCount - 1)
+                } else {
+                    $selectedIndex = $visibleRows.Count - 1
+                    while ($selectedIndex -gt 0 -and $visibleRows[$selectedIndex].Type -notin @('Root', 'Category', 'Device', 'Result')) {
+                        $selectedIndex--
+                    }
+                    $script:DetailScrollOffset = 0
+                    $script:DetailCursorIndex = 0
                 }
             }
             'RightArrow' {
-                $currentRow = $visibleRows[$selectedIndex]
-                Expand-SelectedNode -Row $currentRow
+                $script:ActivePane = 'Detail'
             }
             'LeftArrow' {
-                $currentRow = $visibleRows[$selectedIndex]
-                Collapse-SelectedNode -Row $currentRow
-                $selectedIndex = $script:selectedIndex
+                $script:ActivePane = 'Tree'
+                $script:DetailScrollOffset = 0
             }
             'Add' {
                 $currentRow = $visibleRows[$selectedIndex]
