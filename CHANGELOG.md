@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added dual-pane keyboard navigation: Left/Right arrow keys now switch focus between the Device Connection Tree (left) and Selected Details (right) panes. When the Detail pane is focused, Up/Down/PageUp/PageDown/Home/End scroll the detail content instead of navigating the tree. The active pane is visually indicated with a highlighted section header and diamond icon. Left/Right arrows no longer perform expand/collapse (use `+`/`-` keys instead).
 - Migrated the audit-only hardware ID and driver-research engine prototype into `DeviceCheck\internal` from the accidental sibling `drivercheck` work.
 - Added offline hardware ID cache tooling: `internal\Update-HardwareIdDatabases.ps1`, `internal\HardwareIdResolver.psm1`, and `internal\Resolve-HardwareIds.ps1`.
 - Added local audit-only driver research tooling: device inventory report, candidate search-link report, installed INF matching, evidence bundle, readable evidence view, package metadata gate, and adapter collection plan.
@@ -17,16 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added optional candidate `Recommendation` metadata fields for version comparison, trust level/score/factors, and candidate flags inspired by the local OpenDriverUpdater source audit.
 - Added read-only board-model evidence support through `config\board-model-evidence.json`, seeded with the user-confirmed MSI RTX 4060 Ti Ventus 2X Black OC 16 GB exact PCI tuple.
 - Added `docs\GEMINI_NEXT_STEP_GPU_BOARD_MODEL_EVIDENCE.md` with the next verification and enrichment steps for Gemini.
+- Added `docs\GEMINI_NEXT_STEP_USB_AUDIO_IDENTITY.md` documenting the non-hardcoded Realtek USB Audio identity path for `USB\VID_0DB0&PID_CD0E&MI_00`.
+- Added the ChatGPT/Gemini research PDFs and `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md` as the laptop-ready roadmap for the local evidence database, source provenance, confidence model, and regression harness.
 
 ### Changed
+- Updated PCI/USB/ACPI/PNP Hardware ID rendering in the details pane (both dual-pane and stacked modes) to display a detailed, structured breakdown of the hardware ID components (VEN, DEV, SUBSYS subvendor/subdevice, REV, VID, PID, MI) mapped against resolved database names.
+- Refined `Local Hardware Identity` into a compact evidence summary: it now keeps local match confidence/source and exact board-model evidence, while avoiding repeated chip/vendor/board-ID rows already explained by the Hardware ID breakdown.
+- Added `Get-FormattedHardwareVendorName` helper to clean up manufacturer/vendor names (e.g. converting `Micro-Star International Co., Ltd. [MSI]` to `Micro-Star International / MSI` and stripping `Corporation`/`Co., Ltd.`).
 - Expanded selected-device cached evidence in the TUI with a readable `Installed Driver` section for provider, version, date, INF, INF section, service, driver key, driver name, and manufacturer when those fields are available.
 - Updated the local evidence pipeline so pressing `E` marks selected-device evidence as cached as soon as the evidence output arrives, allowing the details pane to refresh immediately without moving the selection.
 - Improved PCI Hardware ID resolution when exact `SUBSYS` model data is missing: DeviceCheck now resolves the subsystem vendor from the PCI vendor table and shows chip, board vendor, board IDs, exact-model availability, and a search hint in local identity summaries.
 - Made local Hardware ID cache startup self-healing: if generated `data\hwdb` files are missing but `source\hwdata` is present, DeviceCheck builds the cache automatically before the TUI starts.
 - Changed `.gitignore` so runtime-critical `source\hwdata` ID and license/readme files can be tracked while generated caches and cloned study repos remain ignored.
 - Display board-model evidence rows in the selected-device details pane when a local evidence entry exactly matches the PCI tuple.
+- Improved USB vendor-only fallbacks so missing-product `usb.ids` matches produce a fuller search hint with the complete `USB\VID_*&PID_*&MI_*` tuple, without claiming an exact codec/product model.
 
 ### Fixed
+- Deduplicated `Local ID` and `Search Hint` rows in the details pane by stopping the candidate resolution loop after the first successful match (most specific Hardware ID).
 - Prevented first-selection TUI lag/black frames by preloading the local Hardware ID resolver/cache at startup and keeping cache/database load work out of the selected-device details render path.
 
 ### Documented
@@ -34,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented the first read-only TUI integration for local Hardware ID resolution.
 - Added `docs\HARDWARE_SOURCE_INTAKE.md` and `docs\GEMINI_NEXT_STEP_DRIVER_PACKAGE_ADAPTERS.md` for source strategy and continuation handoff.
 - Added `docs\LOCAL_SOURCE_PROJECT_AUDIT.md` to record what should and should not transfer from local OpenDriverUpdater and wininfparser sources.
+- Documented the local hardware identity database roadmap in `README.md`.
 
 ## [0.2.0] - 2026-05-31
 

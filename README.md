@@ -108,6 +108,7 @@ pwsh -ExecutionPolicy Bypass -File .\internal\Test-DriverCandidatePackageMetadat
 
 Generated folders such as `data\hwdb`, `devices`, `driver-candidates`, `inf-matches`, `driver-evidence`, and `driver-package-metadata` are ignored by Git.
 The adopted `source\hwdata\pci.ids`, `usb.ids`, `pnp.ids`, and license/readme files are tracked because they are the source input for rebuilding the generated cache; cloned study repos under `source\` remain ignored.
+The local evidence database roadmap lives in `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md`, backed by the two research PDFs in `docs\`.
 
 ---
 

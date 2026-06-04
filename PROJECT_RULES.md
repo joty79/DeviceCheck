@@ -56,6 +56,27 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-04
+Problem: ChatGPT/Gemini deep-research PDFs defined a broad local evidence database architecture, but the repo needed a practical laptop-ready implementation plan and the research files had to be preserved in Git.
+Root cause: The research output was PDF-only and too broad to execute directly; without a repo-local plan, future laptop work could jump straight into ad hoc mappings or parser work without schemas, provenance, or harness guardrails.
+Guardrail/rule: Treat `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md` as the current roadmap for the local hardware identity database. Implement schema/harness/source-provenance work before broad enrichment sources. Keep the Realtek `USB\VID_0DB0&PID_CD0E&MI_00` case as a regression fixture proving incomplete `usb.ids` behavior, not as a hardcoded single-device feature.
+Files affected: `docs\DeviceCheck_ Local Hardware Identity Design.pdf`, `docs\Designing a Reliable Local Digital Evidence Architecture.pdf`, `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\HardwareIdResolver.psm1`, `internal\Resolve-HardwareIds.ps1`, and `internal\Update-HardwareIdDatabases.ps1`; JSON validation for `config\board-model-evidence.json` and `config\hardware-sources.json`; resolver smoke for `USB\VID_0DB0&PID_CD0E&REV_0005&MI_00` confirmed `VENDOR-ONLY`; PDF/plain-text extraction smoke read both research PDFs; `git diff --check`.
+
+Date: 2026-06-04
+Problem: `USB\VID_0DB0&PID_CD0E&MI_00` belongs to the desktop Realtek USB Audio path, and a chat answer claimed that upstream `usb.ids` contains `cd0e  USB Audio [Realtek ALC4080]`.
+Root cause: Local and current upstream `usb.ids` sources only resolve `VID_0DB0` to Micro Star International and do not contain `PID_CD0E`; the exact `ALC4080` identity comes from correlating local motherboard evidence (`MAG X870 TOMAHAWK WIFI`) with MSI official specifications, not from the USB ID database or installed INF alone.
+Guardrail/rule: Do not hardcode USB PID-to-codec mappings from chat/web claims. Verify local `source\hwdata\usb.ids`, generated `data\hwdb`, direct upstream `linux-usb.org/usb.ids`, hwdata raw, and usbids raw before treating a USB product name as database truth. If the exact codec comes from motherboard/OEM spec correlation, label it as derived/spec inference with source and confidence, not as `usb.ids` product identity.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `docs\GEMINI_NEXT_STEP_USB_AUDIO_IDENTITY.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\HardwareIdResolver.psm1`, `internal\Resolve-HardwareIds.ps1`, and `internal\Update-HardwareIdDatabases.ps1`; JSON validation for `config\board-model-evidence.json` and `config\hardware-sources.json`; resolver smoke for `USB\VID_0DB0&PID_CD0E&REV_0005&MI_00` confirmed `VENDOR-ONLY` with empty `ProductName`; direct upstream checks against hwdata raw, `linux-usb.org/usb.ids`, and `usbids/usb.ids` found no `cd0e` product row; `git diff --check`.
+
+Date: 2026-06-04
+Problem: After the new structured `HardwareId` breakdown, the `Local Hardware Identity` section repeated the same facts as separate `Chip`, `Board Vendor`, `Board IDs`, `Exact Model`, and `Search Hint` rows, making the details pane noisy.
+Root cause: The older local identity section was designed before the device-property breakdown existed, so it carried both parsed-ID explanation and evidence summary responsibilities.
+Guardrail/rule: Keep parsed ID anatomy in `Device Properties` under the `HardwareId` breakdown. Keep `Local Hardware Identity` as an evidence summary: local match confidence/source, exact model when a source actually provides it, board-model evidence, confidence, source, and URL. Show fallback coverage/search-hint rows only when there is no better exact model or board evidence.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and `internal\HardwareIdResolver.psm1`; extracted GPU detail-row smoke for `PCI\VEN_10DE&DEV_2803&SUBSYS_51741462&REV_A1` confirmed `Local Hardware Identity` now contains only `Local Match`, `Board Model`, `Confidence`, `Source`, and `URL`; extracted breakdown smoke confirmed `SUBSYS_51741462` remains in `Device Properties`; `git diff --check`.
+
 Date: 2026-06-03
 Problem: The desktop repo depended on `source\hwdata` to rebuild `data\hwdb`, but `.gitignore` ignored all of `source`, so clones/branch moves could miss the runtime-critical ID files even though generated cache folders are intentionally ignored.
 Root cause: The ignore rule treated cloned study sources and adopted runtime source data the same way.
