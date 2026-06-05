@@ -482,3 +482,10 @@ Root cause: Monitor IDs such as `DISPLAY\GSM5BD3` are EDID manufacturer/product 
 Guardrail/rule: Parse `DISPLAY\xxxYYYY` before ACPI/PNP fallback as monitor EDID identity: `xxx` is the EISA/PNP manufacturer code resolved through `pnp.ids`, and `YYYY` is the vendor-assigned EDID product code. Parse `SCSI`, `USBSTOR`, and `IDE` storage IDs as Windows storage-stack identity, not as driver update evidence. Exact monitor marketing model still needs EDID decode, monitor INF, or OEM evidence; exact disk retail model may need serial/model/firmware or vendor evidence.
 Files affected: `internal\HardwareIdResolver.psm1`, `internal\Test-HardwareIdResolver.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for touched scripts/modules; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `git diff --check`.
+
+Date: 2026-06-06
+Problem: DISPLAY IDs alone explain monitor vendor/product code but still cannot show the richer local facts users expect, such as monitor name descriptor, manufacture date, size, timing, and checksum.
+Root cause: `DISPLAY\GSM5BD3` is a compact PnP/EDID identity string, while the richer monitor facts live in raw EDID bytes under the local Windows registry. Those bytes can include privacy-sensitive serial descriptors and can still be insufficient for exact retail model naming.
+Guardrail/rule: Treat raw EDID as a separate local evidence layer from `pnp.ids`. Show EDID rows only with clear source/provenance, validate header/checksum, and never promote EDID product code alone into an exact retail model. Treat monitor serial text/numeric serial as privacy-sensitive when creating docs, screenshots, or shared fixtures.
+Files affected: `internal\MonitorEdidResolver.psm1`, `internal\Test-MonitorEdidResolver.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `docs\DEEP_RESEARCH_PROMPT_MONITOR_EDID_IDENTITY.md`, `docs\ANTIGRAVITY_GEMINI_JOB_MONITOR_EDID_LAYER.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for touched scripts/modules; `internal\Test-MonitorEdidResolver.ps1 -AsJson`.

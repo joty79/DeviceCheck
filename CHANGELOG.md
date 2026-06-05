@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added monitor EDID registry evidence support through `internal\MonitorEdidResolver.psm1`, decoding manufacturer/product code, monitor name descriptor, serial evidence, manufacture week/year, physical size, preferred timing, EDID version, extension count, and checksum state from raw EDID bytes.
+- Added `internal\Test-MonitorEdidResolver.ps1` with a synthetic valid EDID fixture proving `GSM / 5BD3` manufacturer/product decoding, monitor name parsing, manufacture year parsing, and checksum validation.
+- Added `docs\DEEP_RESEARCH_PROMPT_MONITOR_EDID_IDENTITY.md` and `docs\ANTIGRAVITY_GEMINI_JOB_MONITOR_EDID_LAYER.md` to hand off the next monitor evidence research and Antigravity implementation pass.
 - Added DISPLAY monitor ID parsing for IDs such as `DISPLAY\GSM5BD3`, resolving the EISA/PNP manufacturer code through `pnp.ids` and preserving the EDID product code as monitor identity evidence.
 - Added broader Windows storage ID parsing for `USBSTOR\Disk&Ven_*&Prod_*` and compact `IDE\Disk...` disk IDs alongside the existing SCSI storage parser.
 - Added HDAUDIO codec/subsystem parsing for Windows HD Audio IDs such as `HDAUDIO\FUNC_01&VEN_10EC&DEV_0892&SUBSYS_10438698&REV_1003`, including controller tuple parsing for compatible IDs with `CTLR_VEN_*` / `CTLR_DEV_*`.
@@ -32,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the ChatGPT/Gemini research PDFs and `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md` as the laptop-ready roadmap for the local evidence database, source provenance, confidence model, and regression harness.
 
 ### Changed
+- Improved selected-monitor details so DISPLAY devices can show local Windows registry EDID rows when raw EDID is readable, while still labeling exact retail model discovery as requiring stronger INF/OEM/source evidence.
 - Improved monitor and disk selected-device details so DISPLAY monitor IDs and USBSTOR/IDE disk IDs no longer fall through to generic PNP/unsupported identity when Windows exposes enough structured identity text.
 - Improved selected-device Hardware ID breakdown and Local Hardware Identity rows for Realtek HD Audio devices so HDAUDIO IDs no longer fall through to misleading PNP compact parsing such as `VEN_HDA` / `DEV_UDIO`.
 - Improved disk identity display by adding SCSI/storage ID parsing for Windows disk IDs such as `SCSI\DISK&VEN_NVME&PROD_*`, avoiding misleading PNP fallback rows for NVMe/SATA drives.

@@ -362,6 +362,9 @@ $script:BoardModelEvidenceIndex = @{}
 $script:AlsaUcmResolverState = 'NotLoaded'
 $script:AlsaUcmResolverError = ''
 $script:AlsaUcmUsbAudioProfileCache = $null
+$script:MonitorEdidResolverState = 'NotLoaded'
+$script:MonitorEdidResolverError = ''
+$script:MonitorEdidIdentityCache = @{}
 
 function Test-HardwareIdCacheReady {
     param(
@@ -488,6 +491,31 @@ function Initialize-AlsaUcmResolver {
     catch {
         $script:AlsaUcmResolverError = $_.Exception.Message
         $script:AlsaUcmResolverState = 'Unavailable'
+    }
+}
+
+function Initialize-MonitorEdidResolver {
+    if ($script:MonitorEdidResolverState -ne 'NotLoaded') {
+        return
+    }
+
+    $script:MonitorEdidResolverState = 'Unavailable'
+    $script:MonitorEdidResolverError = ''
+    $script:MonitorEdidIdentityCache = @{}
+
+    try {
+        $modulePath = Join-Path -Path $PSScriptRoot -ChildPath 'internal\MonitorEdidResolver.psm1'
+        if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+            $script:MonitorEdidResolverError = "Monitor EDID resolver module not found: $modulePath"
+            return
+        }
+
+        Import-Module -Name $modulePath -Force -ErrorAction Stop
+        $script:MonitorEdidResolverState = 'Ready'
+    }
+    catch {
+        $script:MonitorEdidResolverError = $_.Exception.Message
+        $script:MonitorEdidResolverState = 'Unavailable'
     }
 }
 
@@ -867,6 +895,142 @@ function Add-AlsaUcmAudioProfileRows {
     return $true
 }
 
+function Get-MonitorEdidIdentityForResolution {
+    param(
+        [object]$Resolution,
+        [object]$Evidence
+    )
+
+    if ($script:MonitorEdidResolverState -ne 'Ready') {
+        return $null
+    }
+
+    $candidateSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    function Add-MonitorEdidCandidate {
+        param([AllowEmptyString()][string]$Value)
+        if (-not [string]::IsNullOrWhiteSpace($Value) -and $candidateSet.Add($Value)) {
+            $candidates.Add($Value)
+        }
+    }
+
+    $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
+    Add-MonitorEdidCandidate -Value ([string](Get-NotePropertyValue -Object $device -Name 'InstanceId'))
+    Add-MonitorEdidCandidate -Value ([string](Get-NotePropertyValue -Object $Resolution -Name 'Input'))
+    Add-MonitorEdidCandidate -Value ([string](Get-NotePropertyValue -Object $Resolution -Name 'Normalized'))
+
+    $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
+    $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+    $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
+    if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) {
+        Add-MonitorEdidCandidate -Value "DISPLAY\$vendorId$productId"
+    }
+
+    foreach ($candidate in @($candidates)) {
+        if ($script:MonitorEdidIdentityCache.ContainsKey($candidate)) {
+            $cached = $script:MonitorEdidIdentityCache[$candidate]
+            if ($null -ne $cached) {
+                return $cached
+            }
+            continue
+        }
+
+        try {
+            $edid = Get-MonitorEdidFromRegistry -InstanceId $candidate
+            $script:MonitorEdidIdentityCache[$candidate] = $edid
+            if ($null -ne $edid) {
+                return $edid
+            }
+        }
+        catch {
+            $script:MonitorEdidResolverError = $_.Exception.Message
+            $script:MonitorEdidIdentityCache[$candidate] = $null
+        }
+    }
+
+    return $null
+}
+
+function Add-MonitorEdidRows {
+    param(
+        [System.Collections.Generic.List[object]]$Rows,
+        [object]$Resolution,
+        [object]$Evidence
+    )
+
+    $edid = Get-MonitorEdidIdentityForResolution -Resolution $Resolution -Evidence $Evidence
+    if ($null -eq $edid) {
+        return $false
+    }
+
+    $monitorName = [string](Get-NotePropertyValue -Object $edid -Name 'MonitorName')
+    $manufacturerId = [string](Get-NotePropertyValue -Object $edid -Name 'ManufacturerId')
+    $productCode = [string](Get-NotePropertyValue -Object $edid -Name 'ProductCode')
+    $widthCm = [int](Get-NotePropertyValue -Object $edid -Name 'WidthCm')
+    $heightCm = [int](Get-NotePropertyValue -Object $edid -Name 'HeightCm')
+    $manufactureWeek = [int](Get-NotePropertyValue -Object $edid -Name 'ManufactureWeek')
+    $manufactureYear = [int](Get-NotePropertyValue -Object $edid -Name 'ManufactureYear')
+    $serialDescriptor = [string](Get-NotePropertyValue -Object $edid -Name 'SerialText')
+    $serialNumber = [uint32](Get-NotePropertyValue -Object $edid -Name 'SerialNumber')
+    $checksumValid = [bool](Get-NotePropertyValue -Object $edid -Name 'ChecksumValid')
+    $source = [string](Get-NotePropertyValue -Object $edid -Name 'Source')
+
+    if (-not [string]::IsNullOrWhiteSpace($monitorName)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Name' -Value $monitorName -Color 'OK'))
+    }
+
+    $edidIdParts = @(
+        $manufacturerId
+        $productCode
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($edidIdParts).Count -gt 0) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID ID' -Value ($edidIdParts -join ' ') -Color 'Info'))
+    }
+
+    if ($widthCm -gt 0 -or $heightCm -gt 0) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Size' -Value ("{0} x {1} cm" -f $widthCm, $heightCm) -Color 'White'))
+    }
+
+    if ($manufactureYear -gt 1990) {
+        $madeText = if ($manufactureWeek -gt 0) {
+            "week $manufactureWeek / $manufactureYear"
+        } else {
+            [string]$manufactureYear
+        }
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Made' -Value $madeText -Color 'Dim'))
+    }
+
+    $timing = Get-NotePropertyValue -Object $edid -Name 'PreferredTiming'
+    if ($null -ne $timing -and $timing.Width -gt 0 -and $timing.Height -gt 0) {
+        $timingText = "{0}x{1}" -f $timing.Width, $timing.Height
+        if ($null -ne $timing.RefreshRateHz) {
+            $timingText = "$timingText @ $($timing.RefreshRateHz)Hz"
+        }
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Timing' -Value $timingText -Color 'White'))
+    }
+
+    $serialText = if (-not [string]::IsNullOrWhiteSpace($serialDescriptor)) {
+        $serialDescriptor
+    } elseif ($serialNumber -gt 0) {
+        [string]$serialNumber
+    } else {
+        ''
+    }
+    if (-not [string]::IsNullOrWhiteSpace($serialText)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Serial' -Value $serialText -Color 'Dim'))
+    }
+
+    $checksumText = if ($checksumValid) { 'OK' } else { 'Invalid' }
+    $checksumColor = if ($checksumValid) { 'OK' } else { 'Warn' }
+    $Rows.Add((New-HardwareIdentityRow -Key 'EDID Checksum' -Value $checksumText -Color $checksumColor))
+    if (-not [string]::IsNullOrWhiteSpace($source)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Source' -Value $source -Color 'White'))
+    }
+
+    return $true
+}
+
 function Get-HardwareResolutionDetailRows {
     param(
         [object]$Resolution,
@@ -992,6 +1156,7 @@ function Get-HardwareResolutionDetailRows {
             $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
             $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
             $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+            $hasEdid = Add-MonitorEdidRows -Rows $rows -Resolution $Resolution -Evidence $Evidence
             $displayVendor = if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
                 Get-FormattedHardwareVendorName -Name $vendorName
             } else {
@@ -1003,7 +1168,12 @@ function Get-HardwareResolutionDetailRows {
             if (-not [string]::IsNullOrWhiteSpace($productId)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'EDID Product' -Value $productId -Color 'Info'))
             }
-            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/OEM evidence' -Color 'Dim'))
+            $coverageText = if ($hasEdid) {
+                'EDID read from local Windows registry; exact retail model may still need monitor INF/OEM evidence'
+            } else {
+                'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/OEM evidence'
+            }
+            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value $coverageText -Color 'Dim'))
             $searchParts = @(
                 $(if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) { "DISPLAY\$vendorId$productId" })
                 $displayVendor
@@ -4367,6 +4537,7 @@ Write-Host 'Loading local hardware ID cache...' -ForegroundColor DarkCyan
 Initialize-HardwareIdResolver
 Initialize-BoardModelEvidenceStore
 Initialize-AlsaUcmResolver
+Initialize-MonitorEdidResolver
 if ($script:HardwareIdResolverState -eq 'Ready') {
     Write-Host 'Local hardware ID cache ready.' -ForegroundColor DarkCyan
 } elseif (-not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
@@ -4382,6 +4553,12 @@ if ($script:AlsaUcmResolverState -eq 'Ready') {
 }
 elseif (-not [string]::IsNullOrWhiteSpace($script:AlsaUcmResolverError)) {
     Write-Host "ALSA UCM audio profile cache unavailable: $($script:AlsaUcmResolverError)" -ForegroundColor Yellow
+}
+if ($script:MonitorEdidResolverState -eq 'Ready') {
+    Write-Host 'Monitor EDID registry reader ready.' -ForegroundColor DarkCyan
+}
+elseif (-not [string]::IsNullOrWhiteSpace($script:MonitorEdidResolverError)) {
+    Write-Host "Monitor EDID registry reader unavailable: $($script:MonitorEdidResolverError)" -ForegroundColor Yellow
 }
 Invoke-SystemScan
 $selectedIndex = 0
