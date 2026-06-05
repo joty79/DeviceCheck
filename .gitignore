@@ -13,3 +13,9 @@ source/hwdata/*
 !source/hwdata/README
 !source/hwdata/LICENSE
 !source/hwdata/COPYING
+!source/alsa-ucm-conf/
+source/alsa-ucm-conf/*
+!source/alsa-ucm-conf/USB-Audio.conf
+!source/alsa-ucm-conf/LICENSE
+!source/alsa-ucm-conf/VERSION
+!source/alsa-ucm-conf/SOURCE.json

@@ -1,0 +1,28 @@
+{
+  "SchemaVersion": 1,
+  "SourceId": "alsa-ucm-conf",
+  "Name": "ALSA Use Case Manager configuration",
+  "Repository": "https://github.com/alsa-project/alsa-ucm-conf",
+  "Commit": "aa528010f1536976d10b2718ae77da2922c7bb0c",
+  "Version": "1.2.16",
+  "RetrievedAtUtc": "2026-06-05T22:23:25Z",
+  "License": "BSD-3-Clause",
+  "Files": [
+    {
+      "Path": "USB-Audio.conf",
+      "UpstreamPath": "ucm2/USB-Audio/USB-Audio.conf",
+      "Url": "https://raw.githubusercontent.com/alsa-project/alsa-ucm-conf/aa528010f1536976d10b2718ae77da2922c7bb0c/ucm2/USB-Audio/USB-Audio.conf",
+      "Sha256": "EE4E904733B3E96D14166C52E6C37D644B0D766DF3DD0C182B71890774296775"
+    },
+    {
+      "Path": "LICENSE",
+      "Url": "https://raw.githubusercontent.com/alsa-project/alsa-ucm-conf/aa528010f1536976d10b2718ae77da2922c7bb0c/LICENSE",
+      "Sha256": "EBFFD84F252E01BBD9887645B7DACE140FD28F7D87F5E6E73FD6F539C7DD4733"
+    },
+    {
+      "Path": "VERSION",
+      "Url": "https://raw.githubusercontent.com/alsa-project/alsa-ucm-conf/aa528010f1536976d10b2718ae77da2922c7bb0c/VERSION",
+      "Sha256": "E15910100F07274528D58C696204C6ED9577F346839F119BB4A63DADFDFBB6C5"
+    }
+  ]
+}

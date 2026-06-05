@@ -9,12 +9,15 @@
 *.csv text eol=lf
 *.ids text eol=lf
 *.json text eol=lf
+*.conf text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 
 source/hwdata/README text eol=lf
 source/hwdata/LICENSE text eol=lf
 source/hwdata/COPYING text eol=lf
+source/alsa-ucm-conf/LICENSE text eol=lf
+source/alsa-ucm-conf/VERSION text eol=lf
 
 *.cmd text eol=crlf
 *.bat text eol=crlf

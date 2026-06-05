@@ -29,6 +29,24 @@
       "NextAction": "Keep using as the canonical first offline ID source."
     },
     {
+      "Id": "alsa-ucm-conf",
+      "Name": "ALSA Use Case Manager configuration",
+      "Kind": "OpenSourceProfileDatabase",
+      "Priority": 1,
+      "Decision": "AdoptedNow",
+      "Url": "https://github.com/alsa-project/alsa-ucm-conf",
+      "RepoUrl": "https://github.com/alsa-project/alsa-ucm-conf.git",
+      "LocalPathHints": [
+        "%USERPROFILE%\\scripts\\DeviceCheck\\source\\alsa-ucm-conf"
+      ],
+      "Provides": [
+        "USB audio profile mappings",
+        "Realtek ALC4080 profile evidence"
+      ],
+      "RuntimeUse": "Source input for internal\\Update-AlsaUcmProfiles.ps1 and DeviceCheck open-source audio profile evidence rows.",
+      "NextAction": "Keep as an enrichment layer separate from usb.ids; profile matches must not overwrite local vendor/product resolution."
+    },
+    {
       "Id": "uefi-pnp-acpi-registry",
       "Name": "UEFI PNP and ACPI ID Registry",
       "Kind": "DatabaseSpec",

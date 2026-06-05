@@ -264,17 +264,26 @@ Suggested laptop-sized task:
 
 Goal: add an open-source profile evidence layer for USB audio.
 
+Status: initial importer implemented on 2026-06-06.
+
 Tasks:
 
-- Clone or fetch selected `alsa-ucm-conf` files into `source\alsa-ucm-conf` only after license/source decision.
-- Import `ucm2\USB-Audio\USB-Audio.conf`.
-- Normalize regex match groups to source profile names where feasible.
-- Store source commit, URL, file path, and profile name.
+- `source\alsa-ucm-conf\USB-Audio.conf` is tracked as a small source snapshot with `LICENSE`, `VERSION`, and `SOURCE.json`.
+- `internal\Update-AlsaUcmProfiles.ps1` imports `ucm2\USB-Audio\USB-Audio.conf` into `data\hwdb\normalized\alsa-ucm-usb-audio.json`.
+- `internal\AlsaUcmResolver.psm1` matches USB `VID/PID` values against ALSA UCM `RegexMatch` / `StringMatch` rules.
+- DeviceCheck shows `Audio Profile` rows when an ALSA UCM match exists.
+- Source commit, URL/path, version, and license are preserved in `source\alsa-ucm-conf\SOURCE.json` and the generated cache.
 
 Regression:
 
 - `0db0:cd0e` must map to `Realtek/ALC4080` as `OPEN-SOURCE-PROFILE`.
 - It must not change `usb.ids` result.
+
+Validation:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\internal\Test-AlsaUcmResolver.ps1 -AsJson
+```
 
 ### Phase 5: EDID / Monitor Identity
 
@@ -404,5 +413,5 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\internal\Test-HardwareIdentityHa
 Next implementation step:
 
 1. Replace the fixture-only `usb.ids` simulation with a call into `internal\HardwareIdResolver.psm1`.
-2. Add a small `Test-HardwareIdResolver.ps1` smoke suite for PCI/USB/PNP IDs.
-3. Only after those pass, add an `Import-AlsaUcmProfiles.ps1` prototype.
+2. Broaden `internal\Test-HardwareIdResolver.ps1` with PCI/PNP cases.
+3. Broaden ALSA UCM fixtures beyond `0db0:cd0e` and verify false positives stay blocked.

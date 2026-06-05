@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added ALSA UCM USB audio profile evidence support: tracked `source\alsa-ucm-conf` snapshot, importer, resolver, and regression smoke test for `0db0:cd0e -> Realtek/ALC4080`.
+- Added selected-device `Audio Profile` rows for ALSA UCM matches, clearly labeled as open-source profile evidence rather than `usb.ids` product identity.
 - Added Markdown copies of the ChatGPT/Gemini local hardware identity research documents under `docs\` so the source research is laptop-ready without PDF conversion.
 - Added initial hardware identity JSON schemas for source manifests, device evidence bundles, and regression test contracts under `schemas\`.
 - Added `TC_MSI_X870_REALTEK_AUDIO_001`, the first hardware identity regression fixture for the MSI X870 Tomahawk / Realtek USB Audio case.

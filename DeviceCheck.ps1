@@ -359,6 +359,9 @@ $script:HardwareIdResolutionDetailCache = @{}
 $script:BoardModelEvidenceState = 'NotLoaded'
 $script:BoardModelEvidenceError = ''
 $script:BoardModelEvidenceIndex = @{}
+$script:AlsaUcmResolverState = 'NotLoaded'
+$script:AlsaUcmResolverError = ''
+$script:AlsaUcmUsbAudioProfileCache = $null
 
 function Test-HardwareIdCacheReady {
     param(
@@ -425,6 +428,66 @@ function Initialize-HardwareIdResolver {
     catch {
         $script:HardwareIdResolverError = $_.Exception.Message
         $script:HardwareIdResolverState = 'Unavailable'
+    }
+}
+
+function Test-AlsaUcmCacheReady {
+    param(
+        [string]$CacheRoot
+    )
+
+    $cachePath = Join-Path -Path $CacheRoot -ChildPath 'normalized\alsa-ucm-usb-audio.json'
+    return (Test-Path -LiteralPath $cachePath -PathType Leaf)
+}
+
+function Update-AlsaUcmCacheIfMissing {
+    param(
+        [string]$CacheRoot
+    )
+
+    if (Test-AlsaUcmCacheReady -CacheRoot $CacheRoot) {
+        return
+    }
+
+    $sourcePath = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'source\alsa-ucm-conf\USB-Audio.conf'
+    $updateScriptPath = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\Update-AlsaUcmProfiles.ps1'
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf) -or -not (Test-Path -LiteralPath $updateScriptPath -PathType Leaf)) {
+        return
+    }
+
+    & $updateScriptPath -OutputRoot $CacheRoot > $null
+}
+
+function Initialize-AlsaUcmResolver {
+    if ($script:AlsaUcmResolverState -ne 'NotLoaded') {
+        return
+    }
+
+    $script:AlsaUcmResolverState = 'Unavailable'
+    $script:AlsaUcmResolverError = ''
+    $script:AlsaUcmUsbAudioProfileCache = $null
+
+    try {
+        $modulePath = Join-Path -Path $PSScriptRoot -ChildPath 'internal\AlsaUcmResolver.psm1'
+        if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+            $script:AlsaUcmResolverError = "ALSA UCM resolver module not found: $modulePath"
+            return
+        }
+
+        Import-Module -Name $modulePath -Force -ErrorAction Stop
+        $cacheRoot = Join-Path -Path $PSScriptRoot -ChildPath 'data\hwdb'
+        Update-AlsaUcmCacheIfMissing -CacheRoot $cacheRoot
+        if (-not (Test-AlsaUcmCacheReady -CacheRoot $cacheRoot)) {
+            $script:AlsaUcmResolverError = 'ALSA UCM source/cache is not available.'
+            return
+        }
+
+        $script:AlsaUcmUsbAudioProfileCache = Import-AlsaUcmUsbAudioProfileCache -CacheRoot $cacheRoot
+        $script:AlsaUcmResolverState = 'Ready'
+    }
+    catch {
+        $script:AlsaUcmResolverError = $_.Exception.Message
+        $script:AlsaUcmResolverState = 'Unavailable'
     }
 }
 
@@ -736,6 +799,58 @@ function Add-BoardModelEvidenceRows {
     return $true
 }
 
+function Add-AlsaUcmAudioProfileRows {
+    param(
+        [System.Collections.Generic.List[object]]$Rows,
+        [object]$Resolution
+    )
+
+    if ($script:AlsaUcmResolverState -ne 'Ready' -or $null -eq $script:AlsaUcmUsbAudioProfileCache) {
+        return $false
+    }
+
+    $inputId = [string](Get-NotePropertyValue -Object $Resolution -Name 'Input')
+    if ([string]::IsNullOrWhiteSpace($inputId)) {
+        return $false
+    }
+
+    $profileMatch = @(Resolve-AlsaUcmUsbAudioProfile -HardwareId $inputId -Cache $script:AlsaUcmUsbAudioProfileCache | Select-Object -First 1)
+    if ($profileMatch.Count -eq 0) {
+        return $false
+    }
+
+    $profile = $profileMatch[0]
+    if (-not [string]::IsNullOrWhiteSpace([string]$profile.ProfileName)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Audio Profile' -Value ([string]$profile.ProfileName) -Color 'OK'))
+    }
+
+    $matchParts = @(
+        ([string]$profile.UsbId)
+        ([string]$profile.EvidenceLabel)
+        ([string]$profile.SourceId)
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (@($matchParts).Count -gt 0) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Profile Match' -Value ($matchParts -join ' / ') -Color 'Info'))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$profile.CommentLabel)) {
+        $Rows.Add((New-HardwareIdentityRow -Key 'Profile Note' -Value ([string]$profile.CommentLabel) -Color 'Dim'))
+    }
+
+    $sourceVersion = [string]$profile.SourceVersion
+    $sourceCommit = [string]$profile.SourceCommit
+    $sourceDisplay = 'ALSA UCM'
+    if (-not [string]::IsNullOrWhiteSpace($sourceVersion)) {
+        $sourceDisplay = "$sourceDisplay $sourceVersion"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($sourceCommit) -and $sourceCommit.Length -ge 8) {
+        $sourceDisplay = "$sourceDisplay / $($sourceCommit.Substring(0, 8))"
+    }
+    $Rows.Add((New-HardwareIdentityRow -Key 'Evidence' -Value "$sourceDisplay; audio profile, not usb.ids product" -Color 'White'))
+
+    return $true
+}
+
 function Get-HardwareResolutionDetailRows {
     param(
         [object]$Resolution,
@@ -756,6 +871,7 @@ function Get-HardwareResolutionDetailRows {
     if ($bus -ne 'PCI') {
         $hasEvidence = Add-BoardModelEvidenceRows -Rows $rows -Resolution $Resolution
         if (-not $hasEvidence -and $bus -in @('USB', 'HID')) {
+            [void](Add-AlsaUcmAudioProfileRows -Rows $rows -Resolution $Resolution)
             $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
             $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
             $interfaceId = [string](Get-NotePropertyValue -Object $fields -Name 'InterfaceId')
@@ -4013,6 +4129,7 @@ function Read-ConsoleKey {
 Write-Host 'Loading local hardware ID cache...' -ForegroundColor DarkCyan
 Initialize-HardwareIdResolver
 Initialize-BoardModelEvidenceStore
+Initialize-AlsaUcmResolver
 if ($script:HardwareIdResolverState -eq 'Ready') {
     Write-Host 'Local hardware ID cache ready.' -ForegroundColor DarkCyan
 } elseif (-not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
@@ -4022,6 +4139,12 @@ if ($script:HardwareIdResolverState -eq 'Ready') {
 }
 if ($script:BoardModelEvidenceState -eq 'Unavailable' -and -not [string]::IsNullOrWhiteSpace($script:BoardModelEvidenceError)) {
     Write-Host "Board model evidence unavailable: $($script:BoardModelEvidenceError)" -ForegroundColor Yellow
+}
+if ($script:AlsaUcmResolverState -eq 'Ready') {
+    Write-Host 'ALSA UCM audio profile cache ready.' -ForegroundColor DarkCyan
+}
+elseif (-not [string]::IsNullOrWhiteSpace($script:AlsaUcmResolverError)) {
+    Write-Host "ALSA UCM audio profile cache unavailable: $($script:AlsaUcmResolverError)" -ForegroundColor Yellow
 }
 Invoke-SystemScan
 $selectedIndex = 0
