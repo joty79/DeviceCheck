@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the ChatGPT/Gemini research PDFs and `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md` as the laptop-ready roadmap for the local evidence database, source provenance, confidence model, and regression harness.
 
 ### Changed
+- Improved disk identity display by adding SCSI/storage ID parsing for Windows disk IDs such as `SCSI\DISK&VEN_NVME&PROD_*`, avoiding misleading PNP fallback rows for NVMe/SATA drives.
 - Improved USB Hardware ID parsing and display: `REV_*` and `MI_*` are now extracted regardless of order, and USB compatible class IDs such as `USB\Class_01&SubClass_00&Prot_20` resolve as generic USB Audio class evidence.
 - Added a safe local USB identity label in the details pane that combines vendor/product-class certainty with installed driver evidence without claiming an exact silicon model.
 - Updated PCI/USB/ACPI/PNP Hardware ID rendering in the details pane (both dual-pane and stacked modes) to display a detailed, structured breakdown of the hardware ID components (VEN, DEV, SUBSYS subvendor/subdevice, REV, VID, PID, MI) mapped against resolved database names.

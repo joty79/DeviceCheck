@@ -351,6 +351,95 @@ function Resolve-UsbClassHardwareId {
     }) -Notes @('Class/Protocol IDs describe a generic USB function, not an exact vendor product model.')
 }
 
+function ConvertFrom-ScsiIdentifierText {
+    param(
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    return (($Value -replace '_+', ' ') -replace '\s+', ' ').Trim()
+}
+
+function Get-ScsiDeviceTypeName {
+    param(
+        [AllowEmptyString()]
+        [string]$DeviceType
+    )
+
+    switch ($DeviceType.ToUpperInvariant()) {
+        'DISK' { return 'Disk drive' }
+        'CDROM' { return 'CD/DVD drive' }
+        'TAPE' { return 'Tape drive' }
+        'PRINTER' { return 'Printer' }
+        'SCANNER' { return 'Scanner' }
+        'CHANGER' { return 'Media changer' }
+        'ENCLOSURE' { return 'Storage enclosure' }
+        default { return 'SCSI storage/function' }
+    }
+}
+
+function Resolve-ScsiHardwareId {
+    param(
+        [string]$InputId,
+        [string]$NormalizedId
+    )
+
+    $structuredMatch = [regex]::Match($NormalizedId, '^SCSI\\(?<type>[A-Z0-9]+)&VEN_(?<vendor>[^&\\]+)&PROD_(?<product>[^&\\]+)(?:&REV_(?<revision>[^&\\]+))?')
+    if ($structuredMatch.Success) {
+        $deviceType = $structuredMatch.Groups['type'].Value
+        $vendorId = $structuredMatch.Groups['vendor'].Value
+        $productId = $structuredMatch.Groups['product'].Value
+        $revision = $structuredMatch.Groups['revision'].Value
+        $vendorName = ConvertFrom-ScsiIdentifierText -Value $vendorId
+        $productName = ConvertFrom-ScsiIdentifierText -Value $productId
+
+        return (New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus 'SCSI' -IdType 'SCSI_STORAGE_ID' -Fields ([ordered]@{
+                    DeviceType = $deviceType
+                    VendorId = $vendorId
+                    ProductId = $productId
+                    Revision = $revision
+                }) -Confidence 'PARSED-STORAGE' -Lookup ([ordered]@{
+                    DeviceTypeName = Get-ScsiDeviceTypeName -DeviceType $deviceType
+                    VendorName = $vendorName
+                    ProductName = $productName
+                    Source = 'Windows storage ID'
+                }) -Notes @('Windows exposes many SATA/NVMe disks through SCSI-style storage IDs; this is a storage stack identity, not a PCI/USB database lookup.'))
+    }
+
+    $compactMatch = [regex]::Match($NormalizedId, '^SCSI\\(?<type>DISK|CDROM|TAPE|PRINTER|SCANNER|CHANGER|ENCLOSURE)(?<payload>.+)$')
+    if (-not $compactMatch.Success) {
+        return $null
+    }
+
+    $compactType = $compactMatch.Groups['type'].Value
+    $payload = $compactMatch.Groups['payload'].Value
+    $vendorId = ''
+    $productId = $payload
+    if ($payload.Length -ge 8) {
+        $vendorId = $payload.Substring(0, 8)
+        $productId = $payload.Substring(8)
+    }
+
+    $compactVendorName = ConvertFrom-ScsiIdentifierText -Value $vendorId
+    $compactProductName = ConvertFrom-ScsiIdentifierText -Value $productId
+
+    New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus 'SCSI' -IdType 'SCSI_STORAGE_COMPACT' -Fields ([ordered]@{
+        DeviceType = $compactType
+        VendorId = $vendorId
+        ProductId = $productId
+        Revision = ''
+    }) -Confidence 'PARSED-STORAGE' -Lookup ([ordered]@{
+        DeviceTypeName = Get-ScsiDeviceTypeName -DeviceType $compactType
+        VendorName = $compactVendorName
+        ProductName = $compactProductName
+        Source = 'Windows storage ID'
+    }) -Notes @('Compact SCSI storage IDs carry a padded vendor/model string; prefer structured VEN/PROD IDs when Windows exposes them.')
+}
+
 function Resolve-PnpVendor {
     param(
         [string]$VendorId,
@@ -473,6 +562,9 @@ function Resolve-HardwareId {
             }
             if ($null -eq $resolution) {
                 $resolution = Resolve-UsbClassHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId
+            }
+            if ($null -eq $resolution) {
+                $resolution = Resolve-ScsiHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId
             }
             if ($null -eq $resolution) {
                 $resolution = Resolve-AcpiOrPnpHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache

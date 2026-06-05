@@ -53,6 +53,22 @@ Add-ResolverAssertion -Assertions $assertions -Name 'USB compatible protocol rem
     -Expected 'USB Audio 2.0-style class match' `
     -Actual ([string]$usbClass.Lookup.ProtocolName)
 
+$scsiStructured = Resolve-HardwareId -HardwareId 'SCSI\DISK&VEN_NVME&PROD_KINGSTON_SKC3000' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'SCSI structured disk ID resolves as storage identity' `
+    -Passed (($scsiStructured.Bus -eq 'SCSI') -and ($scsiStructured.Confidence -eq 'PARSED-STORAGE')) `
+    -Expected 'SCSI / PARSED-STORAGE' `
+    -Actual ("{0} / {1}" -f $scsiStructured.Bus, $scsiStructured.Confidence)
+Add-ResolverAssertion -Assertions $assertions -Name 'SCSI structured disk product is parsed' `
+    -Passed ($scsiStructured.Lookup.ProductName -eq 'KINGSTON SKC3000') `
+    -Expected 'KINGSTON SKC3000' `
+    -Actual ([string]$scsiStructured.Lookup.ProductName)
+
+$scsiCompact = Resolve-HardwareId -HardwareId 'SCSI\DiskNVMe____KINGSTON_SKC3000D2048GEIFK31.7' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'SCSI compact disk ID resolves before PNP fallback' `
+    -Passed (($scsiCompact.Bus -eq 'SCSI') -and ($scsiCompact.IdType -eq 'SCSI_STORAGE_COMPACT')) `
+    -Expected 'SCSI / SCSI_STORAGE_COMPACT' `
+    -Actual ("{0} / {1}" -f $scsiCompact.Bus, $scsiCompact.IdType)
+
 $failed = @($assertions | Where-Object { -not $_.Passed })
 $summary = [pscustomobject]@{
     Passed     = ($failed.Count -eq 0)

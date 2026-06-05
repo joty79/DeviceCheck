@@ -906,6 +906,21 @@ function Get-HardwareResolutionDetailRows {
                 $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
             }
         }
+        elseif ($bus -eq 'SCSI') {
+            $deviceTypeName = [string](Get-NotePropertyValue -Object $lookup -Name 'DeviceTypeName')
+            $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+            $productName = [string](Get-NotePropertyValue -Object $lookup -Name 'ProductName')
+            if (-not [string]::IsNullOrWhiteSpace($productName)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Storage Model' -Value $productName -Color 'White'))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Storage Vendor' -Value $vendorName -Color 'Dim'))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($deviceTypeName)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Storage Type' -Value $deviceTypeName -Color 'Dim'))
+            }
+            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'Parsed from Windows SCSI/storage ID; no pci.ids/usb.ids database lookup' -Color 'Dim'))
+        }
         return @($rows)
     }
 
@@ -1557,6 +1572,32 @@ function Get-HardwareIdBreakdownLines {
             if (-not [string]::IsNullOrWhiteSpace($protocolId)) {
                 $protocolLine = "{0,-15} = {1}" -f "Prot_$protocolId", (Format-UiValue -Text $protocolName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($protocolLine)$($_C.Reset)")
+            }
+        }
+        elseif ($res.Bus -eq 'SCSI') {
+            $deviceType = $res.Fields.DeviceType
+            $vendorId = $res.Fields.VendorId
+            $productId = $res.Fields.ProductId
+            $revision = $res.Fields.Revision
+            $deviceTypeName = if ($res.Lookup.DeviceTypeName) { $res.Lookup.DeviceTypeName } else { 'storage device' }
+            $vendorName = if ($res.Lookup.VendorName) { $res.Lookup.VendorName } else { '' }
+            $productName = if ($res.Lookup.ProductName) { $res.Lookup.ProductName } else { '' }
+
+            if (-not [string]::IsNullOrWhiteSpace($deviceType)) {
+                $typeLine = "{0,-15} = {1}" -f $deviceType, (Format-UiValue -Text $deviceTypeName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.White)$($typeLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($vendorId)) {
+                $vendorLine = "{0,-15} = {1}" -f "VEN_$vendorId", (Format-UiValue -Text $vendorName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($vendorLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($productId)) {
+                $productLine = "{0,-15} = {1}" -f "PROD_$productId", (Format-UiValue -Text $productName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Info)$($productLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($revision)) {
+                $revisionLine = "{0,-15} = {1}" -f "REV_$revision", 'storage device revision'
+                $lines.Add("$pad$($_C.Dim)$($revisionLine)$($_C.Reset)")
             }
         }
         elseif ($res.Bus -in @('ACPI', 'PNP')) {
