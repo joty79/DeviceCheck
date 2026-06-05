@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devicecheck.local/schemas/device-evidence-bundle.schema.json",
+  "title": "DeviceCheck Device Evidence Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "deviceKey",
+    "capturedAt",
+    "raw",
+    "matches",
+    "provenance"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "deviceKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "raw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bus",
+        "instanceId"
+      ],
+      "properties": {
+        "bus": {
+          "type": "string",
+          "enum": [
+            "PCI",
+            "USB",
+            "HID",
+            "ACPI",
+            "PNP",
+            "DISPLAY",
+            "UNKNOWN"
+          ]
+        },
+        "friendlyName": {
+          "type": "string"
+        },
+        "instanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hardwareIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "compatibleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "layer",
+          "label",
+          "sourceId",
+          "confidence"
+        ],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "enum": [
+              "L1_LOCAL_ID_DATABASE",
+              "L2_BUS_CLASS_SERVICE",
+              "L3_DRIVER_INF",
+              "L4_SUBSYSTEM_VENDOR",
+              "L5_SMBIOS_CONTEXT",
+              "L6_OPEN_SOURCE_PROFILE",
+              "L7_OEM_SPEC",
+              "L8_USER_ATTESTATION"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "resolvedName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "claimScope": {
+            "type": "string",
+            "enum": [
+              "vendor",
+              "product",
+              "driver-display-name",
+              "silicon-model",
+              "board-model",
+              "system-context",
+              "user-confirmed"
+            ]
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collector",
+        "sourceManifests"
+      ],
+      "properties": {
+        "collector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "privilege": {
+              "type": "string"
+            }
+          }
+        },
+        "sourceManifests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

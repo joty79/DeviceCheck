@@ -1,0 +1,38 @@
+{
+  "testCaseId": "TC_MSI_X870_REALTEK_AUDIO_001",
+  "description": "MSI MAG X870 TOMAHAWK WIFI onboard Realtek USB Audio must remain vendor-only in usb.ids while ALSA/OEM-style evidence may identify ALC4080 in a separate layer.",
+  "inputs": {
+    "registryDevice": "mock_registry_device.json",
+    "smbios": "mock_smbios.json",
+    "inf": "mock_inf.json",
+    "openSourceProfile": "mock_alsa_ucm.json"
+  },
+  "expected": {
+    "localDatabase": {
+      "sourceId": "usb.ids",
+      "label": "VENDOR-ONLY",
+      "vendorId": "0DB0",
+      "productId": "CD0E",
+      "vendorName": "Micro-Star International",
+      "productName": null,
+      "claimScope": "vendor"
+    },
+    "driverIdentity": {
+      "label": "EXACT-INF-HARDWARE-ID",
+      "resolvedName": "Realtek USB Audio",
+      "mustNotBeTreatedAsSiliconModel": true
+    },
+    "openSourceProfile": {
+      "label": "OPEN-SOURCE-PROFILE",
+      "sourceId": "alsa-ucm-conf",
+      "resolvedCodec": "Realtek ALC4080",
+      "profileName": "Realtek/ALC4080"
+    },
+    "minimumConfidence": 65,
+    "forbiddenClaims": [
+      "usb.ids exact product Realtek ALC4080",
+      "INF display name is silicon model",
+      "vendor-only USB match resolves product model"
+    ]
+  }
+}

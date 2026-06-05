@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added Markdown copies of the ChatGPT/Gemini local hardware identity research documents under `docs\` so the source research is laptop-ready without PDF conversion.
+- Added initial hardware identity JSON schemas for source manifests, device evidence bundles, and regression test contracts under `schemas\`.
+- Added `TC_MSI_X870_REALTEK_AUDIO_001`, the first hardware identity regression fixture for the MSI X870 Tomahawk / Realtek USB Audio case.
+- Added `internal\Test-HardwareIdentityHarness.ps1`, a deterministic contract harness that proves vendor-only `usb.ids` data must not be promoted into an exact `Realtek ALC4080` USB product claim.
 - Added dual-pane keyboard navigation: Left/Right arrow keys now switch focus between the Device Connection Tree (left) and Selected Details (right) panes. When the Detail pane is focused, Up/Down/PageUp/PageDown/Home/End scroll the detail content instead of navigating the tree. The active pane is visually indicated with a highlighted section header and diamond icon. Left/Right arrows no longer perform expand/collapse (use `+`/`-` keys instead).
 - Migrated the audit-only hardware ID and driver-research engine prototype into `DeviceCheck\internal` from the accidental sibling `drivercheck` work.
 - Added offline hardware ID cache tooling: `internal\Update-HardwareIdDatabases.ps1`, `internal\HardwareIdResolver.psm1`, and `internal\Resolve-HardwareIds.ps1`.

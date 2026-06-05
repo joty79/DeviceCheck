@@ -433,3 +433,10 @@ Root cause: `SearchGoogleRendered` incremented the per-run Google budget before 
 Guardrail/rule: Rendered Google cache hits must not consume the per-run browser-search budget. Empty Google-home/cache results should be deleted and retried once through the browser, and empty browser results should not be cached.
 Files affected: `Get-DriverUpdateAgent.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation; static cache/budget order review.
+
+Date: 2026-06-06
+Problem: Deep-research outputs correctly identified that the MSI X870 Tomahawk `USB\VID_0DB0&PID_CD0E&MI_00` Realtek USB Audio case needs multi-source enrichment, but the repo needed a concrete regression contract before adding ALSA/OEM importers.
+Root cause: `usb.ids` can be vendor-only for new OEM USB devices, while Windows INF strings may be generic driver display names and ALSA/OEM evidence may carry the silicon/profile identity. Without tests, a future enrichment layer could accidentally attribute `Realtek ALC4080` to `usb.ids` or to the INF display name.
+Guardrail/rule: Keep `USB\VID_0DB0&PID_CD0E&MI_00` as a permanent regression fixture, not a hardcoded live mapping. `usb.ids` product absence must remain `VENDOR-ONLY`; INF evidence is `Driver Identity`; ALSA/OEM-style evidence is a separate enrichment layer with its own provenance.
+Files affected: `docs\DeviceCheck_ Local Hardware Identity Design.md`, `docs\Designing a Reliable Local Digital Evidence Architecture.md`, `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md`, `schemas\hardware-source-manifest.schema.json`, `schemas\device-evidence-bundle.schema.json`, `schemas\hardware-regression-tests.schema.json`, `tests\fixtures\hardware-identity\TC_MSI_X870_REALTEK_AUDIO_001\*`, `internal\Test-HardwareIdentityHarness.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `internal\Test-HardwareIdentityHarness.ps1`; JSON parse validation for schemas and fixtures; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`.

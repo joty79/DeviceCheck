@@ -1,0 +1,22 @@
+{
+  "friendlyName": "Realtek USB Audio",
+  "bus": "USB",
+  "instanceId": "USB\\VID_0DB0&PID_CD0E&MI_00\\9&9C4D365&0&0000",
+  "hardwareIds": [
+    "USB\\VID_0DB0&PID_CD0E&REV_0005&MI_00",
+    "USB\\VID_0DB0&PID_CD0E&MI_00"
+  ],
+  "compatibleIds": [
+    "USB\\Class_01&SubClass_00&Prot_20"
+  ],
+  "manufacturer": "Realtek",
+  "service": "RtkUsbAD_2422",
+  "driver": {
+    "provider": "Realtek Semiconductor Corp.",
+    "version": "6.4.0.2422",
+    "date": "2025-08-07",
+    "infName": "oem12.inf",
+    "infSection": "RtkUsbAD.NT",
+    "driverName": "Realtek USB Audio"
+  }
+}

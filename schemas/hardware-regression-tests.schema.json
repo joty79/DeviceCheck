@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devicecheck.local/schemas/hardware-regression-tests.schema.json",
+  "title": "DeviceCheck Hardware Identity Regression Test",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "testCaseId",
+    "description",
+    "inputs",
+    "expected"
+  ],
+  "properties": {
+    "testCaseId": {
+      "type": "string",
+      "pattern": "^TC_[A-Z0-9_]+_[0-9]{3}$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registryDevice",
+        "smbios",
+        "inf",
+        "openSourceProfile"
+      ],
+      "properties": {
+        "registryDevice": {
+          "type": "string"
+        },
+        "smbios": {
+          "type": "string"
+        },
+        "inf": {
+          "type": "string"
+        },
+        "openSourceProfile": {
+          "type": "string"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "localDatabase",
+        "driverIdentity",
+        "openSourceProfile",
+        "minimumConfidence",
+        "forbiddenClaims"
+      ],
+      "properties": {
+        "localDatabase": {
+          "type": "object"
+        },
+        "driverIdentity": {
+          "type": "object"
+        },
+        "openSourceProfile": {
+          "type": "object"
+        },
+        "minimumConfidence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "forbiddenClaims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

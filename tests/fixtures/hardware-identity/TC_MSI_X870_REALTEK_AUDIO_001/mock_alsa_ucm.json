@@ -1,0 +1,10 @@
+{
+  "sourceId": "alsa-ucm-conf",
+  "sourceUrl": "https://github.com/alsa-project/alsa-ucm-conf",
+  "sourcePath": "ucm2/USB-Audio/USB-Audio.conf",
+  "researchCommit": "f6498fb",
+  "matchExpression": "0db0:cd0e",
+  "profileName": "Realtek/ALC4080",
+  "resolvedCodec": "Realtek ALC4080",
+  "claimScope": "silicon-model"
+}

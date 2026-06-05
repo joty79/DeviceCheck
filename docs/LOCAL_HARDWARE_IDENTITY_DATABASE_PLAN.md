@@ -374,3 +374,35 @@ Do this next, in order:
 5. Only then add ALSA UCM importer.
 
 This keeps the project honest: the harness proves incomplete `usb.ids` behavior before enrichment is added.
+
+## Phase 0.1 Implementation Snapshot
+
+Date: 2026-06-06
+
+Added first committed harness foundation:
+
+- `schemas\hardware-source-manifest.schema.json`
+- `schemas\device-evidence-bundle.schema.json`
+- `schemas\hardware-regression-tests.schema.json`
+- `tests\fixtures\hardware-identity\TC_MSI_X870_REALTEK_AUDIO_001`
+- `internal\Test-HardwareIdentityHarness.ps1`
+- Markdown copies of the two research documents in `docs\`
+
+The first fixture is intentionally not a live resolver. It is a regression contract:
+
+- `usb.ids` must remain `VENDOR-ONLY` for `VID_0DB0&PID_CD0E` when the product row is missing.
+- Windows INF evidence may identify the driver display name as `Realtek USB Audio`.
+- ALSA UCM / OEM-style evidence may identify `Realtek ALC4080` only as a separate enrichment layer.
+- The forbidden claim is `usb.ids exact product Realtek ALC4080`.
+
+Laptop validation command:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\internal\Test-HardwareIdentityHarness.ps1 -AsJson
+```
+
+Next implementation step:
+
+1. Replace the fixture-only `usb.ids` simulation with a call into `internal\HardwareIdResolver.psm1`.
+2. Add a small `Test-HardwareIdResolver.ps1` smoke suite for PCI/USB/PNP IDs.
+3. Only after those pass, add an `Import-AlsaUcmProfiles.ps1` prototype.

@@ -1,0 +1,11 @@
+{
+  "infName": "oem12.inf",
+  "originalInfName": "rtdusbad_msi.inf",
+  "provider": "Realtek Semiconductor Corp.",
+  "section": "RtkUsbAD.NT",
+  "service": "RtkUsbAD_2422",
+  "exactHardwareIdMatch": "USB\\VID_0DB0&PID_CD0E&MI_00",
+  "resolvedDisplayName": "Realtek USB Audio",
+  "containsSiliconModel": false,
+  "claimScope": "driver-display-name"
+}
