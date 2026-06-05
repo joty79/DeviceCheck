@@ -69,6 +69,30 @@ Add-ResolverAssertion -Assertions $assertions -Name 'SCSI compact disk ID resolv
     -Expected 'SCSI / SCSI_STORAGE_COMPACT' `
     -Actual ("{0} / {1}" -f $scsiCompact.Bus, $scsiCompact.IdType)
 
+$hdAudioCodec = Resolve-HardwareId -HardwareId 'HDAUDIO\FUNC_01&VEN_10EC&DEV_0892&SUBSYS_10438698&REV_1003' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'HDAUDIO codec ID resolves before PNP fallback' `
+    -Passed (($hdAudioCodec.Bus -eq 'HDAUDIO') -and ($hdAudioCodec.IdType -eq 'HDAUDIO_CODEC')) `
+    -Expected 'HDAUDIO / HDAUDIO_CODEC' `
+    -Actual ("{0} / {1}" -f $hdAudioCodec.Bus, $hdAudioCodec.IdType)
+Add-ResolverAssertion -Assertions $assertions -Name 'HDAUDIO codec vendor resolves through pci.ids vendor table' `
+    -Passed (($hdAudioCodec.Fields.VendorId -eq '10EC') -and ($hdAudioCodec.Lookup.VendorName -like 'Realtek*')) `
+    -Expected '10EC / Realtek*' `
+    -Actual ("{0} / {1}" -f $hdAudioCodec.Fields.VendorId, $hdAudioCodec.Lookup.VendorName)
+Add-ResolverAssertion -Assertions $assertions -Name 'HDAUDIO SUBSYS parses ASUS vendor before board id' `
+    -Passed (($hdAudioCodec.Fields.SubvendorId -eq '1043') -and ($hdAudioCodec.Fields.SubdeviceId -eq '8698')) `
+    -Expected '1043 / 8698' `
+    -Actual ("{0} / {1}" -f $hdAudioCodec.Fields.SubvendorId, $hdAudioCodec.Fields.SubdeviceId)
+
+$hdAudioCompatible = Resolve-HardwareId -HardwareId 'HDAUDIO\FUNC_01&CTLR_VEN_8086&CTLR_DEV_A170&VEN_10EC&DEV_0892&REV_1003' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'HDAUDIO compatible ID preserves Intel controller tuple' `
+    -Passed (($hdAudioCompatible.Fields.ControllerVendorId -eq '8086') -and ($hdAudioCompatible.Fields.ControllerDeviceId -eq 'A170')) `
+    -Expected '8086 / A170' `
+    -Actual ("{0} / {1}" -f $hdAudioCompatible.Fields.ControllerVendorId, $hdAudioCompatible.Fields.ControllerDeviceId)
+Add-ResolverAssertion -Assertions $assertions -Name 'HDAUDIO compatible ID remains codec-level evidence' `
+    -Passed ($hdAudioCompatible.Confidence -eq 'CODEC-ID') `
+    -Expected 'CODEC-ID' `
+    -Actual ([string]$hdAudioCompatible.Confidence)
+
 $failed = @($assertions | Where-Object { -not $_.Passed })
 $summary = [pscustomobject]@{
     Passed     = ($failed.Count -eq 0)

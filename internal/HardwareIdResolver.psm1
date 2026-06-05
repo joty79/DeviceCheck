@@ -164,6 +164,107 @@ function Resolve-PciHardwareId {
     }) -Notes $notes.ToArray()
 }
 
+function Resolve-HdAudioHardwareId {
+    param(
+        [string]$InputId,
+        [string]$NormalizedId,
+        [object]$Cache
+    )
+
+    $functionId = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'FUNC' -Length 2
+    if ([string]::IsNullOrWhiteSpace($functionId) -or -not $NormalizedId.StartsWith('HDAUDIO\')) {
+        return $null
+    }
+
+    $vendorId = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'VEN' -Length 4
+    $deviceId = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'DEV' -Length 4
+    if ([string]::IsNullOrWhiteSpace($vendorId) -or [string]::IsNullOrWhiteSpace($deviceId)) {
+        return $null
+    }
+
+    $subsystemRaw = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'SUBSYS' -Length 8
+    $revision = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'REV' -Length 4
+    $controllerVendorId = ''
+    $controllerDeviceId = ''
+    $controllerVendorMatch = [regex]::Match($NormalizedId, '(?:^|[\\&])CTLR_VEN_(?<value>[0-9A-F]{4})(?:[\\&]|$)')
+    $controllerDeviceMatch = [regex]::Match($NormalizedId, '(?:^|[\\&])CTLR_DEV_(?<value>[0-9A-F]{4})(?:[\\&]|$)')
+    if ($controllerVendorMatch.Success) { $controllerVendorId = $controllerVendorMatch.Groups['value'].Value }
+    if ($controllerDeviceMatch.Success) { $controllerDeviceId = $controllerDeviceMatch.Groups['value'].Value }
+
+    $subvendorId = ''
+    $subdeviceId = ''
+    if (-not [string]::IsNullOrWhiteSpace($subsystemRaw)) {
+        $subvendorId = $subsystemRaw.Substring(0, 4)
+        $subdeviceId = $subsystemRaw.Substring(4, 4)
+    }
+
+    $vendorEntry = Get-JsonObjectPropertyValue -InputObject $Cache.Pci.Data.Vendors -PropertyName $vendorId
+    $deviceEntry = $null
+    if ($null -ne $vendorEntry) {
+        $deviceEntry = Get-JsonObjectPropertyValue -InputObject $vendorEntry.Devices -PropertyName $deviceId
+    }
+
+    $subvendorEntry = $null
+    if (-not [string]::IsNullOrWhiteSpace($subvendorId)) {
+        $subvendorEntry = Get-JsonObjectPropertyValue -InputObject $Cache.Pci.Data.Vendors -PropertyName $subvendorId
+    }
+
+    $controllerVendorEntry = $null
+    $controllerDeviceEntry = $null
+    if (-not [string]::IsNullOrWhiteSpace($controllerVendorId)) {
+        $controllerVendorEntry = Get-JsonObjectPropertyValue -InputObject $Cache.Pci.Data.Vendors -PropertyName $controllerVendorId
+        if ($null -ne $controllerVendorEntry -and -not [string]::IsNullOrWhiteSpace($controllerDeviceId)) {
+            $controllerDeviceEntry = Get-JsonObjectPropertyValue -InputObject $controllerVendorEntry.Devices -PropertyName $controllerDeviceId
+        }
+    }
+
+    $confidence = 'CODEC-ID'
+    if ($null -ne $deviceEntry -and $null -ne $subvendorEntry) {
+        $confidence = 'CODEC-ID+SUBVENDOR'
+    }
+    elseif ($null -ne $deviceEntry) {
+        $confidence = 'CODEC-ID'
+    }
+    elseif ($null -ne $vendorEntry -and $null -ne $subvendorEntry) {
+        $confidence = 'PARSED-CODEC+SUBVENDOR'
+    }
+    elseif ($null -ne $vendorEntry) {
+        $confidence = 'CODEC-ID'
+    }
+    else {
+        $confidence = 'PARSED-ONLY'
+    }
+
+    $notes = [System.Collections.Generic.List[string]]::new()
+    $notes.Add('Windows HDAUDIO IDs describe the codec/function on the HD Audio bus, not a USB VID/PID device.')
+    if (-not [string]::IsNullOrWhiteSpace($subsystemRaw)) {
+        $notes.Add('Windows HDAUDIO SUBSYS is parsed as subsystem vendor(first 4) + board/implementation id(last 4).')
+    }
+    if ($null -eq $deviceEntry) {
+        $notes.Add('The local PCI vendor table resolves the codec vendor, but may not contain the codec model name for this HDAUDIO DEV code.')
+    }
+
+    New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus 'HDAUDIO' -IdType 'HDAUDIO_CODEC' -Fields ([ordered]@{
+        FunctionId = $functionId
+        VendorId = $vendorId
+        DeviceId = $deviceId
+        SubsystemRaw = $subsystemRaw
+        SubvendorId = $subvendorId
+        SubdeviceId = $subdeviceId
+        Revision = $revision
+        ControllerVendorId = $controllerVendorId
+        ControllerDeviceId = $controllerDeviceId
+    }) -Confidence $confidence -Lookup ([ordered]@{
+        FunctionName = if ($functionId -eq '01') { 'Audio function group' } else { '' }
+        VendorName = if ($null -ne $vendorEntry) { $vendorEntry.Name } else { '' }
+        DeviceName = if ($null -ne $deviceEntry) { $deviceEntry.Name } else { '' }
+        SubvendorName = if ($null -ne $subvendorEntry) { $subvendorEntry.Name } else { '' }
+        ControllerVendorName = if ($null -ne $controllerVendorEntry) { $controllerVendorEntry.Name } else { '' }
+        ControllerDeviceName = if ($null -ne $controllerDeviceEntry) { $controllerDeviceEntry.Name } else { '' }
+        Source = 'Windows HDAUDIO + pci.ids vendors'
+    }) -Notes $notes.ToArray()
+}
+
 function Get-HardwareIdTokenValue {
     param(
         [string]$NormalizedId,
@@ -562,6 +663,9 @@ function Resolve-HardwareId {
             }
             if ($null -eq $resolution) {
                 $resolution = Resolve-UsbClassHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId
+            }
+            if ($null -eq $resolution) {
+                $resolution = Resolve-HdAudioHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
             }
             if ($null -eq $resolution) {
                 $resolution = Resolve-ScsiHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId

@@ -24,6 +24,32 @@
       "Confidence": "UserConfirmedExactPciTuple",
       "ConfidenceScore": 95,
       "Notes": "This is exact local board-model evidence because the desktop owner supplied the full model and matching PCI tuple. Do not generalize it to other 10DE:2803 boards."
+    },
+    {
+      "Bus": "HDAUDIO",
+      "VendorId": "10EC",
+      "DeviceId": "0892",
+      "SubvendorId": "1043",
+      "SubdeviceId": "8698",
+      "Revision": "1003",
+      "ModelKey": "Board Audio",
+      "ModelName": "ASUS Z170-A onboard Realtek ALC892 HD Audio",
+      "CodecName": "Realtek ALC892",
+      "Vendor": "ASUS",
+      "BoardManufacturer": "ASUSTeK COMPUTER INC.",
+      "BoardProduct": "Z170-A",
+      "Source": {
+        "Name": "ASUS Z170-A official user manual specifications summary",
+        "Type": "OfficialBoardManual",
+        "Url": "https://dlcdnets.asus.com/pub/ASUS/mb/LGA1151/Z170-A/E10611_Z170-A_UM_V2_WEB.pdf?model=z170-a"
+      },
+      "MatchedIds": [
+        "HDAUDIO\\FUNC_01&VEN_10EC&DEV_0892&SUBSYS_10438698&REV_1003",
+        "10EC:0892:1043:8698"
+      ],
+      "Confidence": "OfficialBoardSpecCorrelated",
+      "ConfidenceScore": 95,
+      "Notes": "ASUS official Z170-A manual identifies the board audio codec as Realtek ALC892. The HDAUDIO tuple resolves the Realtek codec vendor and ASUS subsystem vendor locally; this entry correlates that tuple with the official board specification."
     }
   ]
 }

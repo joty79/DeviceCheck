@@ -673,8 +673,15 @@ function Add-BoardModelEvidenceIndexEntry {
         -not [string]::IsNullOrWhiteSpace($vendorId) -and
         -not [string]::IsNullOrWhiteSpace($productId)
     )
+    $hasHdAudioTuple = (
+        $normalizedBus -eq 'HDAUDIO' -and
+        -not [string]::IsNullOrWhiteSpace($vendorId) -and
+        -not [string]::IsNullOrWhiteSpace($deviceId) -and
+        -not [string]::IsNullOrWhiteSpace($subvendorId) -and
+        -not [string]::IsNullOrWhiteSpace($subdeviceId)
+    )
 
-    if (-not ($hasPciTuple -or $hasUsbTuple)) {
+    if (-not ($hasPciTuple -or $hasUsbTuple -or $hasHdAudioTuple)) {
         return
     }
 
@@ -902,6 +909,72 @@ function Get-HardwareResolutionDetailRows {
             if ([string]::IsNullOrWhiteSpace($productName)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'No exact product model in local usb.ids' -Color 'Dim'))
             }
+            if (@($searchParts).Count -gt 0) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
+            }
+        }
+        elseif ($bus -eq 'HDAUDIO') {
+            $codecName = ''
+            $boardProduct = ''
+            $boardManufacturer = ''
+            $evidence = Get-BoardModelEvidenceForResolution -Resolution $Resolution
+            if ($null -ne $evidence) {
+                $codecName = [string](Get-NotePropertyValue -Object $evidence -Name 'CodecName')
+                $boardProduct = [string](Get-NotePropertyValue -Object $evidence -Name 'BoardProduct')
+                $boardManufacturer = [string](Get-NotePropertyValue -Object $evidence -Name 'BoardManufacturer')
+            }
+
+            $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+            $deviceId = [string](Get-NotePropertyValue -Object $fields -Name 'DeviceId')
+            $functionId = [string](Get-NotePropertyValue -Object $fields -Name 'FunctionId')
+            $subvendorId = [string](Get-NotePropertyValue -Object $fields -Name 'SubvendorId')
+            $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
+            $controllerVendorId = [string](Get-NotePropertyValue -Object $fields -Name 'ControllerVendorId')
+            $controllerDeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'ControllerDeviceId')
+            $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+            $subvendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubvendorName')
+            $controllerVendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'ControllerVendorName')
+            $controllerDeviceName = [string](Get-NotePropertyValue -Object $lookup -Name 'ControllerDeviceName')
+
+            if (-not [string]::IsNullOrWhiteSpace($codecName)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Codec' -Value $codecName -Color 'OK'))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Codec Vendor' -Value (Get-FormattedHardwareVendorName -Name $vendorName) -Color 'Dim'))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($subvendorName) -or -not [string]::IsNullOrWhiteSpace($subdeviceId)) {
+                $subsystemParts = @(
+                    (Get-FormattedHardwareVendorName -Name $subvendorName)
+                    $(if (-not [string]::IsNullOrWhiteSpace($subvendorId) -or -not [string]::IsNullOrWhiteSpace($subdeviceId)) { "$subvendorId`:$subdeviceId" })
+                ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                $rows.Add((New-HardwareIdentityRow -Key 'Subsystem' -Value (($subsystemParts | Select-Object -Unique) -join ' / ') -Color 'Info'))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($controllerVendorId) -or -not [string]::IsNullOrWhiteSpace($controllerDeviceId)) {
+                $controllerText = @(
+                    (Get-FormattedHardwareVendorName -Name $controllerVendorName)
+                    $controllerDeviceName
+                    $(if (-not [string]::IsNullOrWhiteSpace($controllerVendorId) -or -not [string]::IsNullOrWhiteSpace($controllerDeviceId)) { "$controllerVendorId`:$controllerDeviceId" })
+                ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                $rows.Add((New-HardwareIdentityRow -Key 'Controller' -Value (($controllerText | Select-Object -Unique) -join ' / ') -Color 'Dim'))
+            }
+            if (-not $hasEvidence) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'HDAUDIO codec/subsystem parsed; exact codec model needs board/OEM/open-source evidence' -Color 'Dim'))
+            }
+
+            $tupleFunctionId = if ([string]::IsNullOrWhiteSpace($functionId)) { '01' } else { $functionId }
+            $tupleHint = "HDAUDIO\FUNC_$tupleFunctionId&VEN_$vendorId&DEV_$deviceId"
+            if (-not [string]::IsNullOrWhiteSpace($subvendorId) -and -not [string]::IsNullOrWhiteSpace($subdeviceId)) {
+                $tupleHint = "$tupleHint&SUBSYS_$subvendorId$subdeviceId"
+            }
+            $searchParts = @(
+                $tupleHint
+                (Get-ShortHardwareVendorName -Name $subvendorName)
+                $boardManufacturer
+                $boardProduct
+                $codecName
+                $vendorId
+                $deviceId
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
             if (@($searchParts).Count -gt 0) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
             }
@@ -1572,6 +1645,79 @@ function Get-HardwareIdBreakdownLines {
             if (-not [string]::IsNullOrWhiteSpace($protocolId)) {
                 $protocolLine = "{0,-15} = {1}" -f "Prot_$protocolId", (Format-UiValue -Text $protocolName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($protocolLine)$($_C.Reset)")
+            }
+        }
+        elseif ($res.Bus -eq 'HDAUDIO') {
+            $functionId = $res.Fields.FunctionId
+            $vendorId = $res.Fields.VendorId
+            $deviceId = $res.Fields.DeviceId
+            $subsysRaw = $res.Fields.SubsystemRaw
+            $subvendorId = $res.Fields.SubvendorId
+            $subdeviceId = $res.Fields.SubdeviceId
+            $revision = $res.Fields.Revision
+            $controllerVendorId = $res.Fields.ControllerVendorId
+            $controllerDeviceId = $res.Fields.ControllerDeviceId
+            $evidence = Get-BoardModelEvidenceForResolution -Resolution $res
+
+            $functionName = if ($res.Lookup.FunctionName) { $res.Lookup.FunctionName } else { 'HD Audio function' }
+            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown codec vendor' }
+            $codecName = if ($null -ne $evidence) { [string](Get-NotePropertyValue -Object $evidence -Name 'CodecName') } else { '' }
+            $deviceName = if (-not [string]::IsNullOrWhiteSpace($codecName)) {
+                $codecName
+            } elseif ($res.Lookup.DeviceName) {
+                $res.Lookup.DeviceName
+            } else {
+                'codec device id'
+            }
+            $subvendorName = if ($res.Lookup.SubvendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.SubvendorName } else { '' }
+            $controllerVendorName = if ($res.Lookup.ControllerVendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.ControllerVendorName } else { '' }
+            $controllerDeviceName = if ($res.Lookup.ControllerDeviceName) { $res.Lookup.ControllerDeviceName } else { '' }
+
+            if (-not [string]::IsNullOrWhiteSpace($functionId)) {
+                $functionLine = "{0,-15} = {1}" -f "FUNC_$functionId", (Format-UiValue -Text $functionName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($functionLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($vendorId)) {
+                $vendorLine = "{0,-15} = {1}" -f "VEN_$vendorId", (Format-UiValue -Text $vendorName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($vendorLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($deviceId)) {
+                $deviceLine = "{0,-15} = {1}" -f "DEV_$deviceId", (Format-UiValue -Text $deviceName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.White)$($deviceLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($subsysRaw)) {
+                $subsystemDesc = if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+                    "$subvendorName audio implementation"
+                } else {
+                    'board audio implementation'
+                }
+                $subsysLine = "{0,-15} = {1}" -f "SUBSYS_$subsysRaw", (Format-UiValue -Text $subsystemDesc -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Info)$($subsysLine)$($_C.Reset)")
+
+                $subvendorDesc = if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+                    "subsystem vendor = $subvendorName"
+                } else {
+                    'subsystem vendor'
+                }
+                $subvendorLine = "   {0,-12} = {1}" -f $subvendorId, (Format-UiValue -Text $subvendorDesc -MaxLength ($valueWidth - 3))
+                $lines.Add("$pad$($_C.Dim)$($subvendorLine)$($_C.Reset)")
+
+                $subdeviceLine = "   {0,-12} = {1}" -f $subdeviceId, 'board/implementation ID'
+                $lines.Add("$pad$($_C.Dim)$($subdeviceLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($revision)) {
+                $revisionLine = "{0,-15} = {1}" -f "REV_$revision", 'codec revision'
+                $lines.Add("$pad$($_C.Dim)$($revisionLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($controllerVendorId)) {
+                $controllerVendorText = if (-not [string]::IsNullOrWhiteSpace($controllerVendorName)) { $controllerVendorName } else { 'controller vendor' }
+                $controllerVendorLine = "{0,-15} = {1}" -f "CTLR_VEN_$controllerVendorId", (Format-UiValue -Text $controllerVendorText -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($controllerVendorLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($controllerDeviceId)) {
+                $controllerDeviceText = if (-not [string]::IsNullOrWhiteSpace($controllerDeviceName)) { $controllerDeviceName } else { 'controller device' }
+                $controllerDeviceLine = "{0,-15} = {1}" -f "CTLR_DEV_$controllerDeviceId", (Format-UiValue -Text $controllerDeviceText -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($controllerDeviceLine)$($_C.Reset)")
             }
         }
         elseif ($res.Bus -eq 'SCSI') {
