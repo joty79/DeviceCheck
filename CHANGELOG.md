@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added DISPLAY monitor ID parsing for IDs such as `DISPLAY\GSM5BD3`, resolving the EISA/PNP manufacturer code through `pnp.ids` and preserving the EDID product code as monitor identity evidence.
+- Added broader Windows storage ID parsing for `USBSTOR\Disk&Ven_*&Prod_*` and compact `IDE\Disk...` disk IDs alongside the existing SCSI storage parser.
 - Added HDAUDIO codec/subsystem parsing for Windows HD Audio IDs such as `HDAUDIO\FUNC_01&VEN_10EC&DEV_0892&SUBSYS_10438698&REV_1003`, including controller tuple parsing for compatible IDs with `CTLR_VEN_*` / `CTLR_DEV_*`.
 - Added official-board-spec evidence for the ASUS Z170-A onboard Realtek ALC892 HD Audio tuple, sourced from the ASUS Z170-A official user manual.
 - Added ALSA UCM USB audio profile evidence support: tracked `source\alsa-ucm-conf` snapshot, importer, resolver, and regression smoke test for `0db0:cd0e -> Realtek/ALC4080`.
@@ -30,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the ChatGPT/Gemini research PDFs and `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md` as the laptop-ready roadmap for the local evidence database, source provenance, confidence model, and regression harness.
 
 ### Changed
+- Improved monitor and disk selected-device details so DISPLAY monitor IDs and USBSTOR/IDE disk IDs no longer fall through to generic PNP/unsupported identity when Windows exposes enough structured identity text.
 - Improved selected-device Hardware ID breakdown and Local Hardware Identity rows for Realtek HD Audio devices so HDAUDIO IDs no longer fall through to misleading PNP compact parsing such as `VEN_HDA` / `DEV_UDIO`.
 - Improved disk identity display by adding SCSI/storage ID parsing for Windows disk IDs such as `SCSI\DISK&VEN_NVME&PROD_*`, avoiding misleading PNP fallback rows for NVMe/SATA drives.
 - Improved USB Hardware ID parsing and display: `REV_*` and `MI_*` are now extracted regardless of order, and USB compatible class IDs such as `USB\Class_01&SubClass_00&Prot_20` resolve as generic USB Audio class evidence.

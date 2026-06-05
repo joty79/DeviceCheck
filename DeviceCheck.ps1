@@ -519,6 +519,7 @@ function Get-HardwareResolutionDisplayText {
     $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
     $subvendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'SubvendorName')
     $subdeviceId = [string](Get-NotePropertyValue -Object $fields -Name 'SubdeviceId')
+    $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
     $textParts = [System.Collections.Generic.List[string]]::new()
 
     if (-not [string]::IsNullOrWhiteSpace($bus)) {
@@ -537,6 +538,9 @@ function Get-HardwareResolutionDisplayText {
             $boardText = "$boardText $subdeviceId"
         }
         $textParts.Add($boardText)
+    }
+    if ($bus -eq 'DISPLAY' -and -not [string]::IsNullOrWhiteSpace($productId)) {
+        $textParts.Add("EDID product $productId")
     }
 
     if ($textParts.Count -eq 0) {
@@ -680,8 +684,13 @@ function Add-BoardModelEvidenceIndexEntry {
         -not [string]::IsNullOrWhiteSpace($subvendorId) -and
         -not [string]::IsNullOrWhiteSpace($subdeviceId)
     )
+    $hasDisplayTuple = (
+        $normalizedBus -eq 'DISPLAY' -and
+        -not [string]::IsNullOrWhiteSpace($vendorId) -and
+        -not [string]::IsNullOrWhiteSpace($productId)
+    )
 
-    if (-not ($hasPciTuple -or $hasUsbTuple -or $hasHdAudioTuple)) {
+    if (-not ($hasPciTuple -or $hasUsbTuple -or $hasHdAudioTuple -or $hasDisplayTuple)) {
         return
     }
 
@@ -979,7 +988,34 @@ function Get-HardwareResolutionDetailRows {
                 $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
             }
         }
-        elseif ($bus -eq 'SCSI') {
+        elseif ($bus -eq 'DISPLAY') {
+            $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+            $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
+            $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+            $displayVendor = if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
+                Get-FormattedHardwareVendorName -Name $vendorName
+            } else {
+                $vendorId
+            }
+            if (-not [string]::IsNullOrWhiteSpace($displayVendor)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Display Vendor' -Value $displayVendor -Color 'White'))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($productId)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'EDID Product' -Value $productId -Color 'Info'))
+            }
+            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/OEM evidence' -Color 'Dim'))
+            $searchParts = @(
+                $(if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) { "DISPLAY\$vendorId$productId" })
+                $displayVendor
+                $vendorId
+                $productId
+                'monitor'
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            if (@($searchParts).Count -gt 0) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
+            }
+        }
+        elseif ($bus -in @('SCSI', 'USBSTOR', 'IDE')) {
             $deviceTypeName = [string](Get-NotePropertyValue -Object $lookup -Name 'DeviceTypeName')
             $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
             $productName = [string](Get-NotePropertyValue -Object $lookup -Name 'ProductName')
@@ -992,7 +1028,7 @@ function Get-HardwareResolutionDetailRows {
             if (-not [string]::IsNullOrWhiteSpace($deviceTypeName)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Storage Type' -Value $deviceTypeName -Color 'Dim'))
             }
-            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'Parsed from Windows SCSI/storage ID; no pci.ids/usb.ids database lookup' -Color 'Dim'))
+            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value "Parsed from Windows $bus storage ID; no pci.ids/usb.ids database lookup" -Color 'Dim'))
         }
         return @($rows)
     }
@@ -1720,7 +1756,21 @@ function Get-HardwareIdBreakdownLines {
                 $lines.Add("$pad$($_C.Dim)$($controllerDeviceLine)$($_C.Reset)")
             }
         }
-        elseif ($res.Bus -eq 'SCSI') {
+        elseif ($res.Bus -eq 'DISPLAY') {
+            $vendorId = $res.Fields.VendorId
+            $productId = $res.Fields.ProductId
+            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown display vendor' }
+
+            if (-not [string]::IsNullOrWhiteSpace($vendorId)) {
+                $vendorLine = "{0,-15} = {1}" -f $vendorId, (Format-UiValue -Text $vendorName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($vendorLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($productId)) {
+                $productLine = "{0,-15} = {1}" -f $productId, 'EDID/product code'
+                $lines.Add("$pad$($_C.White)$($productLine)$($_C.Reset)")
+            }
+        }
+        elseif ($res.Bus -in @('SCSI', 'USBSTOR', 'IDE')) {
             $deviceType = $res.Fields.DeviceType
             $vendorId = $res.Fields.VendorId
             $productId = $res.Fields.ProductId

@@ -69,6 +69,36 @@ Add-ResolverAssertion -Assertions $assertions -Name 'SCSI compact disk ID resolv
     -Expected 'SCSI / SCSI_STORAGE_COMPACT' `
     -Actual ("{0} / {1}" -f $scsiCompact.Bus, $scsiCompact.IdType)
 
+$usbStorStructured = Resolve-HardwareId -HardwareId 'USBSTOR\Disk&Ven_Kingston&Prod_DataTraveler_3.0&Rev_PMAP' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'USBSTOR structured disk ID resolves as storage identity' `
+    -Passed (($usbStorStructured.Bus -eq 'USBSTOR') -and ($usbStorStructured.Confidence -eq 'PARSED-STORAGE')) `
+    -Expected 'USBSTOR / PARSED-STORAGE' `
+    -Actual ("{0} / {1}" -f $usbStorStructured.Bus, $usbStorStructured.Confidence)
+Add-ResolverAssertion -Assertions $assertions -Name 'USBSTOR structured product is parsed' `
+    -Passed ($usbStorStructured.Lookup.ProductName -eq 'DATATRAVELER 3.0') `
+    -Expected 'DATATRAVELER 3.0' `
+    -Actual ([string]$usbStorStructured.Lookup.ProductName)
+
+$ideCompact = Resolve-HardwareId -HardwareId 'IDE\DiskSamsung_SSD_860_EVO_500GB________________RVT04B6Q' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'IDE compact disk ID resolves before PNP fallback' `
+    -Passed (($ideCompact.Bus -eq 'IDE') -and ($ideCompact.IdType -eq 'IDE_STORAGE_COMPACT')) `
+    -Expected 'IDE / IDE_STORAGE_COMPACT' `
+    -Actual ("{0} / {1}" -f $ideCompact.Bus, $ideCompact.IdType)
+
+$displayMonitor = Resolve-HardwareId -HardwareId 'DISPLAY\GSM5BD3' -Cache $cache
+Add-ResolverAssertion -Assertions $assertions -Name 'DISPLAY monitor ID resolves before PNP fallback' `
+    -Passed (($displayMonitor.Bus -eq 'DISPLAY') -and ($displayMonitor.IdType -eq 'DISPLAY_EDID_PRODUCT')) `
+    -Expected 'DISPLAY / DISPLAY_EDID_PRODUCT' `
+    -Actual ("{0} / {1}" -f $displayMonitor.Bus, $displayMonitor.IdType)
+Add-ResolverAssertion -Assertions $assertions -Name 'DISPLAY monitor vendor resolves through pnp.ids' `
+    -Passed (($displayMonitor.Fields.VendorId -eq 'GSM') -and ($displayMonitor.Lookup.VendorName -eq 'LG Electronics')) `
+    -Expected 'GSM / LG Electronics' `
+    -Actual ("{0} / {1}" -f $displayMonitor.Fields.VendorId, $displayMonitor.Lookup.VendorName)
+Add-ResolverAssertion -Assertions $assertions -Name 'DISPLAY product code is preserved' `
+    -Passed ($displayMonitor.Fields.ProductId -eq '5BD3') `
+    -Expected '5BD3' `
+    -Actual ([string]$displayMonitor.Fields.ProductId)
+
 $hdAudioCodec = Resolve-HardwareId -HardwareId 'HDAUDIO\FUNC_01&VEN_10EC&DEV_0892&SUBSYS_10438698&REV_1003' -Cache $cache
 Add-ResolverAssertion -Assertions $assertions -Name 'HDAUDIO codec ID resolves before PNP fallback' `
     -Passed (($hdAudioCodec.Bus -eq 'HDAUDIO') -and ($hdAudioCodec.IdType -eq 'HDAUDIO_CODEC')) `

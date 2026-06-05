@@ -483,14 +483,44 @@ function Get-ScsiDeviceTypeName {
     }
 }
 
-function Resolve-ScsiHardwareId {
+function Resolve-DisplayHardwareId {
+    param(
+        [string]$InputId,
+        [string]$NormalizedId,
+        [object]$Cache
+    )
+
+    $displayMatch = [regex]::Match($NormalizedId, '^DISPLAY\\(?<compact>[A-Z0-9]{7})(?:\\|$)')
+    if (-not $displayMatch.Success) {
+        return $null
+    }
+
+    $compactId = $displayMatch.Groups['compact'].Value
+    $vendorId = $compactId.Substring(0, 3)
+    $productId = $compactId.Substring(3, 4)
+    $vendorEntry = Resolve-PnpVendor -VendorId $vendorId -Cache $Cache
+    $confidence = if ($null -ne $vendorEntry) { 'DISPLAY-PRODUCT-CODE' } else { 'PARSED-DISPLAY' }
+
+    New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus 'DISPLAY' -IdType 'DISPLAY_EDID_PRODUCT' -Fields ([ordered]@{
+        VendorId = $vendorId
+        ProductId = $productId
+        DeviceId = $productId
+    }) -Confidence $confidence -Lookup ([ordered]@{
+        VendorName = if ($null -ne $vendorEntry) { $vendorEntry.Name } else { '' }
+        ProductName = ''
+        Source = if ($null -ne $vendorEntry) { 'pnp.ids + EDID product code' } else { 'EDID product code' }
+    }) -Notes @('DISPLAY IDs contain an EISA/PNP manufacturer code plus a vendor-assigned EDID product code; exact monitor marketing model needs EDID decode, monitor INF, or OEM evidence.')
+}
+
+function Resolve-StorageHardwareId {
     param(
         [string]$InputId,
         [string]$NormalizedId
     )
 
-    $structuredMatch = [regex]::Match($NormalizedId, '^SCSI\\(?<type>[A-Z0-9]+)&VEN_(?<vendor>[^&\\]+)&PROD_(?<product>[^&\\]+)(?:&REV_(?<revision>[^&\\]+))?')
+    $structuredMatch = [regex]::Match($NormalizedId, '^(?<bus>SCSI|USBSTOR|IDE)\\(?<type>[A-Z0-9]+)&VEN_(?<vendor>[^&\\]+)&PROD_(?<product>[^&\\]+)(?:&REV_(?<revision>[^&\\]+))?')
     if ($structuredMatch.Success) {
+        $bus = $structuredMatch.Groups['bus'].Value
         $deviceType = $structuredMatch.Groups['type'].Value
         $vendorId = $structuredMatch.Groups['vendor'].Value
         $productId = $structuredMatch.Groups['product'].Value
@@ -498,7 +528,7 @@ function Resolve-ScsiHardwareId {
         $vendorName = ConvertFrom-ScsiIdentifierText -Value $vendorId
         $productName = ConvertFrom-ScsiIdentifierText -Value $productId
 
-        return (New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus 'SCSI' -IdType 'SCSI_STORAGE_ID' -Fields ([ordered]@{
+        return (New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus $bus -IdType "$bus`_STORAGE_ID" -Fields ([ordered]@{
                     DeviceType = $deviceType
                     VendorId = $vendorId
                     ProductId = $productId
@@ -508,14 +538,15 @@ function Resolve-ScsiHardwareId {
                     VendorName = $vendorName
                     ProductName = $productName
                     Source = 'Windows storage ID'
-                }) -Notes @('Windows exposes many SATA/NVMe disks through SCSI-style storage IDs; this is a storage stack identity, not a PCI/USB database lookup.'))
+                }) -Notes @('Windows storage IDs expose bus/storage-stack strings and vendor/model text; this is not a PCI/USB product database lookup.'))
     }
 
-    $compactMatch = [regex]::Match($NormalizedId, '^SCSI\\(?<type>DISK|CDROM|TAPE|PRINTER|SCANNER|CHANGER|ENCLOSURE)(?<payload>.+)$')
+    $compactMatch = [regex]::Match($NormalizedId, '^(?<bus>SCSI|USBSTOR|IDE)\\(?<type>DISK|CDROM|TAPE|PRINTER|SCANNER|CHANGER|ENCLOSURE)(?<payload>.+)$')
     if (-not $compactMatch.Success) {
         return $null
     }
 
+    $compactBus = $compactMatch.Groups['bus'].Value
     $compactType = $compactMatch.Groups['type'].Value
     $payload = $compactMatch.Groups['payload'].Value
     $vendorId = ''
@@ -528,7 +559,7 @@ function Resolve-ScsiHardwareId {
     $compactVendorName = ConvertFrom-ScsiIdentifierText -Value $vendorId
     $compactProductName = ConvertFrom-ScsiIdentifierText -Value $productId
 
-    New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus 'SCSI' -IdType 'SCSI_STORAGE_COMPACT' -Fields ([ordered]@{
+    New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus $compactBus -IdType "$compactBus`_STORAGE_COMPACT" -Fields ([ordered]@{
         DeviceType = $compactType
         VendorId = $vendorId
         ProductId = $productId
@@ -538,7 +569,7 @@ function Resolve-ScsiHardwareId {
         VendorName = $compactVendorName
         ProductName = $compactProductName
         Source = 'Windows storage ID'
-    }) -Notes @('Compact SCSI storage IDs carry a padded vendor/model string; prefer structured VEN/PROD IDs when Windows exposes them.')
+    }) -Notes @('Compact Windows storage IDs carry a padded vendor/model string; prefer structured VEN/PROD IDs when Windows exposes them.')
 }
 
 function Resolve-PnpVendor {
@@ -668,7 +699,10 @@ function Resolve-HardwareId {
                 $resolution = Resolve-HdAudioHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
             }
             if ($null -eq $resolution) {
-                $resolution = Resolve-ScsiHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId
+                $resolution = Resolve-DisplayHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
+            }
+            if ($null -eq $resolution) {
+                $resolution = Resolve-StorageHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId
             }
             if ($null -eq $resolution) {
                 $resolution = Resolve-AcpiOrPnpHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
