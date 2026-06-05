@@ -738,7 +738,8 @@ function Add-BoardModelEvidenceRows {
 
 function Get-HardwareResolutionDetailRows {
     param(
-        [object]$Resolution
+        [object]$Resolution,
+        [object]$Evidence
     )
 
     $rows = [System.Collections.Generic.List[object]]::new()
@@ -760,6 +761,12 @@ function Get-HardwareResolutionDetailRows {
             $interfaceId = [string](Get-NotePropertyValue -Object $fields -Name 'InterfaceId')
             $productName = [string](Get-NotePropertyValue -Object $lookup -Name 'ProductName')
             $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
+            $driver = Get-InstalledDriverEvidenceFields -Evidence $Evidence
+            $safeVendorName = Get-ShortHardwareVendorName -Name $vendorName
+            if (-not [string]::IsNullOrWhiteSpace($safeVendorName) -and -not [string]::IsNullOrWhiteSpace($driver.DeviceName)) {
+                $safeKind = if ($driver.DeviceName -match '(?i)audio') { 'USB Audio device' } else { 'USB device' }
+                $rows.Add((New-HardwareIdentityRow -Key 'Safe Label' -Value "$safeVendorName $safeKind, $($driver.DeviceName) driver" -Color 'White'))
+            }
             $busPrefix = if ($bus -eq 'HID') { 'HID' } else { 'USB' }
             $tupleHint = ''
             if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) {
@@ -935,7 +942,7 @@ function Get-LocalHardwareIdentityRows {
                 continue
             }
 
-            foreach ($row in @(Get-HardwareResolutionDetailRows -Resolution $resolution)) {
+            foreach ($row in @(Get-HardwareResolutionDetailRows -Resolution $resolution -Evidence $Evidence)) {
                 $duplicate = @($rows | Where-Object { $_.Key -eq $row.Key -and $_.Value -eq $row.Value }).Count -gt 0
                 if (-not $duplicate) {
                     $rows.Add($row)
@@ -1365,7 +1372,7 @@ function Get-HardwareIdBreakdownLines {
                 $lines.Add("$pad$($_C.Dim)$($revLine)$($_C.Reset)")
             }
         }
-        elseif ($res.Bus -in @('USB', 'HID')) {
+        elseif ($res.Bus -in @('USB', 'HID') -and $res.IdType -ne 'USB_CLASS') {
             $vendorId = $res.Fields.VendorId
             $productId = $res.Fields.ProductId
             $interfaceId = $res.Fields.InterfaceId
@@ -1411,8 +1418,29 @@ function Get-HardwareIdBreakdownLines {
             # 4. REV (if present)
             if (-not [string]::IsNullOrWhiteSpace($revision)) {
                 $revText = "REV_$revision"
-                $revLine = "{0,-15} = {1}" -f $revText, "revision"
+                $revLine = "{0,-15} = {1}" -f $revText, "device revision / bcdDevice"
                 $lines.Add("$pad$($_C.Dim)$($revLine)$($_C.Reset)")
+            }
+        }
+        elseif ($res.Bus -in @('USB', 'HID') -and $res.IdType -eq 'USB_CLASS') {
+            $classId = $res.Fields.ClassId
+            $subclassId = $res.Fields.SubclassId
+            $protocolId = $res.Fields.ProtocolId
+            $className = if ($res.Lookup.ClassName) { $res.Lookup.ClassName } else { 'USB class' }
+            $subclassName = if ($res.Lookup.SubclassName) { $res.Lookup.SubclassName } else { 'subclass' }
+            $protocolName = if ($res.Lookup.ProtocolName) { $res.Lookup.ProtocolName } else { 'protocol' }
+
+            if (-not [string]::IsNullOrWhiteSpace($classId)) {
+                $classLine = "{0,-15} = {1}" -f "Class_$classId", (Format-UiValue -Text $className -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.White)$($classLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($subclassId)) {
+                $subclassLine = "{0,-15} = {1}" -f "SubClass_$subclassId", (Format-UiValue -Text $subclassName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($subclassLine)$($_C.Reset)")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($protocolId)) {
+                $protocolLine = "{0,-15} = {1}" -f "Prot_$protocolId", (Format-UiValue -Text $protocolName -MaxLength $valueWidth)
+                $lines.Add("$pad$($_C.Dim)$($protocolLine)$($_C.Reset)")
             }
         }
         elseif ($res.Bus -in @('ACPI', 'PNP')) {
@@ -2035,6 +2063,9 @@ function Get-DetailDisplayLines {
             if ($compatibleIds) {
                 $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
                 $lines.Add((New-KeyValueLine -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width))
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width $Width)) {
+                    $lines.Add($breakdownLine)
+                }
             }
 
             $localIdentityRows = @(Get-LocalHardwareIdentityRows -Evidence $cachedEvidence -InstanceId $SelectedRow.Ref.InstanceId -MaxCount 3)
@@ -2477,6 +2508,9 @@ function Render-FrameLegacy {
             if ($compatibleIds) {
                 $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
                 Write-Host "  $($_C.Dim)CompatibleId :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstCompatibleId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width (Get-UiWidth))) {
+                    Write-Host $breakdownLine
+                }
             }
 
             $localIdentityRows = @(Get-LocalHardwareIdentityRows -Evidence $cachedEvidence -InstanceId $selectedRow.Ref.InstanceId -MaxCount 3)

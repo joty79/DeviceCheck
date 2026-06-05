@@ -76,7 +76,7 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 
 ### The Solution
 
-The migrated `internal\` tools build a local `hwdata` cache, resolve Hardware IDs, inspect installed INF evidence, create unified evidence bundles, and validate candidate package metadata. PCI resolution separates chip identity from board identity: for example `VEN/DEV` can identify the GPU chip, while `SUBSYS` can still expose the board vendor and board code even when the exact marketing model is missing locally. The TUI auto-builds the generated `data\hwdb` cache from the tracked runtime-critical `source\hwdata` ID files when it is missing, so the local database can travel between machines without manual bootstrap. A separate read-only board-model evidence file can add user-confirmed exact marketing models without pretending that `pci.ids` knew them. The first TUI integrations are local Hardware ID resolution, board-model evidence display, and readable installed-driver evidence in the selected-device details pane; the deeper INF/trust/package layers remain CLI/report-first for now.
+The migrated `internal\` tools build a local `hwdata` cache, resolve Hardware IDs, inspect installed INF evidence, create unified evidence bundles, and validate candidate package metadata. PCI resolution separates chip identity from board identity: for example `VEN/DEV` can identify the GPU chip, while `SUBSYS` can still expose the board vendor and board code even when the exact marketing model is missing locally. USB resolution separates exact `VID/PID` identity from generic compatible class evidence, so `USB\Class_01&SubClass_00&Prot_20` can explain "USB Audio class match" without pretending to know the exact product or codec. The TUI auto-builds the generated `data\hwdb` cache from the tracked runtime-critical `source\hwdata` ID files when it is missing, so the local database can travel between machines without manual bootstrap. A separate read-only board-model evidence file can add user-confirmed exact marketing models without pretending that `pci.ids` or `usb.ids` knew them. The first TUI integrations are local Hardware ID resolution, board-model evidence display, USB class breakdown, safe local labels, and readable installed-driver evidence in the selected-device details pane; the deeper INF/trust/package layers remain CLI/report-first for now.
 
 ```text
 hwdata source -> data\hwdb -> resolver -> inventory/evidence -> package metadata gate
@@ -92,6 +92,9 @@ pwsh -ExecutionPolicy Bypass -File .\internal\Update-HardwareIdDatabases.ps1
 # Resolve a Hardware ID from the local cache
 pwsh -ExecutionPolicy Bypass -File .\internal\Resolve-HardwareIds.ps1 'USB\VID_5986&PID_215D'
 
+# Run Hardware ID resolver smoke tests
+pwsh -ExecutionPolicy Bypass -File .\internal\Test-HardwareIdResolver.ps1
+
 # Create an audit-only package metadata template from latest evidence
 pwsh -ExecutionPolicy Bypass -File .\internal\Test-DriverCandidatePackageMetadata.ps1 -CreateTemplate -Filter Camera
 ```
@@ -100,6 +103,7 @@ pwsh -ExecutionPolicy Bypass -File .\internal\Test-DriverCandidatePackageMetadat
 |------|---------|
 | `internal\Update-HardwareIdDatabases.ps1` | Imports local `source\hwdata` into generated `data\hwdb`. |
 | `internal\HardwareIdResolver.psm1` | Parses and resolves PCI/USB/HID/ACPI/PNP IDs from the local cache. |
+| `internal\Test-HardwareIdResolver.ps1` | Smoke-tests resolver behavior for USB `VID/PID/REV/MI` parsing and generic USB class compatible IDs. |
 | `internal\InfDriverParser.psm1` | Independent section-aware INF parser; does not copy GPL `wininfparser` code. |
 | `internal\Find-InstalledInfMatches.ps1` | Local audit-only installed INF evidence matcher. |
 | `internal\New-DriverEvidenceBundle.ps1` | Composes inventory, candidate links, INF evidence, and research trust. |

@@ -447,3 +447,10 @@ Root cause: The user can supply real-world devices and test observations from ho
 Guardrail/rule: Codex should lead the technical path and explain each step in plain power-user language: what changed, what the user should test, what result matters, and what the evidence means. Treat the GPU and Realtek USB Audio examples as intentionally difficult calibration samples, not as the full dataset. Build toward repeatable collection at work where more PCs can become samples.
 Files affected: `PROJECT_RULES.md`.
 Validation/tests run: Documentation memory update only.
+
+Date: 2026-06-06
+Problem: The Realtek USB Audio details pane explained `VID`/`PID`/`MI`, but lost `REV_0005` when `REV` appeared before `MI`, and did not explain compatible USB class IDs such as `USB\Class_01&SubClass_00&Prot_20`.
+Root cause: USB VID/PID parsing expected a specific optional-token order, and class-based compatible IDs were treated as unsupported instead of generic USB function evidence.
+Guardrail/rule: USB token parsing must be order-independent for `VID`, `PID`, `REV`, and `MI`. USB class compatible IDs may be mapped to standard class meanings such as `Class_01 = Audio`, but this remains generic function evidence and must never become an exact product/chip model.
+Files affected: `DeviceCheck.ps1`, `internal\HardwareIdResolver.psm1`, `internal\Test-HardwareIdResolver.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\HardwareIdResolver.psm1`, `internal\Test-HardwareIdResolver.ps1`, and `internal\Test-HardwareIdentityHarness.ps1`; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`; JSON parse validation for schemas, fixtures, and config; `git diff --check`.

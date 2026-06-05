@@ -164,6 +164,103 @@ function Resolve-PciHardwareId {
     }) -Notes $notes.ToArray()
 }
 
+function Get-HardwareIdTokenValue {
+    param(
+        [string]$NormalizedId,
+        [string]$TokenName,
+        [int]$Length
+    )
+
+    $pattern = '(?:^|[\\&]){0}_(?<value>[0-9A-F]{{{1}}})(?:[\\&]|$)' -f [regex]::Escape($TokenName.ToUpperInvariant()), $Length
+    $tokenMatch = [regex]::Match($NormalizedId, $pattern)
+    if (-not $tokenMatch.Success) {
+        return ''
+    }
+
+    return $tokenMatch.Groups['value'].Value
+}
+
+function Get-UsbClassName {
+    param([string]$ClassId)
+
+    switch ($ClassId.ToUpperInvariant()) {
+        '00' { return '(Defined at Interface level)' }
+        '01' { return 'Audio' }
+        '02' { return 'Communications' }
+        '03' { return 'Human Interface Device' }
+        '05' { return 'Physical Interface Device' }
+        '06' { return 'Imaging' }
+        '07' { return 'Printer' }
+        '08' { return 'Mass Storage' }
+        '09' { return 'Hub' }
+        '0A' { return 'CDC Data' }
+        '0B' { return 'Smart Card' }
+        '0D' { return 'Content Security' }
+        '0E' { return 'Video' }
+        '0F' { return 'Personal Healthcare' }
+        '10' { return 'Audio/Video' }
+        'DC' { return 'Diagnostic Device' }
+        'E0' { return 'Wireless Controller' }
+        'EF' { return 'Miscellaneous Device' }
+        'FE' { return 'Application Specific' }
+        'FF' { return 'Vendor Specific' }
+        default { return '' }
+    }
+}
+
+function Get-UsbSubclassName {
+    param(
+        [string]$ClassId,
+        [string]$SubclassId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SubclassId)) {
+        return ''
+    }
+
+    $class = $ClassId.ToUpperInvariant()
+    $subclass = $SubclassId.ToUpperInvariant()
+    if ($class -eq '01') {
+        switch ($subclass) {
+            '00' { return 'No subclass / unspecified' }
+            '01' { return 'Audio Control' }
+            '02' { return 'Audio Streaming' }
+            '03' { return 'MIDI Streaming' }
+        }
+    }
+    elseif ($class -eq '03') {
+        switch ($subclass) {
+            '00' { return 'No subclass' }
+            '01' { return 'Boot Interface Subclass' }
+        }
+    }
+
+    return ''
+}
+
+function Get-UsbProtocolName {
+    param(
+        [string]$ClassId,
+        [string]$ProtocolId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProtocolId)) {
+        return ''
+    }
+
+    $class = $ClassId.ToUpperInvariant()
+    $protocol = $ProtocolId.ToUpperInvariant()
+    if ($class -eq '01') {
+        switch ($protocol) {
+            '00' { return 'No class-specific protocol' }
+            '20' { return 'USB Audio 2.0-style class match' }
+            '30' { return 'USB Audio 3.0-style class match' }
+        }
+    }
+
+    return ''
+}
+
 function Resolve-UsbHardwareId {
     param(
         [string]$InputId,
@@ -171,7 +268,7 @@ function Resolve-UsbHardwareId {
         [object]$Cache
     )
 
-    $idMatch = [regex]::Match($NormalizedId, '^(?<bus>USB|HID)\\.*?VID_(?<vendor>[0-9A-F]{4}).*?PID_(?<product>[0-9A-F]{4})(?:.*?MI_(?<interface>[0-9A-F]{2}))?(?:.*?REV_(?<revision>[0-9A-F]{4}))?')
+    $idMatch = [regex]::Match($NormalizedId, '^(?<bus>USB|HID)\\.*?VID_(?<vendor>[0-9A-F]{4}).*?PID_(?<product>[0-9A-F]{4})')
     if (-not $idMatch.Success) {
         return $null
     }
@@ -179,8 +276,8 @@ function Resolve-UsbHardwareId {
     $bus = $idMatch.Groups['bus'].Value
     $vendorId = $idMatch.Groups['vendor'].Value
     $productId = $idMatch.Groups['product'].Value
-    $interfaceId = $idMatch.Groups['interface'].Value
-    $revision = $idMatch.Groups['revision'].Value
+    $interfaceId = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'MI' -Length 2
+    $revision = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'REV' -Length 4
 
     $vendorEntry = Get-JsonObjectPropertyValue -InputObject $Cache.Usb.Data.Vendors -PropertyName $vendorId
     $productEntry = $null
@@ -219,6 +316,39 @@ function Resolve-UsbHardwareId {
         InterfaceName = if ($null -ne $interfaceEntry) { $interfaceEntry.Name } else { '' }
         Source = 'usb.ids'
     }) -Notes $notes.ToArray()
+}
+
+function Resolve-UsbClassHardwareId {
+    param(
+        [string]$InputId,
+        [string]$NormalizedId
+    )
+
+    $idMatch = [regex]::Match($NormalizedId, '^(?<bus>USB|HID)\\.*?CLASS_(?<class>[0-9A-F]{2})')
+    if (-not $idMatch.Success) {
+        return $null
+    }
+
+    $bus = $idMatch.Groups['bus'].Value
+    $classId = $idMatch.Groups['class'].Value
+    $subclassId = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'SUBCLASS' -Length 2
+    $protocolId = Get-HardwareIdTokenValue -NormalizedId $NormalizedId -TokenName 'PROT' -Length 2
+
+    $className = Get-UsbClassName -ClassId $classId
+    $subclassName = Get-UsbSubclassName -ClassId $classId -SubclassId $subclassId
+    $protocolName = Get-UsbProtocolName -ClassId $classId -ProtocolId $protocolId
+    $confidence = if (-not [string]::IsNullOrWhiteSpace($className)) { 'CLASS-MATCH' } else { 'PARSED-ONLY' }
+
+    New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus $bus -IdType 'USB_CLASS' -Fields ([ordered]@{
+        ClassId = $classId
+        SubclassId = $subclassId
+        ProtocolId = $protocolId
+    }) -Confidence $confidence -Lookup ([ordered]@{
+        ClassName = $className
+        SubclassName = $subclassName
+        ProtocolName = $protocolName
+        Source = 'USB class codes'
+    }) -Notes @('Class/Protocol IDs describe a generic USB function, not an exact vendor product model.')
 }
 
 function Resolve-PnpVendor {
@@ -340,6 +470,9 @@ function Resolve-HardwareId {
             $resolution = Resolve-PciHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
             if ($null -eq $resolution) {
                 $resolution = Resolve-UsbHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
+            }
+            if ($null -eq $resolution) {
+                $resolution = Resolve-UsbClassHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId
             }
             if ($null -eq $resolution) {
                 $resolution = Resolve-AcpiOrPnpHardwareId -InputId $hardwareIdValue -NormalizedId $normalizedId -Cache $Cache
