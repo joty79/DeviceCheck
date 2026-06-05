@@ -440,3 +440,10 @@ Root cause: `usb.ids` can be vendor-only for new OEM USB devices, while Windows 
 Guardrail/rule: Keep `USB\VID_0DB0&PID_CD0E&MI_00` as a permanent regression fixture, not a hardcoded live mapping. `usb.ids` product absence must remain `VENDOR-ONLY`; INF evidence is `Driver Identity`; ALSA/OEM-style evidence is a separate enrichment layer with its own provenance.
 Files affected: `docs\DeviceCheck_ Local Hardware Identity Design.md`, `docs\Designing a Reliable Local Digital Evidence Architecture.md`, `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md`, `schemas\hardware-source-manifest.schema.json`, `schemas\device-evidence-bundle.schema.json`, `schemas\hardware-regression-tests.schema.json`, `tests\fixtures\hardware-identity\TC_MSI_X870_REALTEK_AUDIO_001\*`, `internal\Test-HardwareIdentityHarness.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for `internal\Test-HardwareIdentityHarness.ps1`; JSON parse validation for schemas and fixtures; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`.
+
+Date: 2026-06-06
+Problem: The project goal is driven by power-user hardware auditing needs, not by a coder wanting implementation details for their own sake.
+Root cause: The user can supply real-world devices and test observations from home/work PCs, but does not want to be responsible for choosing technical architecture, parsers, schemas, or confidence models.
+Guardrail/rule: Codex should lead the technical path and explain each step in plain power-user language: what changed, what the user should test, what result matters, and what the evidence means. Treat the GPU and Realtek USB Audio examples as intentionally difficult calibration samples, not as the full dataset. Build toward repeatable collection at work where more PCs can become samples.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Documentation memory update only.
