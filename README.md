@@ -55,10 +55,11 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 | Key | Action |
 |-----|--------|
 | `R` | Rescan machine evidence and the full present PnP device tree; shows running/complete counts |
-| `E` | Collect local evidence for the selected device; on a category, scan that group; on the computer root, scan all present devices. Selected-device details refresh as soon as evidence is saved |
+| `E` | Collect local evidence for the selected device; on a category, scan that group; on the computer root, press `E` twice within 4 seconds to scan all present devices. Selected-device details refresh as soon as evidence is saved |
 | `S` | Refresh selected-device evidence, then run web/AI lookup |
 | `A` | Run the agentic driver finder for the selected device; the tree shows one agent row while full answer, trace, and links stay in the details pane |
 | `M` | Select which free-tier AI models are active for lookup |
+| `c` / `C` | With the right details pane focused, copy the selected detail line / full details block to the clipboard |
 | `+` | Expand the selected category; on the computer root, expand every category |
 | `-` | Collapse the selected category; on the computer root, collapse every category |
 | `Q` / `Esc` | Exit |

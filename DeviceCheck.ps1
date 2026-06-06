@@ -3321,6 +3321,8 @@ function Render-FrameLegacy {
         New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'M' -Color $_C.White
         New-UiShortcutSegment -Text ' = models   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'c/C' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = copy detail   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'A' -Color $_C.Info
         New-UiShortcutSegment -Text ' = agent   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'S' -Color $_C.Gold
@@ -3509,6 +3511,8 @@ function Render-Frame {
         New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'M' -Color $_C.White
         New-UiShortcutSegment -Text ' = models   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'c/C' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = copy detail   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'A' -Color $_C.Info
         New-UiShortcutSegment -Text ' = agent   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'S' -Color $_C.Gold
@@ -3609,6 +3613,83 @@ function Invoke-SelectedWebScan {
     } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
         Start-DeviceLookup -Dev $currentRow.ParentDevice -UseAgent:$UseAgent -ForceEvidenceRefresh
     }
+}
+
+function Get-CurrentDetailPlainLines {
+    param(
+        [object]$SelectedRow
+    )
+
+    if ($null -eq $SelectedRow) { return @() }
+
+    $uiWidth = Get-UiWidth
+    $useDualPane = ($uiWidth -ge 136)
+    $rightWidth = $uiWidth
+    if ($useDualPane) {
+        $dividerWidth = 3
+        $availablePaneWidth = [Math]::Max(80, $uiWidth - $dividerWidth)
+        $leftWidth = [int][Math]::Floor($availablePaneWidth / 2)
+        $rightWidth = $availablePaneWidth - $leftWidth
+    }
+
+    $lines = @(Get-DetailDisplayLines -SelectedRow $SelectedRow -Width $rightWidth -MaxLines 200)
+    $plainLines = @(
+        $lines | ForEach-Object {
+            $line = (Remove-AnsiSequence -Text ([string]$_)).TrimEnd()
+            if (-not [string]::IsNullOrWhiteSpace($line)) { $line.Trim() }
+        }
+    )
+
+    return @($plainLines)
+}
+
+function Copy-TextToClipboard {
+    param(
+        [AllowEmptyString()]
+        [string]$Text,
+        [string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        $script:SystemScanMessage = "Nothing to copy from details. | $(Get-Date -Format 'HH:mm:ss')"
+        return
+    }
+
+    try {
+        Set-Clipboard -Value $Text -ErrorAction Stop
+        $script:SystemScanMessage = "Copied $Label to clipboard. | $(Get-Date -Format 'HH:mm:ss')"
+    }
+    catch {
+        $script:SystemScanMessage = "Clipboard copy failed: $($_.Exception.Message) | $(Get-Date -Format 'HH:mm:ss')"
+    }
+}
+
+function Copy-SelectedDetailText {
+    param(
+        [array]$Rows,
+        [int]$Index,
+        [switch]$All
+    )
+
+    if ($script:ActivePane -ne 'Detail') {
+        $script:SystemScanMessage = "Press Right to focus Selected Details, then c copies the line or C copies the full details block. | $(Get-Date -Format 'HH:mm:ss')"
+        return
+    }
+
+    $selectedRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
+    $plainLines = @(Get-CurrentDetailPlainLines -SelectedRow $selectedRow)
+    if ($plainLines.Count -eq 0) {
+        $script:SystemScanMessage = "Nothing to copy from details. | $(Get-Date -Format 'HH:mm:ss')"
+        return
+    }
+
+    if ($All) {
+        Copy-TextToClipboard -Text ($plainLines -join [Environment]::NewLine) -Label 'selected details'
+        return
+    }
+
+    $copyIndex = [Math]::Max(0, [Math]::Min($script:DetailCursorIndex, $plainLines.Count - 1))
+    Copy-TextToClipboard -Text $plainLines[$copyIndex] -Label 'detail line'
 }
 
 # Start background lookup pipeline for a device (Asynchronous, non-blocking)
@@ -5030,6 +5111,9 @@ try {
                 Reset-AllEvidenceScanConfirmation
                 Invoke-ModelSelector
             }
+            'C' {
+                Copy-SelectedDetailText -Rows $visibleRows -Index $selectedIndex -All:($key.KeyChar -eq 'C')
+            }
             'Escape' {
                 $running = $false
             }
@@ -5058,6 +5142,10 @@ try {
                 } elseif ($key.KeyChar -eq 'm') {
                     Reset-AllEvidenceScanConfirmation
                     Invoke-ModelSelector
+                } elseif ($key.KeyChar -eq 'c') {
+                    Copy-SelectedDetailText -Rows $visibleRows -Index $selectedIndex
+                } elseif ($key.KeyChar -eq 'C') {
+                    Copy-SelectedDetailText -Rows $visibleRows -Index $selectedIndex -All
                 } elseif ($key.KeyChar -eq '+') {
                     Reset-AllEvidenceScanConfirmation
                     $currentRow = $visibleRows[$selectedIndex]

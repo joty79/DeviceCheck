@@ -517,3 +517,10 @@ Root cause: `E` on the root row immediately queued all devices, and shortcut han
 Guardrail/rule: Dangerous/broad TUI actions need an explicit confirmation step. Root/all-device evidence scan requires `E` twice within a short window and cannot be started from the right details pane. Pasted/input bursts should be ignored for shortcut dispatch. Keep hotkey logic centralized in helpers instead of duplicating scan dispatch in multiple switch branches.
 Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for touched scripts; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-AlsaUcmResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`; `git diff --check`. Manual Windows Terminal right-click behavior still needs user testing.
+
+Date: 2026-06-06
+Problem: Mouse-selecting text in the right details pane also highlighted text from the left tree pane.
+Root cause: DeviceCheck renders two visual panes inside one Windows Terminal grid. They are not real terminal panes, so mouse selection is handled by Windows Terminal across rows/columns and cannot be constrained to only the right pseudo-pane by normal PowerShell output.
+Guardrail/rule: Do not rely on mouse selection for precise pane copy behavior in the TUI. Provide keyboard clipboard actions for details: `c` copies the focused detail line and `C` copies the full selected details block. Avoid enabling terminal mouse reporting merely to block selection unless the user explicitly accepts losing normal mouse selection behavior.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for touched scripts; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-AlsaUcmResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`; `git diff --check`. Manual Windows Terminal mouse-selection behavior remains terminal-owned and should be tested by the user.

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added right-pane clipboard shortcuts in the TUI: `c` copies the focused detail line and `C` copies the full selected details block, avoiding Windows Terminal mouse selection bleed across the left/right pseudo-panes.
 - Added WMI monitor evidence layer in `internal\MonitorEdidResolver.psm1` (`Get-MonitorWmiEvidence`) and integrated it into `DeviceCheck.ps1` (`Get-MonitorWmiIdentityForResolution` and `Add-MonitorWmiAndInfRows`), decoding user-friendly monitor name, manufacturer/product IDs, physical panel sizes, preferred active timing descriptors, and connection technology ports (HDMI/DisplayPort etc. mapped from WDM D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY enum) directly from `root\wmi` classes.
 - Added monitor INF driver evidence support in `internal\MonitorEdidResolver.psm1` (`Get-MonitorInfEvidence`) and integrated it into `DeviceCheck.ps1` (`Get-MonitorInfIdentityForResolution` and `Add-MonitorWmiAndInfRows`), searching the active driver INF and matching `oem*.inf` files under `C:\Windows\INF` for local monitor names without treating INF strings alone as authenticated retail-model proof.
 - Added optional live-monitor assertions in `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor` to test WMI and INF monitor evidence retrieval against actual present hardware devices while keeping the default test deterministic.
