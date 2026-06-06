@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cleaned up TUI status message logic in `DeviceCheck.ps1` to prevent duplicate system summary printing: initialized the status line with a clean welcome message, and simplified system scan status messages during scan operations.
 
 ### Performance
+- **Single-write main frame renderer:** `Render-Frame` now builds the main TUI navigation frame with `StringBuilder` and emits it through one `[Console]::Write()` call, reducing PowerShell host write overhead during scrolling.
+- **Optional TUI perf status:** Set `$env:DEVICECHECK_TUI_PERF = '1'` before launching `DeviceCheck.ps1` to show last-frame render time, frame size, console writes, visible rows, and detail lines in the status line.
 - **In-memory evidence cache:** `Read-CachedDeviceEvidence` now caches parsed JSON objects in `$script:EvidenceCacheMemory`, eliminating disk I/O and `ConvertFrom-Json` on every render frame. Cache is invalidated on evidence completion and system rescan.
 - **Compiled ANSI regex:** `Remove-AnsiSequence` now uses pre-compiled `[regex]` objects (`$script:AnsiOscRegex`, `$script:AnsiCsiRegex`) instead of recompiling patterns on every call (~120+ calls per render frame in dual-pane mode).
 - **Dirty flag for VisibleRows:** Tree rows are only rebuilt when `$script:VisibleRowsDirty` is true (set by expand/collapse, search completion, system scan, resize). Skips unnecessary rebuilds during idle polling and static navigation.

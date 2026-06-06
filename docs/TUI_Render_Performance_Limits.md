@@ -17,6 +17,13 @@ Recent Gemini changes improved the TUI in the right direction:
 - The visible row list is marked dirty and only rebuilt when needed during background scans.
 - Layout height is clamped more aggressively to avoid accidentally writing into the scrollback area.
 
+Current Codex follow-up:
+
+- `Render-Frame` now builds the main navigation frame in a `StringBuilder`.
+- The main navigation frame is emitted with one `[Console]::Write($frameText)` call instead of many `Write-Host` calls.
+- `DEVICECHECK_TUI_PERF=1` enables a compact status-line metric with last-frame render time, frame characters, console writes, visible rows, and detail lines.
+- Legacy/modal renderers remain unchanged for now.
+
 That is why scrolling feels better now. The remaining softness is likely from the output path, not from one single broken math line.
 
 ---
@@ -35,16 +42,15 @@ sequenceDiagram
     PS->>PS: Rebuild visible tree + details lines
     PS->>Host: Begin synchronized output ESC[?2026h
     PS->>Host: Cursor home ESC[H
-    loop Many lines
-        PS->>Host: Write-Host formatted line
-    end
+    PS->>PS: Build one StringBuilder frame
+    PS->>Host: One Console.Write(frameText)
     PS->>Host: Erase rest of viewport ESC[J
     PS->>Host: End synchronized output ESC[?2026l
     Host->>ConPTY: Text/VT stream
     ConPTY->>WT: Terminal frame update
 ```
 
-The important thing: even with synchronized output, PowerShell still sends many individual host writes per frame. Synchronized output can hide intermediate visual tearing, but it does not make all those calls free.
+The important thing: the main frame now avoids many individual host writes. If scrolling still feels soft, the next likely suspects are frame construction cost, detail pane work, and input repeat behavior.
 
 ---
 
@@ -109,7 +115,7 @@ Useful fact:
 
 This is the strongest suspect.
 
-Current `Render-Frame` still writes many lines individually:
+Before the current Codex follow-up, `Render-Frame` still wrote many lines individually:
 
 ```powershell
 Write-UiBanner ...
@@ -122,7 +128,7 @@ Write-UiShortcutSegments ...
 Write-Host "$($_E)[J" -NoNewline
 ```
 
-Even if each line is “fast”, every call crosses PowerShell host machinery. The next high-value experiment is to build all frame text in memory and call `[Console]::Write()` once.
+Even if each line is “fast”, every call crosses PowerShell host machinery. This experiment is now implemented for the main frame, so the next test is user feel plus `DEVICECHECK_TUI_PERF=1` numbers.
 
 ### Suspect B: Full Frame Rebuild On Every Arrow
 
@@ -153,22 +159,21 @@ Possible fix: cache `Get-DetailDisplayLines` per selected row/evidence version/w
 
 ### Experiment 1: Measure Before More Changes
 
-Add temporary render timing counters:
+Implemented first-pass render timing counters:
 
 - `RenderMs`
 - `FrameChars`
-- `HostWriteCalls`
+- `ConsoleWrites`
 - `VisibleRows`
-- `DetailLinesBuilt`
-- `KeyQueueDrained`
+- `DetailLines`
 
 Show them only when a debug flag is enabled, for example `$env:DEVICECHECK_TUI_PERF = 1`.
 
-Goal: know whether the bottleneck is render construction, host writes, or input queue lag.
+Goal: know whether the bottleneck is render construction, frame size, or remaining input queue lag.
 
 ### Experiment 2: Single-Write Frame Buffer
 
-Replace only `Render-Frame`, not every legacy/helper screen.
+Implemented for `Render-Frame` only, not every legacy/helper screen.
 
 Target shape:
 
@@ -184,7 +189,7 @@ $null = $frame.Append("$_E[?2026l")
 [Console]::Write($frame.ToString())
 ```
 
-Expected result:
+Expected result to test:
 
 - fewer PowerShell host crossings,
 - lower frame time,

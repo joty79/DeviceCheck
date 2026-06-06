@@ -50,6 +50,10 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 ```powershell
 # Run the interactive TUI
 .\DeviceCheck.ps1
+
+# Optional: show lightweight TUI render metrics while testing scroll smoothness
+$env:DEVICECHECK_TUI_PERF = '1'
+.\DeviceCheck.ps1
 ```
 
 | Key | Action |

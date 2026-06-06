@@ -372,6 +372,7 @@ $script:AnsiOscRegex = [regex]::new([string]([char]27) + '\][^\a]*(\a|' + [strin
 $script:AnsiCsiRegex = [regex]::new([string]([char]27) + '\[[0-9;?]*[A-Za-z]', 'Compiled')
 $script:VisibleRowsDirty = $true
 $script:RequestForceClear = $true
+$script:TuiPerfLast = $null
 
 function Test-HardwareIdCacheReady {
     param(
@@ -3372,9 +3373,107 @@ function Render-FrameLegacy {
     End-SyncRender
 }
 
+function Test-TuiPerfEnabled {
+    $value = [Environment]::GetEnvironmentVariable('DEVICECHECK_TUI_PERF')
+    return (-not [string]::IsNullOrWhiteSpace($value) -and $value -notin @('0', 'false', 'False', 'FALSE', 'off', 'Off', 'OFF'))
+}
+
+function Get-TuiPerfStatusText {
+    if (-not (Test-TuiPerfEnabled)) { return '' }
+    if ($null -eq $script:TuiPerfLast) { return 'perf warming' }
+
+    return "render $($script:TuiPerfLast.RenderMs)ms / chars $($script:TuiPerfLast.FrameChars) / writes $($script:TuiPerfLast.ConsoleWrites) / rows $($script:TuiPerfLast.VisibleRows) / details $($script:TuiPerfLast.DetailLines)"
+}
+
+function Add-FrameLine {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [AllowEmptyString()][string]$Text = ''
+    )
+
+    $null = $Frame.Append($Text)
+    $null = $Frame.Append([Environment]::NewLine)
+}
+
+function Add-FrameBanner {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [string]$Title,
+        [string]$Subtitle,
+        [int]$Width
+    )
+
+    $border = [string]::new([char]0x2550, [Math]::Max(0, $Width - 2))
+    $maxTextWidth = [Math]::Max(1, $Width - 3)
+
+    $displayTitle = if ($null -eq $Title) { '' } else { $Title }
+    if ($displayTitle.Length -gt $maxTextWidth) {
+        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+    }
+    $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
+
+    $displaySubtitle = if ($null -eq $Subtitle) { '' } else { $Subtitle }
+    $subtitlePad = 0
+    if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
+        if ($displaySubtitle.Length -gt $maxTextWidth) {
+            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+        }
+        $subtitlePad = [Math]::Max(0, $maxTextWidth - $displaySubtitle.Length)
+    }
+
+    Add-FrameLine -Frame $Frame
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
+        Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    }
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)"
+    Add-FrameLine -Frame $Frame
+}
+
+function Add-FrameSection {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [string]$Title,
+        [int]$Width,
+        [string]$Icon = [string][char]0x25C6
+    )
+
+    $prefix = if ($Icon) { " $Icon $Title " } else { " $Title " }
+    $remaining = [Math]::Max(0, $Width - $prefix.Length - 1)
+    $line = [string]::new([char]0x2500, $remaining)
+
+    Add-FrameLine -Frame $Frame
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
+}
+
+function Add-FrameShortcutSegments {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [Parameter(Mandatory)][object[]]$Segments,
+        [int]$Width = (Get-UiWidth)
+    )
+
+    $line = [System.Text.StringBuilder]::new()
+    $null = $line.Append('  ')
+    $remaining = [Math]::Max(1, $Width - 3)
+    foreach ($segment in $Segments) {
+        if ($remaining -le 0) { break }
+        $text = [string]$segment.Text
+        if ($text.Length -gt $remaining) {
+            $text = if ($remaining -eq 1) { $text.Substring(0, 1) } else { $text.Substring(0, $remaining - 1) + '~' }
+        }
+        $null = $line.Append("$($segment.Color)$text$($_C.Reset)")
+        $remaining -= $text.Length
+    }
+    Add-FrameLine -Frame $Frame -Text "$($line.ToString())$($_C.EraseLn)"
+}
+
 function Render-Frame {
     param([switch]$ForceClear)
 
+    $renderStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $detailLinesBuilt = 0
     $shouldClear = $ForceClear -or $script:RequestForceClear
     $script:RequestForceClear = $false
 
@@ -3402,15 +3501,6 @@ function Render-Frame {
     $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:visibleRows.Count - 1)
     $selectedRow = if ($script:visibleRows.Count -gt 0) { $script:visibleRows[$selectedIndex] } else { $null }
 
-    Begin-SyncRender
-    try {
-        if ($shouldClear) {
-            Clear-Host
-        } else {
-            [Console]::Write("$($_E)[H")
-        }
-    } catch {}
-
     $deviceCount = 0
     if ($null -ne $script:categories) {
         foreach ($category in $script:categories) {
@@ -3422,12 +3512,24 @@ function Render-Frame {
     $headerSummary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount $categoryCount
     $subtitleText = "$headerSummary | $headerTime"
 
-    Write-UiBanner -Title 'DeviceCheck Manager' -Subtitle $subtitleText
+    $frame = [System.Text.StringBuilder]::new()
+    $null = $frame.Append("$($_E)[?2026h")
+    if ($shouldClear) {
+        $null = $frame.Append("$($_E)[2J$($_E)[H")
+    } else {
+        $null = $frame.Append("$($_E)[H")
+    }
+
+    Add-FrameBanner -Frame $frame -Title 'DeviceCheck Manager' -Subtitle $subtitleText -Width $uiWidth
     $statusWidth = [Math]::Max(10, $uiWidth - 2)
     $compactStatus = Get-CompactSystemStatus -StatusText $script:SystemScanMessage
-    Write-Host "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
+    $perfStatus = Get-TuiPerfStatusText
+    if (-not [string]::IsNullOrWhiteSpace($perfStatus)) {
+        $compactStatus = "$compactStatus | $perfStatus"
+    }
+    Add-FrameLine -Frame $frame -Text "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($batchStatus)) {
-        Write-Host "  $($_C.Warn)$(Format-UiValue -Text $batchStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
+        Add-FrameLine -Frame $frame -Text "  $($_C.Warn)$(Format-UiValue -Text $batchStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
     }
 
     if ($useDualPane) {
@@ -3443,7 +3545,7 @@ function Render-Frame {
         $rightPrefix = " $rightTitleText "
         $rightLine = [string]::new([char]0x2500, [Math]::Max(0, $rightWidth - $rightPrefix.Length))
         $rightTitle = "$rightTitleColor$rightPrefix$($_C.Dim)$rightLine$($_C.Reset)"
-        Write-Host "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
+        Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
 
         $treeLines = [System.Collections.Generic.List[string]]::new()
         $aboveCount = $viewTop
@@ -3466,6 +3568,7 @@ function Render-Frame {
         } else {
             @((New-SectionLine -Title 'Selected Details' -Width $rightWidth))
         }
+        $detailLinesBuilt = $allDetailLines.Count
         # Trim trailing empty lines to get true content count
         $detailContentCount = $allDetailLines.Count
         while ($detailContentCount -gt 0 -and [string]::IsNullOrWhiteSpace($allDetailLines[$detailContentCount - 1])) {
@@ -3529,28 +3632,30 @@ function Render-Frame {
         for ($i = 0; $i -lt $lineCount; $i++) {
             $leftLine = if ($i -lt $treeLines.Count) { $treeLines[$i] } else { '' }
             $rightLine = if ($i -lt $detailSlice.Count) { $detailSlice[$i] } else { '' }
-            Write-Host "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
+            Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
         }
     } else {
-        Write-UiSection -Title 'Device Connection Tree'
-        Write-Host ''
+        Add-FrameSection -Frame $frame -Title 'Device Connection Tree' -Width $uiWidth
+        Add-FrameLine -Frame $frame
 
         $aboveCount = $viewTop
         $aboveMessage = if ($aboveCount -gt 0) { "  $([char]0x2191) $aboveCount more above" } else { '' }
-        Write-Host "$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
+        Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
         for ($index = $viewTop; $index -le $viewBot; $index++) {
             $row = $script:visibleRows[$index]
-            Write-Host "$(Get-TreeDisplayLine -Row $row -IsSelected:($index -eq $selectedIndex) -Width $leftWidth)$($_C.EraseLn)"
+            Add-FrameLine -Frame $frame -Text "$(Get-TreeDisplayLine -Row $row -IsSelected:($index -eq $selectedIndex) -Width $leftWidth)$($_C.EraseLn)"
         }
 
         $belowCount = $script:visibleRows.Count - 1 - $viewBot
         $belowMessage = if ($belowCount -gt 0) { "  $([char]0x2193) $belowCount more below" } else { '' }
-        Write-Host "$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
+        Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
         if ($null -ne $selectedRow) {
-            foreach ($line in (Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines 11)) {
-                Write-Host "$(Format-AnsiToWidth -Text $line -Width $rightWidth)$($_C.EraseLn)"
+            $stackedDetailLines = @(Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines 11)
+            $detailLinesBuilt = $stackedDetailLines.Count
+            foreach ($line in $stackedDetailLines) {
+                Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $line -Width $rightWidth)$($_C.EraseLn)"
             }
         }
     }
@@ -3575,10 +3680,23 @@ function Render-Frame {
         New-UiShortcutSegment -Text 'Q / Esc' -Color $_C.Fail
         New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
     )
-    Write-UiShortcutSegments -Segments $segments -Width $uiWidth
-    Write-Host "$($_E)[J" -NoNewline
+    Add-FrameShortcutSegments -Frame $frame -Segments $segments -Width $uiWidth
+    $null = $frame.Append("$($_E)[J")
+    $null = $frame.Append("$($_E)[?2026l")
 
-    End-SyncRender
+    $frameText = $frame.ToString()
+    [Console]::Write($frameText)
+    $renderStopwatch.Stop()
+
+    if (Test-TuiPerfEnabled) {
+        $script:TuiPerfLast = [pscustomobject]@{
+            RenderMs      = [Math]::Round($renderStopwatch.Elapsed.TotalMilliseconds, 1)
+            FrameChars    = $frameText.Length
+            ConsoleWrites = 1
+            VisibleRows   = $script:visibleRows.Count
+            DetailLines   = $detailLinesBuilt
+        }
+    }
 }
 
 function Invoke-SystemScanWithFeedback {

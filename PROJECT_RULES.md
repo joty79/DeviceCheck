@@ -538,3 +538,10 @@ Root cause: The main `Render-Frame` path still emits many `Write-Host` calls per
 Guardrail/rule: Future TUI performance work must be measured and reversible. First add optional frame timing/size counters, then test a single-frame StringBuilder plus one `[Console]::Write()` emission path. Do not jump to VT scroll regions or workaround UI features until output batching and key-repeat queue handling have been measured.
 Files affected: `docs\TUI_Render_Performance_Limits.md`, `PROJECT_RULES.md`.
 Validation/tests run: Documentation update only; code path unchanged; `git diff --check`.
+
+Date: 2026-06-06
+Problem: The TUI still needed a real performance experiment before doing more online research.
+Root cause: The main frame previously crossed PowerShell host output many times per render. This made smooth held-arrow scrolling dependent on host/ConPTY throughput rather than just local frame construction.
+Guardrail/rule: Keep `Render-Frame` as the first measured optimization target: build the main frame in memory and emit it with one `[Console]::Write()`. Keep optional perf metrics behind `DEVICECHECK_TUI_PERF=1`. Do not reintroduce arrow-key batching until measured render cost is no longer the obvious bottleneck.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `docs\TUI_Render_Performance_Limits.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`; `git diff --check`.
