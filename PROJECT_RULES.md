@@ -57,6 +57,20 @@ Quick lookup:
 ### Decision Log
 
 Date: 2026-06-06
+Problem: Even with ultra-fast rendering (3.5ms - 6ms), TUI scrolling during held arrow key repeat rate (~30-33Hz) was not smooth and suffered from stuttering.
+Root cause: The idle key polling sleep of 40ms (`Start-Sleep -Milliseconds 40`) restricted the event loop frequency to ~25Hz with high jitter, causing the rendering of buffered keypresses to desynchronize from the input rate.
+Guardrail/rule: Match the key polling loop sleep duration to the performance of the rendering pipeline. When rendering is fast (under 10ms), use a low polling sleep (e.g. 10ms) to achieve smooth, low-latency rendering synchronized with keyboard repeat rates without sacrificing CPU efficiency.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Checked `tui_benchmark.log` timings; verified `KeyDelay` matches ~30ms repeat rate with `KeyRead` latency minimized to 10-25ms; verified CPU usage remains minimal.
+
+Date: 2026-06-06
+Problem: Profiling performance lags during keyboard scrolling is difficult without timing data for key reads, event handlers, and screen rendering.
+Root cause: Standard PowerShell hosts do not offer built-in latency logging for TUI event loops, and real-time logging to disk adds I/O lag that degrades scroll performance.
+Guardrail/rule: When benchmarking TUI performance, collect stopwatch measurements in memory during the execution loops. Write the accumulated results to a log file (`tui_benchmark.log`) only when the session exits in the `finally` block to avoid disk write overhead during active navigation.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation succeeded; verified that exiting the TUI session successfully outputs a complete `tui_benchmark.log` with millisecond-level breakdowns for each keystroke.
+
+Date: 2026-06-06
 Problem: Rapid arrow navigation in the TUI skipped devices and felt laggy, and non-arrow keys could be swallowed/ignored. Also, non-maximized console windows suffered from double/layered banners and footers.
 Root cause: Experimental arrow-key batching drained inputs from the console queue, which consumed non-arrow keys and skipped selection nodes. The standard `Clear-Host` on every frame caused visual blinking and redraw overhead. If the number of lines written in a frame exceeded the console window height, it scrolled the screen buffer, resulting in duplicate headers/footers when cursor positioning home was called.
 Guardrail/rule: Do not use input batching to mask slow render frame times. Replace `Clear-Host` with cursor repositioning (`[Console]::Write("$($_E)[H")`) and trailing line erases for fast redraws. Gate full clears behind `$script:RequestForceClear`. Strictly calculate and constrain the visible row counts (`$maxVisible`) to ensure the total line output never exceeds `WindowSize.Height - 1`, preventing scrollback buffer overflow.

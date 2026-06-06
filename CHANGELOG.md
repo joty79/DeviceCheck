@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added persistent machine summary (system information, dynamic device/category counts, and time) inside the header banner subtitle in `DeviceCheck.ps1`'s TUI.
 - Added TUI rendering performance and console limits research guide in `docs\TUI_Render_Performance_Limits.md`.
+- Added high-fidelity in-memory performance benchmarking in `DeviceCheck.ps1` which logs key reads, event processing, prep work, and rendering frame durations, and automatically saves a detailed summary to `tui_benchmark.log` upon exiting.
 
 ### Changed
 - Removed redundant keybinding help strings (`R rescans devices. E scans evidence...`) from the header banner subtitle in `DeviceCheck.ps1` since those shortcuts are already displayed in the navigation footer.
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cleaned up TUI status message logic in `DeviceCheck.ps1` to prevent duplicate system summary printing: initialized the status line with a clean welcome message, and simplified system scan status messages during scan operations.
 
 ### Performance
+- **Reduced TUI polling loop sleep:** Decreased the idle polling sleep in `Read-ConsoleKey` from 40ms to 10ms, eliminating key repeat scroll stuttering and reducing input latency to match the ultra-fast (3.5-6ms) render loop.
 - **Single-write main frame renderer:** `Render-Frame` now builds the main TUI navigation frame with `StringBuilder` and emits it through one `[Console]::Write()` call, reducing PowerShell host write overhead during scrolling.
 - **Optional TUI perf status:** Set `$env:DEVICECHECK_TUI_PERF = '1'` before launching `DeviceCheck.ps1` to show last-frame render time, frame size, console writes, visible rows, and detail lines in the status line.
 - **In-memory evidence cache:** `Read-CachedDeviceEvidence` now caches parsed JSON objects in `$script:EvidenceCacheMemory`, eliminating disk I/O and `ConvertFrom-Json` on every render frame. Cache is invalidated on evidence completion and system rescan.

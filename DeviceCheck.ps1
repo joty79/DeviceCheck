@@ -372,6 +372,8 @@ $script:AnsiOscRegex = [regex]::new([string]([char]27) + '\][^\a]*(\a|' + [strin
 $script:AnsiCsiRegex = [regex]::new([string]([char]27) + '\[[0-9;?]*[A-Za-z]', 'Compiled')
 $script:VisibleRowsDirty = $true
 $script:RequestForceClear = $true
+$script:BenchmarkLog = [System.Collections.Generic.List[string]]::new()
+$script:LastKeyTimestamp = [datetime]::MinValue
 $script:TuiPerfLast = $null
 
 function Test-HardwareIdCacheReady {
@@ -4969,7 +4971,7 @@ function Read-ConsoleKey {
                 Render-Frame
                 Start-Sleep -Milliseconds 150
             } else {
-                Start-Sleep -Milliseconds 40
+                Start-Sleep -Milliseconds 10
             }
         }
 
@@ -5067,13 +5069,13 @@ try {
     while ($running) {
         Lock-ViewportToWindow
 
-        # Calculate current visible rows (only when dirty)
+        # Measure pre-render tasks
+        $swPrep = [System.Diagnostics.Stopwatch]::StartNew()
         if ($script:VisibleRowsDirty) {
             $script:visibleRows = Update-VisibleRows
             $script:VisibleRowsDirty = $false
         }
 
-        # Clamp selected index to selectable types (Root / Category / Device / Result)
         if ($visibleRows.Count -eq 0) {
             $selectedIndex = 0
         } else {
@@ -5082,17 +5084,24 @@ try {
                 $selectedIndex--
             }
         }
+        $prepMs = $swPrep.Elapsed.TotalMilliseconds
 
-        # Render viewport
+        # Measure Render
+        $swRender = [System.Diagnostics.Stopwatch]::StartNew()
         Render-Frame
+        $renderMs = $swRender.Elapsed.TotalMilliseconds
 
         # Key Handling
+        $swKey = [System.Diagnostics.Stopwatch]::StartNew()
         $key = Read-ConsoleKey
+        $keyReadMs = $swKey.Elapsed.TotalMilliseconds
+        
         if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
             Start-Sleep -Milliseconds 50
             continue
         }
 
+        $swProcess = [System.Diagnostics.Stopwatch]::StartNew()
         if ($key.Key -ne 'E' -and $key.KeyChar -ne 'e') {
             Reset-AllEvidenceScanConfirmation
         }
@@ -5264,6 +5273,20 @@ try {
                 }
             }
         }
+        $processMs = $swProcess.Elapsed.TotalMilliseconds
+        $swProcess.Stop()
+
+        # Log entry
+        $now = [datetime]::Now
+        $repeatDelayMs = if ($script:LastKeyTimestamp -ne [datetime]::MinValue) {
+            ($now - $script:LastKeyTimestamp).TotalMilliseconds
+        } else {
+            0
+        }
+        $script:LastKeyTimestamp = $now
+
+        $logEntry = "[$(Get-Date -Format 'HH:mm:ss.fff')] Key: $($key.Key) (char: '$($key.KeyChar)') | KeyRead: $([Math]::Round($keyReadMs, 1))ms | EventProcess: $([Math]::Round($processMs, 1))ms | Render: $([Math]::Round($renderMs, 1))ms | Prep: $([Math]::Round($prepMs, 1))ms | KeyDelay: $([Math]::Round($repeatDelayMs, 1))ms"
+        $script:BenchmarkLog.Add($logEntry)
     }
 }
 finally {
@@ -5277,5 +5300,16 @@ finally {
     if ($null -ne $script:EvidenceBatchQueuedIds) { $script:EvidenceBatchQueuedIds.Clear() }
     # Restore Host Settings
     Restore-TuiHost
+    
+    # Save TUI benchmark log
+    if ($script:BenchmarkLog -and $script:BenchmarkLog.Count -gt 0) {
+        $benchmarkFile = Join-Path -Path $PSScriptRoot -ChildPath 'tui_benchmark.log'
+        try {
+            $script:BenchmarkLog | Set-Content -LiteralPath $benchmarkFile -Encoding UTF8
+            Write-Host "TUI benchmark log saved to: $benchmarkFile" -ForegroundColor Green
+        } catch {
+            Write-Host "Failed to save benchmark log: $_" -ForegroundColor Yellow
+        }
+    }
     Write-Host 'DeviceCheck closed.'
 }
