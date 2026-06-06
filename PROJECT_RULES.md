@@ -519,8 +519,8 @@ Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for touched scripts; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-AlsaUcmResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`; `git diff --check`. Manual Windows Terminal right-click behavior still needs user testing.
 
 Date: 2026-06-06
-Problem: Mouse-selecting text in the right details pane also highlighted text from the left tree pane.
-Root cause: DeviceCheck renders two visual panes inside one Windows Terminal grid. They are not real terminal panes, so mouse selection is handled by Windows Terminal across rows/columns and cannot be constrained to only the right pseudo-pane by normal PowerShell output.
-Guardrail/rule: Do not rely on mouse selection for precise pane copy behavior in the TUI. Provide keyboard clipboard actions for details: `c` copies the focused detail line and `C` copies the full selected details block. Avoid enabling terminal mouse reporting merely to block selection unless the user explicitly accepts losing normal mouse selection behavior.
+Problem: A right-pane keyboard clipboard shortcut workaround was implemented for Windows Terminal mouse selection bleed, but the user rejected it because it did not solve the actual problem.
+Root cause: The real issue is mouse selection spanning the left/right pseudo-panes in a single terminal grid. Adding `c/C` copy shortcuts created extra UI surface without preventing the bad mouse-selection behavior.
+Guardrail/rule: Do not ship workaround shortcuts for pane mouse-selection problems unless they directly address the user-visible failure. For this UI issue, either find a way to prevent/cancel mouse selection safely or leave it as a documented Windows Terminal limitation; do not add copy shortcuts as a substitute.
 Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
-Validation/tests run: PowerShell parser validation for touched scripts; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-AlsaUcmResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`; `git diff --check`. Manual Windows Terminal mouse-selection behavior remains terminal-owned and should be tested by the user.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`; `git diff --check`.

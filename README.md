@@ -59,7 +59,6 @@ A fast, keyboard-driven console interface that groups all present hardware by th
 | `S` | Refresh selected-device evidence, then run web/AI lookup |
 | `A` | Run the agentic driver finder for the selected device; the tree shows one agent row while full answer, trace, and links stay in the details pane |
 | `M` | Select which free-tier AI models are active for lookup |
-| `c` / `C` | With the right details pane focused, copy the selected detail line / full details block to the clipboard |
 | `+` | Expand the selected category; on the computer root, expand every category |
 | `-` | Collapse the selected category; on the computer root, collapse every category |
 | `Q` / `Esc` | Exit |

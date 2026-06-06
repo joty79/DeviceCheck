@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Added right-pane clipboard shortcuts in the TUI: `c` copies the focused detail line and `C` copies the full selected details block, avoiding Windows Terminal mouse selection bleed across the left/right pseudo-panes.
 - Added WMI monitor evidence layer in `internal\MonitorEdidResolver.psm1` (`Get-MonitorWmiEvidence`) and integrated it into `DeviceCheck.ps1` (`Get-MonitorWmiIdentityForResolution` and `Add-MonitorWmiAndInfRows`), decoding user-friendly monitor name, manufacturer/product IDs, physical panel sizes, preferred active timing descriptors, and connection technology ports (HDMI/DisplayPort etc. mapped from WDM D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY enum) directly from `root\wmi` classes.
 - Added monitor INF driver evidence support in `internal\MonitorEdidResolver.psm1` (`Get-MonitorInfEvidence`) and integrated it into `DeviceCheck.ps1` (`Get-MonitorInfIdentityForResolution` and `Add-MonitorWmiAndInfRows`), searching the active driver INF and matching `oem*.inf` files under `C:\Windows\INF` for local monitor names without treating INF strings alone as authenticated retail-model proof.
 - Added optional live-monitor assertions in `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor` to test WMI and INF monitor evidence retrieval against actual present hardware devices while keeping the default test deterministic.
@@ -40,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Hardened evidence-scan hotkeys in the TUI: pressing `E` on the root now requires a second `E` within 4 seconds before scanning all devices, root all-device scans cannot start from the right details pane, and pasted/right-click input bursts are ignored instead of being treated as shortcut keys.
+- Reverted the right-pane clipboard shortcut workaround because it did not solve the real Windows Terminal mouse-selection problem and added unusable UI surface.
 - Improved disk identity display for Windows SCSI/NVMe compact IDs by stripping fixed-width underscore padding from displayed tokens, preferring the structured storage `InstanceId` when available, and using the local FriendlyName for the visible storage model.
 - Reduced selected-monitor `Local Hardware Identity` noise by hiding duplicate EDID/WMI/INF source rows and keeping a compact monitor summary with name, ID, size, manufacture date, native timing, connection, checksum, and evidence source family.
 - Improved DISPLAY/MONITOR Hardware ID breakdowns so missing `pnp.ids` EISA vendor entries can fall back to the local Windows manufacturer string instead of showing `Unknown display vendor`.
