@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cursor-home repositioning rendering:** Replaced standard `Clear-Host` calls with cursor-home (`[Console]::Write("$($_E)[H")`) positioning and selective ANSI Erase line/screen directives. This drastically reduces the overhead of `Write-Host` and completely eliminates blinking/flicker in both standard rendering and `Invoke-ModelSelector` dialog loops.
 
 ### Fixed
+- Fixed the local TUI blueprint width helper so wide terminals report their real width again instead of being capped at 100 columns, restoring the dual-pane layout.
 - Fixed key-loss and skipping bugs during rapid arrow navigation by completely removing the experimental arrow-key batching mechanism, relying instead on the new highly-optimized cursor-positioning redraw routine to achieve butter-smooth scroll behavior.
 - Added a state-driven `$script:RequestForceClear` flag to perform a full `Clear-Host` only on startup, window resizing (`ResizeEvent`), or when returning from modal menus (e.g. `Invoke-ModelSelector`), preventing screen artifacts while keeping regular renders instantaneous.
 - Fixed a layout line-overflow bug in non-maximized console windows (pwsh 5/7) where total printed lines exceeded `WindowSize.Height`, causing the console buffer to scroll and display duplicate/layered headers and footers. The number of visible rows (`$maxVisible`) is now strictly clamped based on dynamic header height, dividers, details pane size, and footer safety margins.

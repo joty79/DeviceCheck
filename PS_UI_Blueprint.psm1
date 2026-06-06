@@ -10,21 +10,30 @@
 
       1) WT synchronized output mode 2026 for atomic frame rendering
       2) Stateless immediate-mode redraw on every frame
-      3) Responsive resize polling via KeyAvailable + Test-WindowResized
-      4) BufferSize = WindowSize to kill scrollback tearing
-      5) Primary buffer only; do NOT use the alternate screen buffer
+      3) Single-write frame buffers with StringBuilder + [Console]::Write()
+      4) Cursor-home redraw for normal frames, gated full clear only when needed
+      5) Responsive resize polling via KeyAvailable + Test-WindowResized
+      6) Low-latency key polling around 10ms when render time is under 10ms
+      7) BufferSize = WindowSize to kill scrollback tearing
+      8) Primary buffer only; do NOT use the alternate screen buffer
 
     The important lesson is that for complex PowerShell TUIs in WT, "partial
     redraw" is not the canonical answer once resize/stretch correctness matters.
-    The stable answer is immediate-mode full redraw wrapped in synchronized output.
+    The stable answer is immediate-mode full redraw wrapped in synchronized output,
+    emitted as one text frame. Avoid many Write-Host calls inside fast navigation
+    loops; use Write-Host for setup/status outside the hot render path.
 
 .USAGE
-    Dot-source or import this file, then adapt:
+    Import this file as a module, then adapt:
         - Initialize-TuiHost / Restore-TuiHost
         - Read-ConsoleKey
         - Lock-ViewportToWindow
         - Show-InteractiveMenu
         - Show-SearchInputBox / Invoke-SearchMode (when modal search is needed)
+
+    If a standalone script intentionally wants these helpers and variables in
+    script scope, load it with Invoke-Expression (Get-Content -Raw) instead of
+    relying on dot-sourcing a .psm1 file.
 
     This file is a reusable template/reference, not a finished app.
 #>
@@ -49,6 +58,8 @@ $_C = @{
 
 $script:LastWindowWidth = 0
 $script:LastWindowHeight = 0
+$script:RequestForceClear = $true
+$script:TuiBenchmarkLog = [System.Collections.Generic.List[string]]::new()
 
 function Begin-SyncRender {
     [Console]::Write("$_E[?2026h")
@@ -62,7 +73,7 @@ function Initialize-TuiHost {
     try {
         # Avoid alternate screen in PowerShell TUIs: ConPTY can freeze window math.
         # Disable auto-wrap to reduce horizontal resize tearing.
-        Write-Host "`e[?7l" -NoNewline
+        [Console]::Write("$_E[?7l$_E[?25l")
     }
     catch {
     }
@@ -76,7 +87,7 @@ function Restore-TuiHost {
     }
 
     try {
-        Write-Host "`e[?7h`e[?25h" -NoNewline
+        [Console]::Write("$_E[?7h$_E[?25h")
     }
     catch {
     }
@@ -110,10 +121,165 @@ function Test-WindowResized {
     if ($width -ne $script:LastWindowWidth -or $height -ne $script:LastWindowHeight) {
         $script:LastWindowWidth = $width
         $script:LastWindowHeight = $height
+        $script:RequestForceClear = $true
         return $true
     }
 
     return $false
+}
+
+function Test-TuiBenchmarkEnabled {
+    $value = [Environment]::GetEnvironmentVariable('POWERSHELL_TUI_BENCHMARK')
+    return (-not [string]::IsNullOrWhiteSpace($value) -and $value -notin @('0', 'false', 'False', 'FALSE', 'off', 'Off', 'OFF'))
+}
+
+function Add-TuiBenchmarkEntry {
+    param(
+        [string]$Label,
+        [double]$ElapsedMs,
+        [string]$Details = ''
+    )
+
+    if (-not (Test-TuiBenchmarkEnabled)) { return }
+
+    $detailText = if ([string]::IsNullOrWhiteSpace($Details)) { '' } else { " | $Details" }
+    $script:TuiBenchmarkLog.Add("[$(Get-Date -Format 'HH:mm:ss.fff')] ${Label}: $([Math]::Round($ElapsedMs, 1))ms$detailText")
+}
+
+function Save-TuiBenchmarkLog {
+    param(
+        [string]$Path = (Join-Path -Path (Get-Location) -ChildPath 'tui_benchmark.log')
+    )
+
+    if (-not (Test-TuiBenchmarkEnabled)) { return }
+    if ($script:TuiBenchmarkLog.Count -eq 0) { return }
+
+    $script:TuiBenchmarkLog | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function New-UiFrame {
+    [System.Text.StringBuilder]::new()
+}
+
+function Add-UiFrameLine {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [AllowEmptyString()][string]$Text = ''
+    )
+
+    $null = $Frame.Append($Text)
+    $null = $Frame.Append([Environment]::NewLine)
+}
+
+function Add-UiFrameBanner {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [string]$Title,
+        [string]$Subtitle = '',
+        [int]$Width = (Get-UiWidth)
+    )
+
+    $border = [string]::new([char]0x2550, [Math]::Max(0, $Width - 2))
+    $maxTextWidth = [Math]::Max(1, $Width - 3)
+
+    $displayTitle = if ($null -eq $Title) { '' } else { $Title }
+    if ($displayTitle.Length -gt $maxTextWidth) {
+        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+    }
+    $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
+
+    $displaySubtitle = if ($null -eq $Subtitle) { '' } else { $Subtitle }
+    $subtitlePad = 0
+    if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
+        if ($displaySubtitle.Length -gt $maxTextWidth) {
+            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+        }
+        $subtitlePad = [Math]::Max(0, $maxTextWidth - $displaySubtitle.Length)
+    }
+
+    Add-UiFrameLine -Frame $Frame
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
+        Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    }
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)"
+    Add-UiFrameLine -Frame $Frame
+}
+
+function Add-UiFrameSection {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [string]$Title,
+        [string]$Icon = [string][char]0x25C6,
+        [int]$Width = (Get-UiWidth)
+    )
+
+    $prefix = if ($Icon) { " $Icon $Title " } else { " $Title " }
+    $remaining = [Math]::Max(0, $Width - $prefix.Length - 1)
+    $line = [string]::new([char]0x2500, $remaining)
+
+    Add-UiFrameLine -Frame $Frame
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
+}
+
+function Add-UiFrameShortcutSegments {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [Parameter(Mandatory)][object[]]$Segments,
+        [int]$Width = (Get-UiWidth)
+    )
+
+    $line = [System.Text.StringBuilder]::new()
+    $null = $line.Append('  ')
+    $remaining = [Math]::Max(1, $Width - 3)
+    foreach ($segment in $Segments) {
+        if ($remaining -le 0) { break }
+        $text = [string]$segment.Text
+        if ($text.Length -gt $remaining) {
+            $text = if ($remaining -eq 1) { $text.Substring(0, 1) } else { $text.Substring(0, $remaining - 1) + '~' }
+        }
+        $null = $line.Append("$($segment.Color)$text$($_C.Reset)")
+        $remaining -= $text.Length
+    }
+    Add-UiFrameLine -Frame $Frame -Text "$($line.ToString())$($_C.EraseLn)"
+}
+
+function Write-UiFrame {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [switch]$ForceClear
+    )
+
+    $shouldClear = $ForceClear -or $script:RequestForceClear
+    $script:RequestForceClear = $false
+
+    $output = [System.Text.StringBuilder]::new()
+    $null = $output.Append("$_E[?2026h")
+    if ($shouldClear) {
+        $null = $output.Append("$_E[2J$_E[H")
+    }
+    else {
+        $null = $output.Append("$_E[H")
+    }
+    $null = $output.Append($Frame.ToString())
+    $null = $output.Append("$_E[J")
+    $null = $output.Append("$_E[?2026l")
+
+    [Console]::Write($output.ToString())
+}
+
+function Move-UiCursorToFrameStart {
+    param([switch]$ForceClear)
+
+    $shouldClear = $ForceClear -or $script:RequestForceClear
+    $script:RequestForceClear = $false
+    if ($shouldClear) {
+        [Console]::Write("$_E[2J$_E[H")
+    }
+    else {
+        [Console]::Write("$_E[H")
+    }
 }
 
 function Write-UiBanner {
@@ -122,35 +288,9 @@ function Write-UiBanner {
         [string]$Subtitle
     )
 
-    $width = Get-UiWidth
-    $border = [string]::new([char]0x2550, ($width - 2))
-    $maxTextWidth = $width - 3
-
-    # Format Title
-    $displayTitle = $Title
-    if ($displayTitle.Length -gt $maxTextWidth) {
-        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
-    }
-    $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
-
-    # Format Subtitle
-    $displaySubtitle = $Subtitle
-    $subtitlePad = 0
-    if ($Subtitle) {
-        if ($displaySubtitle.Length -gt $maxTextWidth) {
-            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
-        }
-        $subtitlePad = [Math]::Max(0, $maxTextWidth - $displaySubtitle.Length)
-    }
-
-    Write-Host ''
-    Write-Host "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)"
-    Write-Host "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
-    if ($Subtitle) {
-        Write-Host "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
-    }
-    Write-Host "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)"
-    Write-Host ''
+    $frame = New-UiFrame
+    Add-UiFrameBanner -Frame $frame -Title $Title -Subtitle $Subtitle -Width (Get-UiWidth)
+    [Console]::Write($frame.ToString())
 }
 
 function Write-UiSection {
@@ -234,6 +374,44 @@ function Write-UiNavFooter {
     Write-UiShortcutSegments -Segments $segments -Width $Width
 }
 
+function Add-UiFrameNavFooter {
+    param(
+        [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
+        [ValidateSet('Select','Cancel','Exit','Back')][string]$Mode = 'Select',
+        [int]$Width = (Get-UiWidth)
+    )
+
+    $segments = @(
+        New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+        New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = select   ' -Color $_C.Dim
+    )
+
+    if ($Mode -eq 'Cancel') {
+        $segments += @(
+            New-UiShortcutSegment -Text 'Esc' -Color $_C.Fail
+            New-UiShortcutSegment -Text ' = cancel' -Color $_C.Dim
+        )
+    }
+    elseif ($Mode -eq 'Exit') {
+        $segments += @(
+            New-UiShortcutSegment -Text 'Esc' -Color $_C.Fail
+            New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
+        )
+    }
+    elseif ($Mode -eq 'Back') {
+        $segments = @(
+            New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
+            New-UiShortcutSegment -Text ' / ' -Color $_C.Dim
+            New-UiShortcutSegment -Text 'Esc' -Color $_C.Fail
+            New-UiShortcutSegment -Text ' = back' -Color $_C.Dim
+        )
+    }
+
+    Add-UiFrameShortcutSegments -Frame $Frame -Segments $segments -Width $Width
+}
+
 function Show-SearchInputBox {
     param(
         [AllowEmptyString()]
@@ -287,10 +465,11 @@ function Read-ConsoleKey {
                 }
             }
 
-            Start-Sleep -Milliseconds 40
+            Start-Sleep -Milliseconds 10
         }
     }
     catch {
+        throw $_
     }
 
     try {
@@ -360,36 +539,57 @@ function Invoke-ArrowMenu {
             $viewTop = [Math]::Max(0, [Math]::Min($cursor - [int]($maxVisible / 2), [Math]::Max(0, $Items.Count - $maxVisible)))
             $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $Items.Count - 1)
 
-            Begin-SyncRender
-            try { Clear-Host } catch {}
-
             if ($null -ne $HeaderBlock) {
+                Begin-SyncRender
+                Move-UiCursorToFrameStart
                 & $HeaderBlock
-            }
+                Write-UiSection -Title $Title -Icon ''
+                Write-Host ''
 
-            Write-UiSection -Title $Title -Icon ''
-            Write-Host ''
+                $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$([char]0x2191) $viewTop more above$($_C.Reset)" } else { '' }
+                Write-Host "$aboveMessage$($_C.EraseLn)"
 
-            $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$([char]0x2191) $viewTop more above$($_C.Reset)" } else { '' }
-            Write-Host "$aboveMessage$($_C.EraseLn)"
-
-            for ($index = $viewTop; $index -le $viewBot; $index++) {
-                if ($index -eq $cursor) {
-                    Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
+                for ($index = $viewTop; $index -le $viewBot; $index++) {
+                    if ($index -eq $cursor) {
+                        Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
+                    }
+                    else {
+                        Write-Host "    $($_C.Dim)$($Items[$index])$($_C.Reset)$($_C.EraseLn)"
+                    }
                 }
-                else {
-                    Write-Host "    $($_C.Dim)$($Items[$index])$($_C.Reset)$($_C.EraseLn)"
-                }
+
+                $below = $Items.Count - 1 - $viewBot
+                $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$([char]0x2193) $below more below$($_C.Reset)" } else { '' }
+                Write-Host "$belowMessage$($_C.EraseLn)"
+                Write-Host "$($_C.EraseLn)"
+                Write-UiNavFooter -Mode Cancel
+                Write-Host "$($_E)[J" -NoNewline
+                End-SyncRender
             }
+            else {
+                $frame = New-UiFrame
+                Add-UiFrameSection -Frame $frame -Title $Title -Icon ''
+                Add-UiFrameLine -Frame $frame
 
-            $below = $Items.Count - 1 - $viewBot
-            $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$([char]0x2193) $below more below$($_C.Reset)" } else { '' }
-            Write-Host "$belowMessage$($_C.EraseLn)"
-            Write-Host "$($_C.EraseLn)"
-            Write-UiNavFooter -Mode Cancel
-            Write-Host "$($_E)[J" -NoNewline
+                $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$([char]0x2191) $viewTop more above$($_C.Reset)" } else { '' }
+                Add-UiFrameLine -Frame $frame -Text "$aboveMessage$($_C.EraseLn)"
 
-            End-SyncRender
+                for ($index = $viewTop; $index -le $viewBot; $index++) {
+                    if ($index -eq $cursor) {
+                        Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
+                    }
+                    else {
+                        Add-UiFrameLine -Frame $frame -Text "    $($_C.Dim)$($Items[$index])$($_C.Reset)$($_C.EraseLn)"
+                    }
+                }
+
+                $below = $Items.Count - 1 - $viewBot
+                $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$([char]0x2193) $below more below$($_C.Reset)" } else { '' }
+                Add-UiFrameLine -Frame $frame -Text "$belowMessage$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "$($_C.EraseLn)"
+                Add-UiFrameNavFooter -Frame $frame -Mode Cancel
+                Write-UiFrame -Frame $frame
+            }
 
             $key = Read-ConsoleKey
             switch ($key.Key) {
@@ -424,27 +624,22 @@ function Show-InteractiveMenu {
     try {
         while ($true) {
             Lock-ViewportToWindow
-
-            Begin-SyncRender
-            try { Clear-Host } catch {}
-
-            Write-UiBanner -Title $AppTitle -Subtitle $AppSubtitle
-            Write-UiSection -Title 'Menu'
+            $frame = New-UiFrame
+            Add-UiFrameBanner -Frame $frame -Title $AppTitle -Subtitle $AppSubtitle -Width (Get-UiWidth)
+            Add-UiFrameSection -Frame $frame -Title 'Menu'
 
             for ($index = 0; $index -lt $Options.Count; $index++) {
                 if ($index -eq $selectedIndex) {
-                    Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Options[$index]) $($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Options[$index]) $($_C.Reset)$($_C.EraseLn)"
                 }
                 else {
-                    Write-Host "    $($_C.White)$($Options[$index])$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "    $($_C.White)$($Options[$index])$($_C.Reset)$($_C.EraseLn)"
                 }
             }
 
-            Write-Host ''
-            Write-UiNavFooter -Mode Exit
-            Write-Host "$($_E)[J" -NoNewline
-
-            End-SyncRender
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameNavFooter -Frame $frame -Mode Exit
+            Write-UiFrame -Frame $frame
 
             $key = Read-ConsoleKey
             switch ($key.Key) {
@@ -491,7 +686,7 @@ function Invoke-SearchMode {
         }
 
         Begin-SyncRender
-        try { Clear-Host } catch {}
+        Move-UiCursorToFrameStart
         if ($null -ne $RenderHeader) { & $RenderHeader }
         $searchUi = Show-SearchInputBox -Query $Filter.Value -MatchCount $visibleItems.Count
         if ($null -ne $RenderResults) { & $RenderResults $visibleItems $currentIndex }

@@ -559,3 +559,10 @@ Root cause: The main frame previously crossed PowerShell host output many times 
 Guardrail/rule: Keep `Render-Frame` as the first measured optimization target: build the main frame in memory and emit it with one `[Console]::Write()`. Keep optional perf metrics behind `DEVICECHECK_TUI_PERF=1`. Do not reintroduce arrow-key batching until measured render cost is no longer the obvious bottleneck.
 Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `docs\TUI_Render_Performance_Limits.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`; `git diff --check`.
+
+Date: 2026-06-06
+Problem: DeviceCheck opened in a single-column layout on a wide terminal, so the Selected Details/right pane disappeared.
+Root cause: The local `PS_UI_Blueprint.psm1` `Get-UiWidth` helper had been changed to cap width at 100 columns. `DeviceCheck.ps1` enables dual-pane mode only when `uiWidth >= 136`, so the cap made dual-pane mathematically impossible.
+Guardrail/rule: Shared/simple menu width caps must not be used by complex apps that decide layout from real terminal width. `Get-UiWidth` for DeviceCheck must return the real window width minus safety margin, with a minimum floor such as `Max(60, WindowSize.Width - 2)`, not a max cap.
+Files affected: `PS_UI_Blueprint.psm1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and `PS_UI_Blueprint.psm1`; static check confirmed `Get-UiWidth` uses `Max(60, WindowSize.Width - 2)` and `DeviceCheck.ps1` dual-pane threshold remains `uiWidth >= 136`; `git diff --check`.
