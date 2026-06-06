@@ -503,3 +503,10 @@ Root cause: The offline `pnp.ids` cache does not include every monitor EISA code
 Guardrail/rule: For DISPLAY/MONITOR breakdowns, use local Windows manufacturer evidence as a clearly labeled fallback when `pnp.ids` lacks the EISA code. Keep the local identity section concise for monitors: avoid repeating EDID/WMI/INF sources and duplicate size/timing/name rows.
 Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor -AsJson`; `git diff --check`.
+
+Date: 2026-06-06
+Problem: Disk drive HardwareId breakdowns showed ugly fixed-width padding such as `NVME____` and compact strings that glued model and firmware together.
+Root cause: Windows storage devices can expose legacy SCSI-style identity fields where spaces/padding are represented as underscores. For NVMe disks, `VEN_NVME` is usually the Windows storage stack/protocol label, not the physical drive vendor.
+Guardrail/rule: Preserve raw storage IDs as evidence, but clean trailing underscore padding for display. Prefer structured storage `InstanceId` values and the local Windows FriendlyName for visible disk model rows. Label `NVME` as a storage stack when appropriate, not as the drive vendor.
+Files affected: `DeviceCheck.ps1`, `internal\HardwareIdResolver.psm1`, `internal\Test-HardwareIdResolver.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; `internal\Test-HardwareIdResolver.ps1 -AsJson`; full local resolver regression suite; `git diff --check`.

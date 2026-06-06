@@ -1359,16 +1359,24 @@ function Get-HardwareResolutionDetailRows {
             $deviceTypeName = [string](Get-NotePropertyValue -Object $lookup -Name 'DeviceTypeName')
             $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
             $productName = [string](Get-NotePropertyValue -Object $lookup -Name 'ProductName')
-            if (-not [string]::IsNullOrWhiteSpace($productName)) {
-                $rows.Add((New-HardwareIdentityRow -Key 'Storage Model' -Value $productName -Color 'White'))
+            $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
+            $friendlyName = [string](Get-NotePropertyValue -Object $device -Name 'FriendlyName')
+            $displayModel = if (-not [string]::IsNullOrWhiteSpace($friendlyName)) { $friendlyName } else { $productName }
+            if (-not [string]::IsNullOrWhiteSpace($displayModel)) {
+                $rows.Add((New-HardwareIdentityRow -Key 'Storage Model' -Value $displayModel -Color 'White'))
             }
             if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
-                $rows.Add((New-HardwareIdentityRow -Key 'Storage Vendor' -Value $vendorName -Color 'Dim'))
+                if ($vendorName -match '^(?i:NVME)$') {
+                    $rows.Add((New-HardwareIdentityRow -Key 'Storage Stack' -Value 'NVMe surfaced through Windows SCSI storage stack' -Color 'Dim'))
+                }
+                else {
+                    $rows.Add((New-HardwareIdentityRow -Key 'Storage Vendor' -Value $vendorName -Color 'Dim'))
+                }
             }
             if (-not [string]::IsNullOrWhiteSpace($deviceTypeName)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Storage Type' -Value $deviceTypeName -Color 'Dim'))
             }
-            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value "Parsed from Windows $bus storage ID; no pci.ids/usb.ids database lookup" -Color 'Dim'))
+            $rows.Add((New-HardwareIdentityRow -Key 'Evidence' -Value "Windows $bus storage ID" -Color 'Dim'))
         }
         return @($rows)
     }
@@ -1421,6 +1429,10 @@ function Get-CandidateEvidenceHardwareIds {
         if (-not [string]::IsNullOrWhiteSpace($Value) -and $idSet.Add($Value)) {
             $ids.Add($Value)
         }
+    }
+
+    if ($InstanceId -match '^(?i:SCSI|USBSTOR|IDE)\\[A-Z0-9]+&VEN_[^&\\]+&PROD_[^&\\]+') {
+        Add-DeviceCheckHardwareId -Value $InstanceId
     }
 
     $importantProperties = Get-NotePropertyValue -Object $Evidence -Name 'ImportantProperties'
@@ -2120,24 +2132,37 @@ function Get-HardwareIdBreakdownLines {
             }
         }
         elseif ($res.Bus -in @('SCSI', 'USBSTOR', 'IDE')) {
+            $isCompactStorageId = ([string]$res.IdType -match 'COMPACT')
             $deviceType = $res.Fields.DeviceType
             $vendorId = $res.Fields.VendorId
+            $vendorDisplayId = [string](Get-NotePropertyValue -Object $res.Fields -Name 'VendorDisplayId')
             $productId = $res.Fields.ProductId
+            $productDisplayId = [string](Get-NotePropertyValue -Object $res.Fields -Name 'ProductDisplayId')
             $revision = $res.Fields.Revision
             $deviceTypeName = if ($res.Lookup.DeviceTypeName) { $res.Lookup.DeviceTypeName } else { 'storage device' }
             $vendorName = if ($res.Lookup.VendorName) { $res.Lookup.VendorName } else { '' }
             $productName = if ($res.Lookup.ProductName) { $res.Lookup.ProductName } else { '' }
+            $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
+            $friendlyName = [string](Get-NotePropertyValue -Object $device -Name 'FriendlyName')
+            if (-not [string]::IsNullOrWhiteSpace($friendlyName)) {
+                $productName = $friendlyName
+            }
+            if ([string]::IsNullOrWhiteSpace($vendorDisplayId)) { $vendorDisplayId = $vendorId }
+            if ([string]::IsNullOrWhiteSpace($productDisplayId)) { $productDisplayId = $productId }
 
             if (-not [string]::IsNullOrWhiteSpace($deviceType)) {
                 $typeLine = "{0,-15} = {1}" -f $deviceType, (Format-UiValue -Text $deviceTypeName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.White)$($typeLine)$($_C.Reset)")
             }
-            if (-not [string]::IsNullOrWhiteSpace($vendorId)) {
-                $vendorLine = "{0,-15} = {1}" -f "VEN_$vendorId", (Format-UiValue -Text $vendorName -MaxLength $valueWidth)
+            if (-not [string]::IsNullOrWhiteSpace($vendorDisplayId)) {
+                $vendorDisplayName = if ($vendorName -match '^(?i:NVME)$') { 'NVMe storage stack' } else { $vendorName }
+                $vendorToken = if ($vendorName -match '^(?i:NVME)$') { "STACK_$vendorDisplayId" } else { "VEN_$vendorDisplayId" }
+                $vendorLine = "{0,-15} = {1}" -f $vendorToken, (Format-UiValue -Text $vendorDisplayName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($vendorLine)$($_C.Reset)")
             }
-            if (-not [string]::IsNullOrWhiteSpace($productId)) {
-                $productLine = "{0,-15} = {1}" -f "PROD_$productId", (Format-UiValue -Text $productName -MaxLength $valueWidth)
+            if (-not [string]::IsNullOrWhiteSpace($productDisplayId)) {
+                $productToken = if ($isCompactStorageId) { 'MODEL' } else { "PROD_$productDisplayId" }
+                $productLine = "{0,-15} = {1}" -f $productToken, (Format-UiValue -Text $productName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Info)$($productLine)$($_C.Reset)")
             }
             if (-not [string]::IsNullOrWhiteSpace($revision)) {

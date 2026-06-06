@@ -68,6 +68,10 @@ Add-ResolverAssertion -Assertions $assertions -Name 'SCSI compact disk ID resolv
     -Passed (($scsiCompact.Bus -eq 'SCSI') -and ($scsiCompact.IdType -eq 'SCSI_STORAGE_COMPACT')) `
     -Expected 'SCSI / SCSI_STORAGE_COMPACT' `
     -Actual ("{0} / {1}" -f $scsiCompact.Bus, $scsiCompact.IdType)
+Add-ResolverAssertion -Assertions $assertions -Name 'SCSI compact padded vendor has clean display token' `
+    -Passed (($scsiCompact.Fields.VendorId -eq 'NVME____') -and ($scsiCompact.Fields.VendorDisplayId -eq 'NVME')) `
+    -Expected 'raw NVME____ / display NVME' `
+    -Actual ("raw {0} / display {1}" -f $scsiCompact.Fields.VendorId, $scsiCompact.Fields.VendorDisplayId)
 
 $usbStorStructured = Resolve-HardwareId -HardwareId 'USBSTOR\Disk&Ven_Kingston&Prod_DataTraveler_3.0&Rev_PMAP' -Cache $cache
 Add-ResolverAssertion -Assertions $assertions -Name 'USBSTOR structured disk ID resolves as storage identity' `

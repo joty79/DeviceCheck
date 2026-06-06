@@ -465,6 +465,19 @@ function ConvertFrom-ScsiIdentifierText {
     return (($Value -replace '_+', ' ') -replace '\s+', ' ').Trim()
 }
 
+function ConvertTo-ScsiDisplayToken {
+    param(
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    return ($Value -replace '_+$', '')
+}
+
 function Get-ScsiDeviceTypeName {
     param(
         [AllowEmptyString()]
@@ -529,10 +542,12 @@ function Resolve-StorageHardwareId {
         $productName = ConvertFrom-ScsiIdentifierText -Value $productId
 
         return (New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus $bus -IdType "$bus`_STORAGE_ID" -Fields ([ordered]@{
-                    DeviceType = $deviceType
-                    VendorId = $vendorId
-                    ProductId = $productId
-                    Revision = $revision
+        DeviceType = $deviceType
+        VendorId = $vendorId
+        VendorDisplayId = ConvertTo-ScsiDisplayToken -Value $vendorId
+        ProductId = $productId
+        ProductDisplayId = ConvertTo-ScsiDisplayToken -Value $productId
+        Revision = $revision
                 }) -Confidence 'PARSED-STORAGE' -Lookup ([ordered]@{
                     DeviceTypeName = Get-ScsiDeviceTypeName -DeviceType $deviceType
                     VendorName = $vendorName
@@ -562,7 +577,9 @@ function Resolve-StorageHardwareId {
     New-ResolutionObject -InputId $InputId -NormalizedId $NormalizedId -Bus $compactBus -IdType "$compactBus`_STORAGE_COMPACT" -Fields ([ordered]@{
         DeviceType = $compactType
         VendorId = $vendorId
+        VendorDisplayId = ConvertTo-ScsiDisplayToken -Value $vendorId
         ProductId = $productId
+        ProductDisplayId = ConvertTo-ScsiDisplayToken -Value $productId
         Revision = ''
     }) -Confidence 'PARSED-STORAGE' -Lookup ([ordered]@{
         DeviceTypeName = Get-ScsiDeviceTypeName -DeviceType $compactType
