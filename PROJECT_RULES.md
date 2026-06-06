@@ -531,3 +531,10 @@ Root cause: The real issue is mouse selection spanning the left/right pseudo-pan
 Guardrail/rule: Do not ship workaround shortcuts for pane mouse-selection problems unless they directly address the user-visible failure. For this UI issue, either find a way to prevent/cancel mouse selection safely or leave it as a documented Windows Terminal limitation; do not add copy shortcuts as a substitute.
 Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`; `git diff --check`.
+
+Date: 2026-06-06
+Problem: TUI scrolling improved after Gemini's cursor-home redraw/cache optimizations, but it still is not butter-smooth under held arrow-key navigation.
+Root cause: The main `Render-Frame` path still emits many `Write-Host` calls per frame and rebuilds a full immediate-mode frame through PowerShell host machinery. Synchronized output hides tearing but does not remove PowerShell/ConPTY/write-call overhead.
+Guardrail/rule: Future TUI performance work must be measured and reversible. First add optional frame timing/size counters, then test a single-frame StringBuilder plus one `[Console]::Write()` emission path. Do not jump to VT scroll regions or workaround UI features until output batching and key-repeat queue handling have been measured.
+Files affected: `docs\TUI_Render_Performance_Limits.md`, `PROJECT_RULES.md`.
+Validation/tests run: Documentation update only; code path unchanged; `git diff --check`.

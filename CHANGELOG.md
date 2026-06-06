@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added persistent machine summary (system information, dynamic device/category counts, and time) inside the header banner subtitle in `DeviceCheck.ps1`'s TUI.
+- Added TUI rendering performance and console limits research guide in `docs\TUI_Render_Performance_Limits.md`.
 
 ### Changed
 - Removed redundant keybinding help strings (`R rescans devices. E scans evidence...`) from the header banner subtitle in `DeviceCheck.ps1` since those shortcuts are already displayed in the navigation footer.
