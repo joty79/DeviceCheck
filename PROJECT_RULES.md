@@ -510,3 +510,10 @@ Root cause: Windows storage devices can expose legacy SCSI-style identity fields
 Guardrail/rule: Preserve raw storage IDs as evidence, but clean trailing underscore padding for display. Prefer structured storage `InstanceId` values and the local Windows FriendlyName for visible disk model rows. Label `NVME` as a storage stack when appropriate, not as the drive vendor.
 Files affected: `DeviceCheck.ps1`, `internal\HardwareIdResolver.psm1`, `internal\Test-HardwareIdResolver.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation; `internal\Test-HardwareIdResolver.ps1 -AsJson`; full local resolver regression suite; `git diff --check`.
+
+Date: 2026-06-06
+Problem: TUI scan hotkeys could accidentally trigger broad evidence scans, especially when focus was visually on the right details pane or when Windows Terminal right-click/paste injected shortcut characters.
+Root cause: `E` on the root row immediately queued all devices, and shortcut handling was duplicated between uppercase key names and lowercase `KeyChar` fallbacks. The details pane highlight could also make it unclear that commands still targeted the selected row in the left tree.
+Guardrail/rule: Dangerous/broad TUI actions need an explicit confirmation step. Root/all-device evidence scan requires `E` twice within a short window and cannot be started from the right details pane. Pasted/input bursts should be ignored for shortcut dispatch. Keep hotkey logic centralized in helpers instead of duplicating scan dispatch in multiple switch branches.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for touched scripts; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-AlsaUcmResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`; `git diff --check`. Manual Windows Terminal right-click behavior still needs user testing.

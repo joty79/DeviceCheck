@@ -3056,7 +3056,7 @@ function Render-FrameLegacy {
     try { Clear-Host } catch {}
 
     # Header
-    Write-UiBanner -Title "DeviceCheck Manager" -Subtitle "R rescans the present PnP device tree. E scans selected device locally. S adds web/AI."
+    Write-UiBanner -Title "DeviceCheck Manager" -Subtitle "R rescans the present PnP device tree. E scans evidence; root/all requires E twice. S adds web/AI."
     Write-Host "  $($_C.Dim)$($script:SystemScanMessage)$($_C.Reset)$($_C.EraseLn)"
     Write-UiSection -Title "Device Connection Tree"
     Write-Host ''
@@ -3318,7 +3318,7 @@ function Render-FrameLegacy {
         New-UiShortcutSegment -Text 'R' -Color $_C.Info
         New-UiShortcutSegment -Text ' = system scan   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'E' -Color $_C.OK
-        New-UiShortcutSegment -Text ' = evidence   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'M' -Color $_C.White
         New-UiShortcutSegment -Text ' = models   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'A' -Color $_C.Info
@@ -3363,7 +3363,7 @@ function Render-Frame {
     Begin-SyncRender
     try { Clear-Host } catch {}
 
-    Write-UiBanner -Title 'DeviceCheck Manager' -Subtitle 'R rescans devices. E scans selected device locally. S adds web/AI.'
+    Write-UiBanner -Title 'DeviceCheck Manager' -Subtitle 'R rescans devices. E scans evidence; root/all requires E twice. S adds web/AI.'
     $statusWidth = [Math]::Max(10, $uiWidth - 2)
     $compactStatus = Get-CompactSystemStatus -StatusText $script:SystemScanMessage
     Write-Host "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
@@ -3506,7 +3506,7 @@ function Render-Frame {
         New-UiShortcutSegment -Text 'R' -Color $_C.Info
         New-UiShortcutSegment -Text ' = system scan   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'E' -Color $_C.OK
-        New-UiShortcutSegment -Text ' = evidence   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'M' -Color $_C.White
         New-UiShortcutSegment -Text ' = models   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'A' -Color $_C.Info
@@ -3536,6 +3536,79 @@ function Invoke-SystemScanWithFeedback {
     $script:DetailCursorIndex = 0
     $script:ActivePane = 'Tree'
     $script:visibleRows = Update-VisibleRows
+}
+
+function Get-SelectedTreeRow {
+    param(
+        [array]$Rows,
+        [int]$Index
+    )
+
+    if ($null -eq $Rows -or $Rows.Count -eq 0) { return $null }
+    if ($Index -lt 0 -or $Index -ge $Rows.Count) { return $null }
+    return $Rows[$Index]
+}
+
+function Reset-AllEvidenceScanConfirmation {
+    $script:PendingAllEvidenceScanConfirmUntil = [datetime]::MinValue
+}
+
+function Invoke-SelectedEvidenceScan {
+    param(
+        [array]$Rows,
+        [int]$Index
+    )
+
+    $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
+    if ($null -eq $currentRow) { return }
+
+    if ($currentRow.Type -eq 'Root') {
+        if ($script:ActivePane -eq 'Detail') {
+            Reset-AllEvidenceScanConfirmation
+            $script:SystemScanMessage = "All-device evidence scan is available only from the left tree root. Press Left, then E twice to confirm. | $(Get-Date -Format 'HH:mm:ss')"
+            return
+        }
+
+        $now = Get-Date
+        if ($script:PendingAllEvidenceScanConfirmUntil -gt $now) {
+            Reset-AllEvidenceScanConfirmation
+            Start-AllEvidenceScan
+            return
+        }
+
+        $script:PendingAllEvidenceScanConfirmUntil = $now.AddSeconds(4)
+        $script:SystemScanMessage = "All-device evidence scan needs confirmation: press E again within 4s, or select a category/device. | $(Get-Date -Format 'HH:mm:ss')"
+        return
+    }
+
+    Reset-AllEvidenceScanConfirmation
+
+    if ($currentRow.Type -eq 'Category') {
+        Start-CategoryEvidenceScan -Category $currentRow.Ref
+    } elseif ($currentRow.Type -eq 'Device') {
+        Start-DeviceLookup -Dev $currentRow.Ref -EvidenceOnly -ForceEvidenceRefresh
+    } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
+        Start-DeviceLookup -Dev $currentRow.ParentDevice -EvidenceOnly -ForceEvidenceRefresh
+    }
+}
+
+function Invoke-SelectedWebScan {
+    param(
+        [array]$Rows,
+        [int]$Index,
+        [switch]$UseAgent
+    )
+
+    Reset-AllEvidenceScanConfirmation
+
+    $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
+    if ($null -eq $currentRow) { return }
+
+    if ($currentRow.Type -eq 'Device') {
+        Start-DeviceLookup -Dev $currentRow.Ref -UseAgent:$UseAgent -ForceEvidenceRefresh
+    } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
+        Start-DeviceLookup -Dev $currentRow.ParentDevice -UseAgent:$UseAgent -ForceEvidenceRefresh
+    }
 }
 
 # Start background lookup pipeline for a device (Asynchronous, non-blocking)
@@ -4661,6 +4734,23 @@ function Update-ActiveSearches {
     Complete-EvidenceBatchIfFinished
 }
 
+function Clear-PendingConsoleInput {
+    param([int]$MaxCount = 64)
+
+    $drained = 0
+    while ([Console]::KeyAvailable -and $drained -lt $MaxCount) {
+        try {
+            $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+        }
+        catch {
+            try { $null = [Console]::ReadKey($true) } catch { break }
+        }
+        $drained++
+    }
+
+    return $drained
+}
+
 # Override Read-ConsoleKey to support background search ticks & smooth rendering
 function Read-ConsoleKey {
     try { [Console]::CursorVisible = $false } catch {}
@@ -4724,6 +4814,16 @@ function Read-ConsoleKey {
                 $keyChar = [char]$keyInfo.Character
             }
         }
+
+        if ($keyChar -ne [char]0 -and -not [char]::IsControl($keyChar) -and [Console]::KeyAvailable) {
+            $drained = Clear-PendingConsoleInput
+            $script:SystemScanMessage = "Ignored pasted/input burst ($($drained + 1) keys). Use keyboard shortcuts one at a time; right-click paste is ignored. | $(Get-Date -Format 'HH:mm:ss')"
+            return [pscustomobject]@{
+                Key            = 'IgnoredInputBurst'
+                KeyChar        = [char]0
+                VirtualKeyCode = 0
+            }
+        }
     }
     catch {
         throw $_
@@ -4770,6 +4870,7 @@ $script:ActivePane = 'Tree'
 $script:DetailScrollOffset = 0
 $script:DetailCursorIndex = 0
 $script:LastDetailLineCount = 0
+$script:PendingAllEvidenceScanConfirmUntil = [datetime]::MinValue
 $running = $true
 
 try {
@@ -4799,6 +4900,9 @@ try {
         if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
             Start-Sleep -Milliseconds 50
             continue
+        }
+        if ($key.Key -ne 'E' -and $key.KeyChar -ne 'e') {
+            Reset-AllEvidenceScanConfirmation
         }
         switch ($key.Key) {
             'UpArrow' {
@@ -4909,38 +5013,21 @@ try {
                 $selectedIndex = $script:selectedIndex
             }
             'R' {
+                Reset-AllEvidenceScanConfirmation
                 Invoke-SystemScanWithFeedback -Quiet
                 $selectedIndex = $script:selectedIndex
             }
             'E' {
-                $currentRow = $visibleRows[$selectedIndex]
-                if ($currentRow.Type -eq 'Root') {
-                    Start-AllEvidenceScan
-                } elseif ($currentRow.Type -eq 'Category') {
-                    Start-CategoryEvidenceScan -Category $currentRow.Ref
-                } elseif ($currentRow.Type -eq 'Device') {
-                    Start-DeviceLookup -Dev $currentRow.Ref -EvidenceOnly -ForceEvidenceRefresh
-                } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                    Start-DeviceLookup -Dev $currentRow.ParentDevice -EvidenceOnly -ForceEvidenceRefresh
-                }
+                Invoke-SelectedEvidenceScan -Rows $visibleRows -Index $selectedIndex
             }
             'S' {
-                $currentRow = $visibleRows[$selectedIndex]
-                if ($currentRow.Type -eq 'Device') {
-                    Start-DeviceLookup -Dev $currentRow.Ref -ForceEvidenceRefresh
-                } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                    Start-DeviceLookup -Dev $currentRow.ParentDevice -ForceEvidenceRefresh
-                }
+                Invoke-SelectedWebScan -Rows $visibleRows -Index $selectedIndex
             }
             'A' {
-                $currentRow = $visibleRows[$selectedIndex]
-                if ($currentRow.Type -eq 'Device') {
-                    Start-DeviceLookup -Dev $currentRow.Ref -UseAgent -ForceEvidenceRefresh
-                } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                    Start-DeviceLookup -Dev $currentRow.ParentDevice -UseAgent -ForceEvidenceRefresh
-                }
+                Invoke-SelectedWebScan -Rows $visibleRows -Index $selectedIndex -UseAgent
             }
             'M' {
+                Reset-AllEvidenceScanConfirmation
                 Invoke-ModelSelector
             }
             'Escape' {
@@ -4952,42 +5039,31 @@ try {
             'ResizeEvent' {
                 continue
             }
+            'IgnoredInputBurst' {
+                Reset-AllEvidenceScanConfirmation
+                continue
+            }
             default {
                 # Handle lowercase hotkeys from hosts that do not map Key names consistently.
                 if ($key.KeyChar -eq 'r') {
+                    Reset-AllEvidenceScanConfirmation
                     Invoke-SystemScanWithFeedback -Quiet
                     $selectedIndex = $script:selectedIndex
                 } elseif ($key.KeyChar -eq 'e') {
-                    $currentRow = $visibleRows[$selectedIndex]
-                    if ($currentRow.Type -eq 'Root') {
-                        Start-AllEvidenceScan
-                    } elseif ($currentRow.Type -eq 'Category') {
-                        Start-CategoryEvidenceScan -Category $currentRow.Ref
-                    } elseif ($currentRow.Type -eq 'Device') {
-                        Start-DeviceLookup -Dev $currentRow.Ref -EvidenceOnly -ForceEvidenceRefresh
-                    } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                        Start-DeviceLookup -Dev $currentRow.ParentDevice -EvidenceOnly -ForceEvidenceRefresh
-                    }
+                    Invoke-SelectedEvidenceScan -Rows $visibleRows -Index $selectedIndex
                 } elseif ($key.KeyChar -eq 's') {
-                    $currentRow = $visibleRows[$selectedIndex]
-                    if ($currentRow.Type -eq 'Device') {
-                        Start-DeviceLookup -Dev $currentRow.Ref -ForceEvidenceRefresh
-                    } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                        Start-DeviceLookup -Dev $currentRow.ParentDevice -ForceEvidenceRefresh
-                    }
+                    Invoke-SelectedWebScan -Rows $visibleRows -Index $selectedIndex
                 } elseif ($key.KeyChar -eq 'a') {
-                    $currentRow = $visibleRows[$selectedIndex]
-                    if ($currentRow.Type -eq 'Device') {
-                        Start-DeviceLookup -Dev $currentRow.Ref -UseAgent -ForceEvidenceRefresh
-                    } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
-                        Start-DeviceLookup -Dev $currentRow.ParentDevice -UseAgent -ForceEvidenceRefresh
-                    }
+                    Invoke-SelectedWebScan -Rows $visibleRows -Index $selectedIndex -UseAgent
                 } elseif ($key.KeyChar -eq 'm') {
+                    Reset-AllEvidenceScanConfirmation
                     Invoke-ModelSelector
                 } elseif ($key.KeyChar -eq '+') {
+                    Reset-AllEvidenceScanConfirmation
                     $currentRow = $visibleRows[$selectedIndex]
                     Expand-SelectedNode -Row $currentRow
                 } elseif ($key.KeyChar -eq '-') {
+                    Reset-AllEvidenceScanConfirmation
                     $currentRow = $visibleRows[$selectedIndex]
                     Collapse-SelectedNode -Row $currentRow
                     $selectedIndex = $script:selectedIndex
