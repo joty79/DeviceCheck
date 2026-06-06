@@ -8,11 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
+
+### Fixed
+- Stale credentials cleanup on failure: Added a new `Remove-DeviceCheckStoredCredential` helper and integrated it into the remote collection and refresh loops. If a WinRM connection to a remote target fails (e.g. with `Access is denied`), the script automatically deletes the cached credential from the disk (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) and memory, prompting the user for fresh credentials on the next connect/refresh attempt instead of repeatedly failing with stale data.
+- Resolved connection screen remnants: Forced a console screen clear (`$script:RequestForceClear = $true`) immediately upon entering the LAN target connection screen and transitioning between prompt stages (username, password, cached snapshot choices). This completely wipes any background main tree elements (like detail pane borders and status lines) without needing a manual window resize.
+- Disabled connection mode auto-wrap: Removed `Restore-TuiHost` from `Invoke-ConnectLanTarget` and `Invoke-SystemScan` so auto-wrap remains disabled (`?7l`) during execution. This prevents horizontal border wrapping on extremely narrow terminal widths (under 60 columns) and allows clean truncation/clipping.
+- Made the connection failure dialog responsive to resizing by replacing the blocking `Read-Host` call with a key polling loop (`Read-ConsoleKey`) that dynamically redraws the screen on `ResizeEvent`.
+- Rewrote LAN connection target prompt, username/password prompts, and cached action choice inputs using a custom key-polling `Read-TuiLine` loop. This enables real-time viewport redrawing on window `ResizeEvent` while blocked on input, preventing all double-border stretching and reflow remnants.
+- Fixed TUI double-border stretching and screen remnants in connection screens by appending `$($_C.EraseLn)` to all border lines in `Add-UiFrameBanner` (in `PS_UI_Blueprint.psm1`), `Add-FrameBanner` (in `DeviceCheck.ps1`), `Add-UiFrameSection`, and `Add-FrameSection`. This ensures any old characters from a previous wider frame are erased.
+- Improved `Clear-TuiScreen` to use native .NET `[Console]::Clear()` for complete viewport and scrollback buffer wipe on modal transitions, eliminating background text leaking under connection panels.
+- Automated remote snapshot refresh: pressing `R` or reconnecting in the TUI now uses the stored credential on disk if it exists, bypassing all prompts.
+- Added first TUI remote target switching slice: `Ctrl+L` prompts for a same-LAN/workgroup target, collects a WinRM snapshot, and redraws the main DeviceCheck tree from that remote snapshot.
+- Added `internal\Export-DeviceCheckEvidence.ps1`, a local/WinRM evidence snapshot exporter that collects system identity, present PnP devices, optional per-device properties, `pnputil` connected-device output, and monitor registry/WMI evidence into `%LOCALAPPDATA%\DeviceCheck\snapshots\`.
+- Added `Connect-PaliosDeviceCheck.ps1`, a convenience wrapper for the known `PALIOS` LAN desktop that prompts for credentials and calls the generic exporter.
+
+### Verified
+- Confirmed the first interactive TUI `Ctrl+L` remote target switch against `PALIOS`: DeviceCheck returned to the main screen and displayed the remote snapshot-backed device tree.
+- Confirmed two full `Connect-PaliosDeviceCheck.ps1` runs against `PALIOS` over same-LAN WinRM, each collecting 127 present devices and 9 monitor registry entries through the Windows PowerShell 5.1 endpoint in about 10 seconds.
 - Added persistent machine summary (system information, dynamic device/category counts, and time) inside the header banner subtitle in `DeviceCheck.ps1`'s TUI.
 - Added TUI rendering performance and console limits research guide in `docs\TUI_Render_Performance_Limits.md`.
 - Added high-fidelity in-memory performance benchmarking in `DeviceCheck.ps1` which logs key reads, event processing, prep work, and rendering frame durations, and automatically saves a detailed summary to `tui_benchmark.log` upon exiting.
 
 ### Changed
+- Animated remote snapshot collection progress: Converted `Invoke-DeviceCheckSnapshotExport` to run the remote evidence collector asynchronously in a background PowerShell runspace instead of blocking the main thread. Added a dynamic marquee progress bar with a spinning activity indicator (`[---###---] /`) that updates every 100ms. Added live window `ResizeEvent` processing during collection and enabled connection cancellation at any time by pressing `ESC`.
+- Updated the `Ctrl+L` LAN connection screen, credential prompt, and remote connection status/error screens (`Invoke-ConnectLanTarget`, `New-DeviceCheckCredentialFromPrompt`, `Show-RemoteSnapshotCollectionScreen`, and `Invoke-RemoteSnapshotCollectionScreen`) to fully comply with the TUI blueprint: transitioned from raw `Write-Host`/`Read-Host`/`Clear-Host` calls to unified frame-building using `StringBuilder`, atomic single-write rendering via `[Console]::Write()`, proper `EraseLn` to prevent window stretching artifacts, and consistent use of the `$_C.*` color palette. Added explicit `Clear-Host` calls before each modal connection wizard step to prevent prompts from leaking underneath the active main TUI tree view.
+- Added a script-scope credentials cache (`$script:CredentialCache`) mapping computer names to their entered `PSCredential` objects, allowing automatic credential reuse during target scans/refreshes (via `R` key or connect prompts) without repeatedly asking the user.
+- Replaced the `Ctrl+L`/remote refresh PowerShell credential popup with inline DeviceCheck username/password prompts, and kept connection failures on the connect/refresh screen instead of leaking error text under the main TUI.
+- Changed `Ctrl+L` target switching to open an existing cached `latest.json` snapshot instantly by default, with refresh as an explicit choice.
+- Changed the TUI status/footer to show the active target and advertise `Ctrl+L` connect; `R` now refreshes the active remote snapshot when viewing a remote target.
 - Removed redundant keybinding help strings (`R rescans devices. E scans evidence...`) from the header banner subtitle in `DeviceCheck.ps1` since those shortcuts are already displayed in the navigation footer.
 - Ignored the generated `tui_benchmark.log` file so local TUI performance runs do not leave noisy untracked artifacts.
 - Updated `Write-UiBanner` in `PS_UI_Blueprint.psm1` to safely truncate long titles or subtitles using the BMP-safe ellipsis character `[char]0x2026` and pad them correctly, preventing negative padding string multiplication crashes on narrow windows.

@@ -18,6 +18,7 @@
 | # | Tool | Description |
 |:-:|------|-------------|
 | 🛠️ | **[DeviceCheck](#devicecheck-tui)** | Interactive text-based Device Manager interface |
+| 🔁 | **[Remote Evidence Export](#remote-evidence-export)** | Same-LAN WinRM collector for repeatable local/remote PC snapshots |
 | 🧬 | **[Hardware ID Foundation](#hardware-id-foundation)** | Migrated offline hardware ID database, resolver, INF evidence, and driver package metadata audit tools |
 
 ---
@@ -59,6 +60,7 @@ $env:DEVICECHECK_TUI_PERF = '1'
 | Key | Action |
 |-----|--------|
 | `R` | Rescan machine evidence and the full present PnP device tree; shows running/complete counts |
+| `Ctrl+L` | Connect to a same-LAN/workgroup PC, collect a snapshot, and switch the main TUI tree to that target |
 | `E` | Collect local evidence for the selected device; on a category, scan that group; on the computer root, press `E` twice within 4 seconds to scan all present devices. Selected-device details refresh as soon as evidence is saved |
 | `S` | Refresh selected-device evidence, then run web/AI lookup |
 | `A` | Run the agentic driver finder for the selected device; the tree shows one agent row while full answer, trace, and links stay in the details pane |
@@ -66,6 +68,55 @@ $env:DEVICECHECK_TUI_PERF = '1'
 | `+` | Expand the selected category; on the computer root, expand every category |
 | `-` | Collapse the selected category; on the computer root, collapse every category |
 | `Q` / `Esc` | Exit |
+
+---
+
+## 🔁 Remote Evidence Export
+
+> A repeatable same-LAN collector for workgroup PCs before remote TUI target switching is wired in.
+
+### The Problem
+- Shop/workbench PCs need quick inspection without retyping long WinRM commands.
+- Remote testing needs a stable JSON snapshot that can be reviewed even after the PC is disconnected.
+- The interactive TUI should not grow more remote plumbing until the collector path is proven.
+
+### The Solution
+
+`internal\Export-DeviceCheckEvidence.ps1` collects system identity, present PnP devices, optional per-device properties, `pnputil` output, and monitor registry/WMI evidence from either the local host or a same-LAN WinRM target. `Connect-PaliosDeviceCheck.ps1` is a convenience wrapper for the known `PALIOS` desktop and writes snapshots under `%LOCALAPPDATA%\DeviceCheck\snapshots\`.
+Inside the TUI, `Ctrl+L` prompts for a computer name/IP and opens the existing `latest.json` snapshot immediately when one is available. Choose refresh only when you want a live WinRM rescan. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
+
+```text
+NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree
+```
+
+### Usage
+
+```powershell
+# Known shop/lab target shortcut
+.\Connect-PaliosDeviceCheck.ps1
+
+# Faster connectivity/evidence smoke without per-device property expansion
+.\Connect-PaliosDeviceCheck.ps1 -Quick
+
+# Generic local snapshot
+.\internal\Export-DeviceCheckEvidence.ps1
+
+# Generic remote target
+$cred = Get-Credential 'PALIOS\joty79'
+.\internal\Export-DeviceCheckEvidence.ps1 -ComputerName PALIOS -Credential $cred
+```
+
+| Parameter | Details |
+|-----------|---------|
+| `-ComputerName` | Target host name or IP; local host is the default for the generic exporter. |
+| `-Credential` / `-UserName` | Explicit WinRM credentials. The PALIOS wrapper prompts for `PALIOS\joty79` by default. |
+| `-Quick` | Skips full per-device property expansion for faster connection testing. |
+| `-SkipTrustedHosts` | Skips automatic exact-target `TrustedHosts` update when it is already configured. |
+| `-NoSave` | Runs the collector and prints a summary without writing a snapshot file. |
+
+`TrustedHosts` updates are target-specific only; the scripts refuse wildcard trust entries and never store passwords.
+In the first TUI remote slice, `R` refreshes the active remote snapshot using the in-session credential when available; selected-device `E`, `S`, and `A` actions remain local-target only until remote per-device actions are wired safely.
+The first full PALIOS LAN snapshot completed through a Windows PowerShell 5.1 WinRM endpoint in about 10 seconds, collecting 127 present devices, 9 monitor registry entries, and connected-device `pnputil` output.
 
 ---
 
@@ -163,6 +214,7 @@ DeviceCheck/
 │   ├── HARDWARE_SOURCE_INTAKE.md                   # Hardware/driver source intake notes
 │   └── LOCAL_SOURCE_PROJECT_AUDIT.md               # Local source repo audit and transfer decisions
 ├── internal/
+│   ├── Export-DeviceCheckEvidence.ps1              # Local/remote snapshot collector
 │   ├── HardwareIdResolver.psm1                      # Offline Hardware ID parser/resolver
 │   └── InfDriverParser.psm1                         # Section-aware local INF parser
 ├── config/
@@ -173,6 +225,7 @@ DeviceCheck/
 │   └── Fetch-RenderedPage.js                       # Chrome DevTools rendered-page fetch helper
 ├── .gitignore            # Generated evidence/cache folder ignores
 ├── .gitattributes        # Repository line-ending policy
+├── Connect-PaliosDeviceCheck.ps1 # Convenience wrapper for PALIOS remote snapshot export
 ├── DeviceCheck.ps1         # Main interactive TUI script
 ├── Get-DriverUpdateAgent.ps1 # Gemini tool-calling driver finder
 ├── PROJECT_RULES.md        # Project-specific implementation memory

@@ -148,6 +148,65 @@ function Save-ModelSelection {
     }
 }
 
+function Clear-TuiScreen {
+    try {
+        [Console]::Clear()
+    } catch {
+        try {
+            [Console]::Write("$([char]27)[H$([char]27)[2J$([char]27)[3J")
+        } catch {
+            try { Clear-Host } catch {}
+        }
+    }
+}
+
+function Get-DeviceCheckStoredCredential {
+    param([string]$ComputerName)
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) { return $null }
+    $credFolder = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'credentials'
+    $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
+    if (Test-Path -LiteralPath $credPath -PathType Leaf) {
+        try {
+            return Import-Clixml -Path $credPath -ErrorAction Stop
+        } catch {
+            return $null
+        }
+    }
+    return $null
+}
+
+function Save-DeviceCheckStoredCredential {
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [Parameter(Mandatory)][System.Management.Automation.PSCredential]$Credential
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName) -or $null -eq $Credential) { return }
+    $credFolder = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'credentials'
+    try {
+        $null = New-Item -ItemType Directory -Path $credFolder -Force -ErrorAction SilentlyContinue
+        $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
+        $Credential | Export-Clixml -Path $credPath
+    } catch {}
+}
+
+function Remove-DeviceCheckStoredCredential {
+    param([string]$ComputerName)
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
+    $credFolder = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'credentials'
+    $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
+    if (Test-Path -LiteralPath $credPath -PathType Leaf) {
+        try {
+            Remove-Item -LiteralPath $credPath -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    if ($null -ne $script:CredentialCache) {
+        $script:CredentialCache.Remove($ComputerName.ToLower())
+    }
+}
+
 Initialize-AvailableModels
 
 $deviceManagerClassNames = @{
@@ -347,10 +406,122 @@ function Get-MachineSummary {
     return ($parts -join ' | ')
 }
 
+function Test-RemoteSnapshotTargetActive {
+    return ($script:TargetMode -eq 'RemoteSnapshot' -and $null -ne $script:TargetSnapshot)
+}
+
+function Get-TargetStatusText {
+    if (Test-RemoteSnapshotTargetActive) {
+        $targetName = if (-not [string]::IsNullOrWhiteSpace($script:TargetComputerName)) { $script:TargetComputerName } else { Get-MachineDisplayName -MachineEvidence $script:MachineEvidence }
+        return "Target $targetName (remote snapshot)"
+    }
+
+    return 'Target local host'
+}
+
+function Test-DeviceCheckLocalTargetName {
+    param([AllowEmptyString()][string]$ComputerName)
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) {
+        return $false
+    }
+
+    $target = $ComputerName.Trim()
+    if ($target -in @('.', 'local', 'localhost', '127.0.0.1', '::1')) {
+        return $true
+    }
+
+    $localNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) {
+        [void]$localNames.Add($env:COMPUTERNAME)
+    }
+    try {
+        $hostName = [System.Net.Dns]::GetHostName()
+        if (-not [string]::IsNullOrWhiteSpace($hostName)) {
+            [void]$localNames.Add($hostName)
+        }
+    } catch {}
+
+    return $localNames.Contains($target)
+}
+
+function Convert-SnapshotMachineToMachineEvidence {
+    param([Parameter(Mandatory)]$Snapshot)
+
+    $machine = Get-NotePropertyValue -Object $Snapshot -Name 'Machine'
+    if ($null -eq $machine) {
+        throw 'Snapshot is missing Machine data.'
+    }
+
+    if ($null -eq (Get-NotePropertyValue -Object $machine -Name 'MachineId')) {
+        $name = Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $machine -Name 'ComputerSystem') -Name 'Name'
+        Add-Member -InputObject $machine -MemberType NoteProperty -Name MachineId -Value (New-DeviceCheckHash -Text ([string]$name)) -Force
+    }
+
+    if ($null -eq (Get-NotePropertyValue -Object $machine -Name 'CapturedAt')) {
+        $capturedAt = Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $Snapshot -Name 'Collector') -Name 'FinishedAt'
+        if ([string]::IsNullOrWhiteSpace([string]$capturedAt)) {
+            $capturedAt = (Get-Date).ToString('o')
+        }
+        Add-Member -InputObject $machine -MemberType NoteProperty -Name CapturedAt -Value $capturedAt -Force
+    }
+
+    return $machine
+}
+
+function Find-LatestSnapshotForComputerName {
+    param([Parameter(Mandatory)][string]$ComputerName)
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) {
+        return $null
+    }
+
+    $snapshotRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'snapshots'
+    if (-not (Test-Path -LiteralPath $snapshotRoot -PathType Container)) {
+        return $null
+    }
+
+    $target = $ComputerName.Trim()
+    $candidates = @(
+        Get-ChildItem -LiteralPath $snapshotRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "$target-*" } |
+            Sort-Object LastWriteTime -Descending
+    )
+
+    foreach ($folder in $candidates) {
+        $latestPath = Join-Path -Path $folder.FullName -ChildPath 'latest.json'
+        if (-not (Test-Path -LiteralPath $latestPath -PathType Leaf)) {
+            continue
+        }
+
+        try {
+            $snapshot = Get-Content -LiteralPath $latestPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            $snapshotName = [string](Get-NotePropertyValue -Object (Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $snapshot -Name 'Machine') -Name 'ComputerSystem') -Name 'Name')
+            if ($snapshotName.Equals($target, [System.StringComparison]::OrdinalIgnoreCase) -or $folder.Name.StartsWith("$target-", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return [PSCustomObject]@{
+                    Snapshot   = $snapshot
+                    LatestPath = $latestPath
+                    Folder     = $folder.FullName
+                }
+            }
+        } catch {
+            continue
+        }
+    }
+
+    return $null
+}
+
 $script:MachineEvidence = Get-MachineEvidence
 $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
 try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
 $script:SystemScanMessage = "Welcome to DeviceCheck Manager. Navigate the tree to inspect device properties."
+$script:TargetMode = 'Local'
+$script:TargetComputerName = Get-MachineDisplayName -MachineEvidence $script:MachineEvidence
+$script:TargetCredential = $null
+$script:CredentialCache = @{}
+$script:TargetSnapshot = $null
+$script:TargetSnapshotPath = $null
 $script:HardwareIdResolverState = 'NotLoaded'
 $script:HardwareIdResolverError = ''
 $script:HardwareIdDatabaseCache = $null
@@ -2392,6 +2563,10 @@ try {
 function Get-DeviceCategories {
     param([switch]$Quiet)
 
+    if (Test-RemoteSnapshotTargetActive) {
+        return Get-DeviceCategoriesFromSnapshot -Snapshot $script:TargetSnapshot
+    }
+
     if (-not $Quiet) {
         Write-Host "Detecting connected PnP hardware..." -ForegroundColor Cyan
     }
@@ -2443,10 +2618,181 @@ function Get-DeviceCategories {
     return $categories
 }
 
+function Get-SnapshotDevicePropertyMap {
+    param(
+        [Parameter(Mandatory)]$Snapshot,
+        [Parameter(Mandatory)][string]$InstanceId
+    )
+
+    $propertiesRoot = Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $Snapshot -Name 'Devices') -Name 'Properties'
+    $properties = Get-NotePropertyValue -Object $propertiesRoot -Name $InstanceId
+    $map = [ordered]@{}
+
+    foreach ($property in @($properties)) {
+        $keyName = [string](Get-NotePropertyValue -Object $property -Name 'KeyName')
+        if ([string]::IsNullOrWhiteSpace($keyName)) {
+            continue
+        }
+
+        $map[$keyName] = Get-NotePropertyValue -Object $property -Name 'Data'
+    }
+
+    return $map
+}
+
+function New-SnapshotDeviceEvidence {
+    param(
+        [Parameter(Mandatory)]$Snapshot,
+        [Parameter(Mandatory)]$Device
+    )
+
+    $instanceId = [string](Get-NotePropertyValue -Object $Device -Name 'InstanceId')
+    $importantData = Get-SnapshotDevicePropertyMap -Snapshot $Snapshot -InstanceId $instanceId
+
+    if (-not $importantData.Contains('DEVPKEY_Device_HardwareIds')) {
+        $hardwareIds = Get-NotePropertyValue -Object $Device -Name 'HardwareId'
+        if ($hardwareIds) { $importantData['DEVPKEY_Device_HardwareIds'] = $hardwareIds }
+    }
+    if (-not $importantData.Contains('DEVPKEY_Device_CompatibleIds')) {
+        $compatibleIds = Get-NotePropertyValue -Object $Device -Name 'CompatibleId'
+        if ($compatibleIds) { $importantData['DEVPKEY_Device_CompatibleIds'] = $compatibleIds }
+    }
+    if (-not $importantData.Contains('DEVPKEY_Device_Manufacturer')) {
+        $manufacturer = Get-NotePropertyValue -Object $Device -Name 'Manufacturer'
+        if ($manufacturer) { $importantData['DEVPKEY_Device_Manufacturer'] = $manufacturer }
+    }
+    if (-not $importantData.Contains('DEVPKEY_Device_Service')) {
+        $service = Get-NotePropertyValue -Object $Device -Name 'Service'
+        if ($service) { $importantData['DEVPKEY_Device_Service'] = $service }
+    }
+
+    $collector = Get-NotePropertyValue -Object $Snapshot -Name 'Collector'
+    $capturedAt = Get-NotePropertyValue -Object $collector -Name 'FinishedAt'
+    if ([string]::IsNullOrWhiteSpace([string]$capturedAt)) {
+        $capturedAt = Get-NotePropertyValue -Object $collector -Name 'StartedAt'
+    }
+
+    return [PSCustomObject]@{
+        SchemaVersion       = 'DeviceCheckSnapshotEvidence/0.1'
+        CapturedAt          = $capturedAt
+        Source              = 'Snapshot'
+        SnapshotPath        = $script:TargetSnapshotPath
+        Device              = $Device
+        Machine             = $script:MachineEvidence
+        ImportantProperties = [PSCustomObject]$importantData
+        PnpUtil             = Get-NotePropertyValue -Object $Snapshot -Name 'PnpUtil'
+    }
+}
+
+function Set-SnapshotEvidenceCache {
+    param([Parameter(Mandatory)]$Snapshot)
+
+    Invalidate-EvidenceCache
+    $devices = @((Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $Snapshot -Name 'Devices') -Name 'Present'))
+    foreach ($device in $devices) {
+        $instanceId = [string](Get-NotePropertyValue -Object $device -Name 'InstanceId')
+        if ([string]::IsNullOrWhiteSpace($instanceId)) {
+            continue
+        }
+
+        $script:EvidenceCacheMemory[$instanceId] = New-SnapshotDeviceEvidence -Snapshot $Snapshot -Device $device
+    }
+}
+
+function Get-DeviceCategoriesFromSnapshot {
+    param([Parameter(Mandatory)]$Snapshot)
+
+    $devicesRoot = Get-NotePropertyValue -Object $Snapshot -Name 'Devices'
+    $snapshotDevices = @((Get-NotePropertyValue -Object $devicesRoot -Name 'Present'))
+    $grouped = @{}
+
+    foreach ($dev in $snapshotDevices) {
+        $classKey = [string](Get-NotePropertyValue -Object $dev -Name 'Class')
+        $className = Get-DeviceManagerClassName -ClassName $classKey
+        if ([string]::IsNullOrWhiteSpace($className)) {
+            $className = 'Other devices'
+        }
+
+        $errorCodeText = [string](Get-NotePropertyValue -Object $dev -Name 'ConfigManagerErrorCode')
+        $errorCode = 0
+        if (-not [string]::IsNullOrWhiteSpace($errorCodeText)) {
+            try { $errorCode = [int]$errorCodeText } catch { $errorCode = 0 }
+        }
+
+        $instanceId = [string](Get-NotePropertyValue -Object $dev -Name 'InstanceId')
+        $friendlyName = [string](Get-NotePropertyValue -Object $dev -Name 'FriendlyName')
+        if ([string]::IsNullOrWhiteSpace($friendlyName)) {
+            $friendlyName = $instanceId
+        }
+
+        $devInfo = [PSCustomObject]@{
+            InstanceId             = $instanceId
+            FriendlyName           = $friendlyName
+            Class                  = $className
+            ClassKey               = $classKey
+            Status                 = Get-NotePropertyValue -Object $dev -Name 'Status'
+            ConfigManagerErrorCode = $errorCode
+            IsProblem              = ($errorCode -ne 0)
+            SearchStatus           = $null
+            SearchResults          = @()
+            SearchKind             = $null
+            SearchDetail           = $null
+            SearchTracePath        = $null
+            SearchCheckpointPath   = $null
+            EvidenceCached         = $true
+        }
+
+        if (-not $grouped.ContainsKey($className)) {
+            $grouped[$className] = [System.Collections.Generic.List[object]]::new()
+        }
+        $grouped[$className].Add($devInfo)
+    }
+
+    $categories = [System.Collections.Generic.List[object]]::new()
+    foreach ($key in ($grouped.Keys | Sort-Object)) {
+        $categories.Add([PSCustomObject]@{
+            Name       = $key
+            IsExpanded = $false
+            Devices    = @($grouped[$key] | Sort-Object FriendlyName)
+        })
+    }
+
+    Set-SnapshotEvidenceCache -Snapshot $Snapshot
+    return $categories
+}
+
 function Invoke-SystemScan {
     param([switch]$Quiet)
 
+    if (Test-RemoteSnapshotTargetActive) {
+        $targetName = if (-not [string]::IsNullOrWhiteSpace($script:TargetComputerName)) { $script:TargetComputerName } else { 'remote target' }
+        try { [Console]::CursorVisible = $true } catch {}
+        
+        if ($null -eq $script:TargetCredential -and -not [string]::IsNullOrWhiteSpace($targetName)) {
+            $script:TargetCredential = $script:CredentialCache[$targetName.ToLower()]
+            if ($null -eq $script:TargetCredential) {
+                $script:TargetCredential = Get-DeviceCheckStoredCredential -ComputerName $targetName
+            }
+        }
+        
+        $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $targetName -Credential $script:TargetCredential -PromptForCredential:($null -eq $script:TargetCredential)
+        if ($collection.Success) {
+            Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $targetName -Credential $collection.Credential
+        } else {
+            $script:SystemScanMessage = "Remote refresh failed or cancelled: $targetName | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            $script:TargetCredential = $null
+        }
+        try { Initialize-TuiHost } catch {}
+        try { [Console]::CursorVisible = $false } catch {}
+        return
+    }
+
     $scanStarted = Get-Date
+    $script:TargetMode = 'Local'
+    $script:TargetSnapshot = $null
+    $script:TargetSnapshotPath = $null
+    $script:TargetComputerName = $env:COMPUTERNAME
     $script:MachineEvidence = Get-MachineEvidence
     $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
     try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
@@ -2460,7 +2806,522 @@ function Invoke-SystemScan {
 
     $elapsedMs = [int]((Get-Date) - $scanStarted).TotalMilliseconds
     $summary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount @($script:categories).Count -ElapsedMs $elapsedMs
-    $script:SystemScanMessage = "System scan complete | $(Get-Date -Format 'HH:mm:ss')"
+    $script:SystemScanMessage = "Local system scan complete | $(Get-Date -Format 'HH:mm:ss')"
+}
+
+function Invoke-DeviceCheckSnapshotExport {
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [System.Management.Automation.PSCredential]$Credential,
+        [scriptblock]$OnProgress
+    )
+
+    $exportScript = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\Export-DeviceCheckEvidence.ps1'
+    if (-not (Test-Path -LiteralPath $exportScript -PathType Leaf)) {
+        throw "Remote evidence exporter not found: $exportScript"
+    }
+
+    $exportParams = @{
+        ComputerName = $ComputerName
+        AsJson       = $true
+    }
+    if ($null -ne $Credential) {
+        $exportParams.Credential = $Credential
+    } else {
+        $exportParams.UseCurrentCredentials = $true
+    }
+
+    if ($null -ne $OnProgress) {
+        $ps = [PowerShell]::Create()
+        $null = $ps.AddScript({
+            param($scriptPath, $params)
+            $ProgressPreference = 'SilentlyContinue'
+            & $scriptPath @params
+        }).AddArgument($exportScript).AddArgument($exportParams)
+
+        $asyncResult = $ps.BeginInvoke()
+        
+        $spinnerChars = @('|', '/', '-', '\')
+        $spinnerIdx = 0
+        
+        $progressWidth = 20
+        $pos = 0
+        $direction = 1
+        
+        try {
+            while (-not $asyncResult.IsCompleted) {
+                $bar = [System.Text.StringBuilder]::new()
+                for ($i = 0; $i -lt $progressWidth; $i++) {
+                    if ($i -ge $pos -and $i -lt ($pos + 4)) {
+                        $null = $bar.Append('#')
+                    } else {
+                        $null = $bar.Append('-')
+                    }
+                }
+                $pos += $direction
+                if ($pos -eq ($progressWidth - 4) -or $pos -eq 0) {
+                    $direction = -$direction
+                }
+                
+                $spinner = $spinnerChars[$spinnerIdx]
+                $spinnerIdx = ($spinnerIdx + 1) % $spinnerChars.Count
+                
+                $loadingText = "[$($bar.ToString())] Collecting system, devices, properties, pnputil, monitors... $spinner"
+                & $OnProgress $loadingText
+                
+                if ([Console]::KeyAvailable) {
+                    $keyInfo = $null
+                    try {
+                        $keyInfo = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+                    } catch {
+                        $keyInfo = [Console]::ReadKey($true)
+                    }
+                    if ($null -ne $keyInfo -and ($keyInfo.Key -eq 'Escape' -or $keyInfo.KeyChar -eq [char]27)) {
+                        $ps.Stop()
+                        throw "Connection cancelled by user."
+                    }
+                }
+                if (Test-WindowResized) {
+                    $script:RequestForceClear = $true
+                }
+                
+                Start-Sleep -Milliseconds 100
+            }
+            $output = $ps.EndInvoke($asyncResult)
+            if ($ps.HadErrors) {
+                $errorMsg = $ps.Streams.Error | ForEach-Object { $_.ToString() } | Out-String
+                throw $errorMsg
+            }
+        } finally {
+            $ps.Dispose()
+        }
+        $summaryJson = @($output) -join "`n"
+    } else {
+        $summaryJson = @(& $exportScript @exportParams) -join "`n"
+    }
+
+    $summary = $summaryJson | ConvertFrom-Json -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace([string]$summary.LatestPath) -or -not (Test-Path -LiteralPath $summary.LatestPath -PathType Leaf)) {
+        throw "Remote snapshot export completed but latest snapshot was not found for $ComputerName."
+    }
+
+    $snapshot = Get-Content -LiteralPath $summary.LatestPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    return [PSCustomObject]@{
+        Summary    = $summary
+        Snapshot   = $snapshot
+        LatestPath = [string]$summary.LatestPath
+    }
+}
+
+function Read-TuiLine {
+    param(
+        [Parameter(Mandatory)][scriptblock]$RenderBlock,
+        [string]$DefaultValue = '',
+        [bool]$IsPassword = $false
+    )
+
+    $inputVal = $DefaultValue
+    
+    try {
+        [Console]::CursorVisible = $true
+        while ($true) {
+            $displayInput = if ($IsPassword) { '*' * $inputVal.Length } else { $inputVal }
+            & $RenderBlock $displayInput
+            
+            $key = Read-ConsoleKey
+            if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+                Start-Sleep -Milliseconds 10
+                continue
+            }
+            
+            switch ($key.Key) {
+                'Enter' {
+                    return $inputVal
+                }
+                'Escape' {
+                    return $null
+                }
+                'Backspace' {
+                    if ($inputVal.Length -gt 0) {
+                        $inputVal = $inputVal.Substring(0, $inputVal.Length - 1)
+                    }
+                }
+                'ResizeEvent' {
+                    $script:RequestForceClear = $true
+                    continue
+                }
+                default {
+                    if ($key.KeyChar -ne [char]0 -and -not [char]::IsControl($key.KeyChar) -and -not $key.ControlPressed) {
+                        $inputVal += [string]$key.KeyChar
+                    }
+                }
+            }
+        }
+    } finally {
+        try { [Console]::CursorVisible = $false } catch {}
+    }
+}
+
+function New-DeviceCheckCredentialFromPrompt {
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [string]$DefaultUserName
+    )
+
+    $script:RequestForceClear = $true
+    if ([string]::IsNullOrWhiteSpace($DefaultUserName)) {
+        $DefaultUserName = "$ComputerName\joty79"
+    }
+
+    # Prompt for Username
+    $renderUserBlock = {
+        param($currentInput)
+        $width = Get-UiWidth
+        $frame = New-UiFrame
+        Add-UiFrameBanner -Frame $frame -Title "Credentials Required" -Subtitle "Connecting to $ComputerName" -Width $width
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Enter credentials for WinRM management on target PC.$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$ComputerName$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Username [$DefaultUserName]:$($_C.Reset)$($_C.EraseLn)"
+        $null = $frame.Append("  Username: $currentInput")
+        Write-UiFrame -Frame $frame
+    }
+    $userName = Read-TuiLine -RenderBlock $renderUserBlock -DefaultValue ''
+    if ($null -eq $userName) {
+        throw "Connection cancelled by user."
+    }
+    if ([string]::IsNullOrWhiteSpace($userName)) {
+        $userName = $DefaultUserName
+    }
+
+    # Prompt for Password
+    $script:RequestForceClear = $true
+    $renderPasswordBlock = {
+        param($currentInput)
+        $width = Get-UiWidth
+        $frame = New-UiFrame
+        Add-UiFrameBanner -Frame $frame -Title "Credentials Required" -Subtitle "Connecting to $ComputerName" -Width $width
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Enter credentials for WinRM management on target PC.$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$ComputerName$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)User   :$($_C.Reset) $($_C.White)$userName$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Password for $($userName):$($_C.Reset)$($_C.EraseLn)"
+        $null = $frame.Append("  Password: $currentInput")
+        Write-UiFrame -Frame $frame
+    }
+    $passwordStr = Read-TuiLine -RenderBlock $renderPasswordBlock -DefaultValue '' -IsPassword $true
+    if ($null -eq $passwordStr) {
+        throw "Connection cancelled by user."
+    }
+    $password = if ([string]::IsNullOrEmpty($passwordStr)) {
+        [System.Security.SecureString]::new()
+    } else {
+        ConvertTo-SecureString $passwordStr -AsPlainText -Force
+    }
+    return [System.Management.Automation.PSCredential]::new($userName, $password)
+}
+
+function Show-RemoteSnapshotCollectionScreen {
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [string]$UserName,
+        [string]$Subtitle = 'Collecting full remote snapshot over WinRM.',
+        [switch]$ShowCollecting,
+        [string]$ProgressText
+    )
+
+    $frame = New-Object System.Text.StringBuilder
+    $width = Get-UiWidth
+    Add-UiFrameBanner -Frame $frame -Title "Refresh $ComputerName" -Subtitle $Subtitle -Width $width
+
+    $null = $frame.AppendLine('')
+    $null = $frame.AppendLine("  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$ComputerName$($_C.Reset)$($_C.EraseLn)")
+    if (-not [string]::IsNullOrWhiteSpace($UserName)) {
+        $null = $frame.AppendLine("  $($_C.Dim)User   :$($_C.Reset) $($_C.White)$UserName$($_C.Reset)$($_C.EraseLn)")
+    }
+    $null = $frame.AppendLine('')
+
+    if ($ShowCollecting) {
+        $barText = if (-not [string]::IsNullOrWhiteSpace($ProgressText)) { $ProgressText } else { '[##########----------] Collecting system, devices, properties, pnputil, monitors...' }
+        $null = $frame.AppendLine("  $($_C.Info)$barText$($_C.Reset)$($_C.EraseLn)")
+        $null = $frame.AppendLine('')
+        $null = $frame.AppendLine("  $($_C.Dim)This can take a few seconds on LAN. Press ESC to cancel.$($_C.Reset)$($_C.EraseLn)")
+    }
+    
+    Write-UiFrame -Frame $frame
+}
+
+function Invoke-RemoteSnapshotCollectionScreen {
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [System.Management.Automation.PSCredential]$Credential,
+        [switch]$PromptForCredential
+    )
+
+    try {
+        $defaultUserName = "$ComputerName\joty79"
+        if ($PromptForCredential -or $null -eq $Credential) {
+            Show-RemoteSnapshotCollectionScreen -ComputerName $ComputerName -UserName $defaultUserName -Subtitle 'Enter credentials for this LAN target.'
+            $Credential = New-DeviceCheckCredentialFromPrompt -ComputerName $ComputerName -DefaultUserName $defaultUserName
+        }
+
+        $progressCallback = {
+            param($progressText)
+            Show-RemoteSnapshotCollectionScreen -ComputerName $ComputerName -UserName $Credential.UserName -ShowCollecting -ProgressText $progressText
+        }
+
+        $export = Invoke-DeviceCheckSnapshotExport -ComputerName $ComputerName -Credential $Credential -OnProgress $progressCallback
+        return [PSCustomObject]@{
+            Success    = $true
+            Credential = $Credential
+            Export     = $export
+            Error      = $null
+        }
+    } catch {
+        $message = $_.Exception.Message
+        Remove-DeviceCheckStoredCredential -ComputerName $ComputerName
+        
+        $renderErrorBlock = {
+            param()
+            Clear-TuiScreen
+            $width = Get-UiWidth
+            $frame = New-Object System.Text.StringBuilder
+            Add-UiFrameBanner -Frame $frame -Title "Cannot connect to $ComputerName" -Subtitle 'The target may be asleep, offline, blocked by firewall, or rejecting credentials.' -Width $width
+            
+            $null = $frame.AppendLine('')
+            $null = $frame.AppendLine("  $($_C.Fail)Connection failed.$($_C.Reset)$($_C.EraseLn)")
+            $null = $frame.AppendLine('')
+            
+            foreach ($line in (Wrap-PlainText -Text $message -Width ([Math]::Max(50, $width - 6)) -MaxLines 8)) {
+                $null = $frame.AppendLine("  $($_C.Warn)$line$($_C.Reset)$($_C.EraseLn)")
+            }
+            $null = $frame.AppendLine('')
+            $null = $frame.AppendLine("  $($_C.Dim)No target switch was made. Wake the PC / check WinRM, then try again.$($_C.Reset)$($_C.EraseLn)")
+            $null = $frame.AppendLine('')
+            $null = $frame.AppendLine("  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)")
+            $null = $frame.AppendLine('')
+            $null = $frame.AppendLine("$($_E)[J")
+            
+            try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
+        }
+
+        while ($true) {
+            & $renderErrorBlock
+            $key = Read-ConsoleKey
+            if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+                Start-Sleep -Milliseconds 10
+                continue
+            }
+            if ($key.Key -eq 'Enter') {
+                break
+            }
+            if ($key.Key -eq 'ResizeEvent') {
+                $script:RequestForceClear = $true
+                continue
+            }
+        }
+
+        return [PSCustomObject]@{
+            Success    = $false
+            Credential = $Credential
+            Export     = $null
+            Error      = $message
+        }
+    }
+}
+
+function Set-ActiveSnapshotTarget {
+    param(
+        [Parameter(Mandatory)]$Snapshot,
+        [Parameter(Mandatory)][string]$SnapshotPath,
+        [Parameter(Mandatory)][string]$ComputerName,
+        [System.Management.Automation.PSCredential]$Credential
+    )
+
+    foreach ($id in @($script:ActiveSearches.Keys)) {
+        Stop-DeviceLookup -InstanceId $id
+    }
+    if ($null -ne $script:EvidenceBatchQueue) { $script:EvidenceBatchQueue.Clear() }
+    if ($null -ne $script:EvidenceBatchQueuedIds) { $script:EvidenceBatchQueuedIds.Clear() }
+    $script:EvidenceBatchState = $null
+
+    $script:TargetMode = 'RemoteSnapshot'
+    $script:TargetComputerName = $ComputerName
+    $script:TargetCredential = $Credential
+    if ($null -ne $Credential -and -not [string]::IsNullOrWhiteSpace($ComputerName)) {
+        $script:CredentialCache[$ComputerName.ToLower()] = $Credential
+        Save-DeviceCheckStoredCredential -ComputerName $ComputerName -Credential $Credential
+    }
+    $script:TargetSnapshot = $Snapshot
+    $script:TargetSnapshotPath = $SnapshotPath
+    $script:MachineEvidence = Convert-SnapshotMachineToMachineEvidence -Snapshot $Snapshot
+    $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
+    try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
+
+    $script:categories = Get-DeviceCategoriesFromSnapshot -Snapshot $Snapshot
+    $script:selectedIndex = 0
+    $script:DetailScrollOffset = 0
+    $script:DetailCursorIndex = 0
+    $script:ActivePane = 'Tree'
+    $script:VisibleRowsDirty = $true
+    $script:visibleRows = Update-VisibleRows
+    $script:VisibleRowsDirty = $false
+    $script:RequestForceClear = $true
+
+    $deviceCount = 0
+    foreach ($category in $script:categories) {
+        $deviceCount += @($category.Devices).Count
+    }
+    $script:SystemScanMessage = "Connected to $ComputerName snapshot: $deviceCount devices | $(Get-Date -Format 'HH:mm:ss')"
+}
+
+function Invoke-ConnectLanTarget {
+    Reset-AllEvidenceScanConfirmation
+    try { [Console]::CursorVisible = $true } catch {}
+    $script:RequestForceClear = $true
+    
+    $renderBlock = {
+        param($currentInput)
+        $width = Get-UiWidth
+        $frame = New-UiFrame
+        Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle 'Open cached snapshots instantly; refresh only when you ask.' -Width $width
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Current target :$($_C.Reset) $($_C.Info)$(Get-TargetStatusText)$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS):$($_C.Reset)$($_C.EraseLn)"
+        $null = $frame.Append("  Target: $currentInput")
+        Write-UiFrame -Frame $frame
+    }
+    $target = Read-TuiLine -RenderBlock $renderBlock -DefaultValue ''
+    if ($null -eq $target) {
+        $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+        $script:RequestForceClear = $true
+        try { Initialize-TuiHost } catch {}
+        try { [Console]::CursorVisible = $false } catch {}
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($target)) {
+        $target = 'PALIOS'
+    }
+    $target = $target.Trim()
+
+    if (Test-DeviceCheckLocalTargetName -ComputerName $target) {
+        $frame = New-UiFrame
+        Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle 'Switching back to local host...' -Width (Get-UiWidth)
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Re-initializing local system scan...$($_C.Reset)$($_C.EraseLn)"
+        Write-UiFrame -Frame $frame
+        
+        $script:TargetMode = 'Local'
+        $script:TargetCredential = $null
+        $script:TargetSnapshot = $null
+        $script:TargetSnapshotPath = $null
+        Invoke-SystemScan -Quiet
+        $script:selectedIndex = 0
+        $script:DetailScrollOffset = 0
+        $script:DetailCursorIndex = 0
+        $script:ActivePane = 'Tree'
+        $script:VisibleRowsDirty = $true
+        $script:visibleRows = Update-VisibleRows
+        $script:VisibleRowsDirty = $false
+        $script:RequestForceClear = $true
+        try { Initialize-TuiHost } catch {}
+        try { [Console]::CursorVisible = $false } catch {}
+        return
+    }
+
+    $cached = Find-LatestSnapshotForComputerName -ComputerName $target
+    if ($null -ne $cached) {
+        $collector = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Collector'
+        $finishedAt = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
+        $devicesRoot = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Devices'
+        $deviceCount = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')
+        if ([string]::IsNullOrWhiteSpace($deviceCount)) {
+            $deviceCount = [string](@((Get-NotePropertyValue -Object $devicesRoot -Name 'Present')).Count)
+        }
+
+        $script:RequestForceClear = $true
+        $renderChoiceBlock = {
+            param($currentInput)
+            $width = Get-UiWidth
+            $frame = New-UiFrame
+            Add-UiFrameBanner -Frame $frame -Title "Cached Snapshot Found" -Subtitle "Target computer: $target" -Width $width
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$target$($_C.Reset)$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Time   :$($_C.Reset) $($_C.White)$finishedAt$($_C.Reset)$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Devices:$($_C.Reset) $($_C.White)$deviceCount$($_C.Reset)$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Choose Action:$($_C.Reset)$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Enter$($_C.Reset) = Open cached snapshot$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)R$($_C.Reset)     = Connect and refresh snapshot now$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)C$($_C.Reset)     = Cancel connection$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame
+            $null = $frame.Append("  Select option: $currentInput")
+            Write-UiFrame -Frame $frame
+        }
+        
+        $choice = Read-TuiLine -RenderBlock $renderChoiceBlock -DefaultValue ''
+        if ($null -eq $choice) {
+            $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($choice)) {
+            $cachedCredential = $script:TargetCredential
+            if ($null -eq $cachedCredential) {
+                $cachedCredential = $script:CredentialCache[$target.ToLower()]
+            }
+            if ($null -eq $cachedCredential) {
+                $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $target
+            }
+            Set-ActiveSnapshotTarget -Snapshot $cached.Snapshot -SnapshotPath $cached.LatestPath -ComputerName $target -Credential $cachedCredential
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
+        if ($choice.Trim().Equals('C', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
+        if (-not $choice.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $script:SystemScanMessage = "Connect cancelled: unknown choice '$choice'. | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
+    }
+
+    try {
+        $existingCredential = $script:TargetCredential
+        if ($null -eq $existingCredential) {
+            $existingCredential = $script:CredentialCache[$target.ToLower()]
+        }
+        if ($null -eq $existingCredential) {
+            $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $target
+        }
+        $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $target -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential)
+        if ($collection.Success) {
+            Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $target -Credential $collection.Credential
+        } else {
+            $script:SystemScanMessage = "Connect cancelled or failed: $target | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+        }
+    } catch {
+        $script:SystemScanMessage = "Connect failed: $target | $(Get-Date -Format 'HH:mm:ss')"
+        $script:RequestForceClear = $true
+    } finally {
+        try { Initialize-TuiHost } catch {}
+        try { [Console]::CursorVisible = $false } catch {}
+    }
 }
 
 # Helper to generate visible rows list
@@ -2741,6 +3602,11 @@ function Get-DetailDisplayLines {
     if ($SelectedRow.Type -eq 'Root') {
         $machine = $SelectedRow.Ref
         $lines.Add((New-SectionLine -Title 'Computer Info' -Width $Width))
+        $targetColor = if (Test-RemoteSnapshotTargetActive) { $_C.Info } else { $_C.OK }
+        $lines.Add((New-KeyValueLine -Key 'Target' -Value (Get-TargetStatusText) -Width $Width -ValueColor $targetColor))
+        if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
+            Add-WrappedPathLine -Lines $lines -Key 'Snapshot' -Path $script:TargetSnapshotPath -Width $Width
+        }
         $lines.Add((New-KeyValueLine -Key 'System Name' -Value (Get-MachineDisplayName -MachineEvidence $machine) -Width $Width))
         $lines.Add((New-KeyValueLine -Key 'OS' -Value "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -Width $Width))
         $lines.Add((New-KeyValueLine -Key 'System' -Value "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -Width $Width))
@@ -2840,8 +3706,13 @@ function Get-DetailDisplayLines {
 
             Add-InstalledDriverDetailLines -Lines $lines -Evidence $cachedEvidence -Width $Width
 
-            $cachePath = Get-DeviceEvidenceCachePath -InstanceId $SelectedRow.Ref.InstanceId
-            Add-WrappedPathLine -Lines $lines -Key 'Cache' -Path $cachePath -Width $Width
+            $snapshotPath = Get-NotePropertyValue -Object $cachedEvidence -Name 'SnapshotPath'
+            if (-not [string]::IsNullOrWhiteSpace([string]$snapshotPath)) {
+                Add-WrappedPathLine -Lines $lines -Key 'Snapshot' -Path $snapshotPath -Width $Width
+            } else {
+                $cachePath = Get-DeviceEvidenceCachePath -InstanceId $SelectedRow.Ref.InstanceId
+                Add-WrappedPathLine -Lines $lines -Key 'Cache' -Path $cachePath -Width $Width
+            }
         } elseif ($null -eq $activeSearch) {
             $lines.Add((New-KeyValueLine -Key 'Evidence' -Value 'Not scanned yet. Press E for local evidence or S for search.' -Width $Width -ValueColor $_C.Warn))
         }
@@ -2977,7 +3848,7 @@ function Invoke-ModelSelector {
             Begin-SyncRender
             try {
                 if ($modelSelectorFirstRender) {
-                    Clear-Host
+                    Clear-TuiScreen
                     $modelSelectorFirstRender = $false
                 } else {
                     [Console]::Write("$($_E)[H")
@@ -3094,7 +3965,7 @@ function Render-FrameLegacy {
     $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:visibleRows.Count - 1)
 
     Begin-SyncRender
-    try { Clear-Host } catch {}
+    Clear-TuiScreen
 
     # Header
     Write-UiBanner -Title "DeviceCheck Manager" -Subtitle "R rescans the present PnP device tree. E scans evidence; root/all requires E twice. S adds web/AI."
@@ -3424,12 +4295,12 @@ function Add-FrameBanner {
     }
 
     Add-FrameLine -Frame $Frame
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)"
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)$($_C.EraseLn)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
-        Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+        Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
     }
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)$($_C.EraseLn)"
     Add-FrameLine -Frame $Frame
 }
 
@@ -3446,7 +4317,7 @@ function Add-FrameSection {
     $line = [string]::new([char]0x2500, $remaining)
 
     Add-FrameLine -Frame $Frame
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)$($_C.EraseLn)"
 }
 
 function Add-FrameShortcutSegments {
@@ -3517,7 +4388,7 @@ function Render-Frame {
     $frame = [System.Text.StringBuilder]::new()
     $null = $frame.Append("$($_E)[?2026h")
     if ($shouldClear) {
-        $null = $frame.Append("$($_E)[2J$($_E)[H")
+        $null = $frame.Append("$($_E)[H$($_E)[2J$($_E)[3J")
     } else {
         $null = $frame.Append("$($_E)[H")
     }
@@ -3528,6 +4399,10 @@ function Render-Frame {
     $perfStatus = Get-TuiPerfStatusText
     if (-not [string]::IsNullOrWhiteSpace($perfStatus)) {
         $compactStatus = "$compactStatus | $perfStatus"
+    }
+    $targetStatus = Get-TargetStatusText
+    if (-not [string]::IsNullOrWhiteSpace($targetStatus)) {
+        $compactStatus = "$targetStatus | $compactStatus"
     }
     Add-FrameLine -Frame $frame -Text "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($batchStatus)) {
@@ -3670,7 +4545,9 @@ function Render-Frame {
         New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'R' -Color $_C.Info
-        New-UiShortcutSegment -Text ' = system scan   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text ' = scan/refresh   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'Ctrl+L' -Color $_C.Gold
+        New-UiShortcutSegment -Text ' = connect   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'E' -Color $_C.OK
         New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'M' -Color $_C.White
@@ -3741,6 +4618,11 @@ function Invoke-SelectedEvidenceScan {
         [int]$Index
     )
 
+    if (Test-RemoteSnapshotTargetActive) {
+        $script:SystemScanMessage = "Remote snapshot already includes collected evidence. Press R to refresh $($script:TargetComputerName). | $(Get-Date -Format 'HH:mm:ss')"
+        return
+    }
+
     $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
     if ($null -eq $currentRow) { return }
 
@@ -3782,6 +4664,11 @@ function Invoke-SelectedWebScan {
     )
 
     Reset-AllEvidenceScanConfirmation
+
+    if (Test-RemoteSnapshotTargetActive) {
+        $script:SystemScanMessage = "Web/AI lookups are local-target only in this first remote slice. Press R to refresh $($script:TargetComputerName). | $(Get-Date -Format 'HH:mm:ss')"
+        return
+    }
 
     $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
     if ($null -eq $currentRow) { return }
@@ -4945,6 +5832,7 @@ function Read-ConsoleKey {
     $keyName = $null
     $keyChar = [char]0
     $virtualKeyCode = $null
+    $controlPressed = $false
 
     try {
         while (-not [Console]::KeyAvailable) {
@@ -4953,6 +5841,7 @@ function Read-ConsoleKey {
                     Key            = 'ResizeEvent'
                     KeyChar        = [char]0
                     VirtualKeyCode = 0
+                    ControlPressed = $false
                 }
             }
 
@@ -5003,6 +5892,13 @@ function Read-ConsoleKey {
             elseif ($keyInfo.PSObject.Properties['Character']) {
                 $keyChar = [char]$keyInfo.Character
             }
+
+            if ($keyInfo.PSObject.Properties['Modifiers']) {
+                $controlPressed = (([string]$keyInfo.Modifiers) -match 'Control')
+            }
+            elseif ($keyInfo.PSObject.Properties['ControlKeyState']) {
+                $controlPressed = (([string]$keyInfo.ControlKeyState) -match 'CtrlPressed')
+            }
         }
 
         if ($keyChar -ne [char]0 -and -not [char]::IsControl($keyChar) -and [Console]::KeyAvailable) {
@@ -5012,6 +5908,7 @@ function Read-ConsoleKey {
                 Key            = 'IgnoredInputBurst'
                 KeyChar        = [char]0
                 VirtualKeyCode = 0
+                ControlPressed = $false
             }
         }
     }
@@ -5023,6 +5920,7 @@ function Read-ConsoleKey {
         Key            = $keyName
         KeyChar        = $keyChar
         VirtualKeyCode = $virtualKeyCode
+        ControlPressed = $controlPressed
     }
 }
 
@@ -5104,6 +6002,11 @@ try {
         $swProcess = [System.Diagnostics.Stopwatch]::StartNew()
         if ($key.Key -ne 'E' -and $key.KeyChar -ne 'e') {
             Reset-AllEvidenceScanConfirmation
+        }
+        if ($key.KeyChar -eq [char]12 -or ($key.ControlPressed -and $key.Key -eq 'L')) {
+            Invoke-ConnectLanTarget
+            $selectedIndex = $script:selectedIndex
+            continue
         }
         switch ($key.Key) {
             'UpArrow' {

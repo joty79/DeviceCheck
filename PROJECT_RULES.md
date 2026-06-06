@@ -566,3 +566,97 @@ Root cause: The local `PS_UI_Blueprint.psm1` `Get-UiWidth` helper had been chang
 Guardrail/rule: Shared/simple menu width caps must not be used by complex apps that decide layout from real terminal width. `Get-UiWidth` for DeviceCheck must return the real window width minus safety margin, with a minimum floor such as `Max(60, WindowSize.Width - 2)`, not a max cap.
 Files affected: `PS_UI_Blueprint.psm1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and `PS_UI_Blueprint.psm1`; static check confirmed `Get-UiWidth` uses `Max(60, WindowSize.Width - 2)` and `DeviceCheck.ps1` dual-pane threshold remains `uiWidth >= 136`; `git diff --check`.
+
+Date: 2026-06-06
+Problem: DeviceCheck needed to know whether LAN collection from another Windows PC is realistic before designing a remote mode.
+Root cause: The TUI was built as a local interactive tool, but the underlying data sources might still be collectible through WinRM/PowerShell Remoting if the target permits it.
+Guardrail/rule: Treat remote mode as a collector/viewer split, not as a remote interactive TUI. A Windows PowerShell 5.1 WinRM endpoint on `PALIOS` successfully returned `Get-PnpDevice`, `Get-PnpDeviceProperty`, `pnputil /enum-devices /connected`, and `HKLM:\SYSTEM\CurrentControlSet\Enum\DISPLAY` registry data. Design future remote support around running collection commands on the target with explicit credentials, then rendering/importing evidence locally.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: User-run LAN smoke from main PC to `PALIOS` with `Invoke-Command -ComputerName PALIOS -Credential PALIOS\joty79`; confirmed admin group membership in the remote token, PnP device list, device property keys/data, `pnputil` connected-device output, and DISPLAY registry keys (`AOCB437`, `Default_Monitor`, `SNY2400`, `SNY2C02`).
+
+Date: 2026-06-06
+Problem: Remote LAN support needed an operator workflow decision, not only a backend collector decision.
+Root cause: The expected usage is a same-LAN, same-workgroup home/workbench flow where the default target is always the local host, but the user may hotkey into another PC by entering its name/IP and credentials.
+Guardrail/rule: Add remote target selection as a TUI workflow while keeping local host as the default. Use a hotkey such as `L`/`C` for `Connect to PC`, prompt for target computer name/IP, then username and password through `Get-Credential`. Auto-add only the exact target name/IP to client `TrustedHosts` after a visible admin/elevation check; never use wildcard `*`, never silently broaden trust, and never store passwords. Cache only non-secret recent targets/session state for the current run. Remote collection remains LAN/workgroup-only and should run collector commands on the target, while the TUI renders the selected target locally.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Design decision recorded from user workflow requirement; no code changed yet.
+
+Date: 2026-06-06
+Problem: DeviceCheck's remote feature needs to serve real computer-shop workflow, not just prove that WinRM works.
+Root cause: The user works on many customer/workbench PCs and needs two staged capabilities: smooth same-LAN remote inspection first, then repeatable snapshots/database records for each PC so device identity answers can be improved and tested even when the PC is no longer connected.
+Guardrail/rule: Prioritize remote connection and live remote collection first. Do not add broad snapshot/database UI before remote collection is reliable. Design the remote collector output so it can later become a durable per-PC snapshot corpus: include stable machine identity, target name/IP, collection timestamp, OS/system/board/BIOS facts, full present PnP tree, selected device properties, driver/INF evidence, monitor EDID/WMI/INF evidence, and provenance/tool version fields. Snapshots must be useful for offline regression tests and answer-quality improvement, not only for viewing history.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Product/workflow goal recorded from user requirement; no code changed yet.
+
+Date: 2026-06-06
+Problem: The user needed a repeatable PALIOS remote test command instead of retyping long WinRM smoke scripts.
+Root cause: Manual `Invoke-Command` snippets proved the remote path but were too tedious for repeated shop/lab validation.
+Guardrail/rule: Keep remote collection in `internal\Export-DeviceCheckEvidence.ps1` and use thin target-specific wrappers such as `Connect-PaliosDeviceCheck.ps1` only for convenience. Full mode collects per-device properties and may take noticeably longer; `-Quick` is the preferred first connectivity smoke. Store snapshots under `%LOCALAPPDATA%\DeviceCheck\snapshots\` with `latest.json` per machine folder. Do not store credentials or wildcard `TrustedHosts` entries.
+Files affected: `internal\Export-DeviceCheckEvidence.ps1`, `Connect-PaliosDeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for new scripts; local `localhost -Quick -NoSave -AsJson` smoke returned 195 devices and 3 monitor registry entries in ~1.6s; local full `localhost -NoSave -AsJson` smoke returned 195 devices and 3 monitor registry entries in ~17.7s; `git diff --check`.
+
+Date: 2026-06-06
+Problem: The PALIOS shortcut needed real remote validation, not just local exporter smokes.
+Root cause: Remote WinRM reliability and snapshot size/performance can only be judged from actual same-LAN target runs.
+Guardrail/rule: Treat `PALIOS` as the first confirmed remote collector baseline: full snapshots through its Windows PowerShell 5.1 WinRM endpoint should collect about 127 present devices, 9 monitor registry entries, `pnputil` connected-device output, and run in about 10 seconds. If later PALIOS results deviate strongly, compare against `%LOCALAPPDATA%\DeviceCheck\snapshots\PALIOS-2f789028b9d45d78eaa21e7c\latest.json` before changing collector logic.
+Files affected: `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: User ran `.\Connect-PaliosDeviceCheck.ps1` twice successfully; local validation parsed `C:\Users\joty79\AppData\Local\DeviceCheck\snapshots\PALIOS-2f789028b9d45d78eaa21e7c\latest.json` and confirmed `ComputerName=PALIOS`, `UserName=PALIOS\joty79`, `PowerShellVersion=5.1.19041.7181`, `IsAdmin=True`, `DeviceCount=127`, `MonitorRegistryKeys=9`, and `PnpUtil.Output` present.
+
+Date: 2026-06-06
+Problem: Remote collection needed to become reachable from the normal TUI flow without making every render or device action depend on live WinRM.
+Root cause: The desired shop workflow is to start DeviceCheck locally, press `Ctrl+L`, type a same-LAN PC, authenticate once, and return to the same main screen showing that PC's devices.
+Guardrail/rule: Implement remote TUI support as snapshot-backed target switching. `Ctrl+L` may collect a remote snapshot and rebuild the main tree from JSON; the default target remains local host. `R` refreshes the active remote snapshot. `E`, `S`, and `A` must stay guarded/disabled on remote snapshot targets until their remote equivalents are explicitly implemented, so they never accidentally run local evidence/search against the host while the UI is showing a remote PC. Do not add workgroup discovery until manual target entry is proven across home/work networks.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; `git diff --check`; local exporter smoke `localhost -Quick -NoSave -AsJson` returned `NEOS` with 195 devices; `internal\Test-HardwareIdResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-AlsaUcmResolver.ps1 -AsJson`; `internal\Test-HardwareIdentityHarness.ps1 -AsJson`. Manual TUI `Ctrl+L` PALIOS smoke is still required.
+
+Date: 2026-06-06
+Problem: The first interactive `Ctrl+L` remote target switch needed confirmation before designing saved-target/login behavior.
+Root cause: The TUI can only become the main shop workflow if target switching returns smoothly to the normal main screen with the remote PC's devices shown.
+Guardrail/rule: Treat `Ctrl+L -> PALIOS -> credential prompt -> snapshot-backed main tree` as a confirmed working baseline. The next design layer should focus on target/session organization: recent/saved PCs, optional credential reuse through Windows-safe mechanisms, on-demand refresh, and a clear distinction between cached snapshot view and live refresh. Keep the first screen local by default.
+Files affected: `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: User manually confirmed the TUI `Ctrl+L` flow worked against `PALIOS`.
+
+Date: 2026-06-06
+Problem: The first `Ctrl+L` UI was ugly and every remote switch forced a slow fresh full snapshot even when a good local snapshot already existed.
+Root cause: `Ctrl+L` was implemented as collect-first rather than target-switch-first, so reconnecting to `PALIOS` repeated the full all-device property collection path each time.
+Guardrail/rule: `Ctrl+L` should default to opening the cached `latest.json` snapshot instantly when it exists. Fresh WinRM collection is an explicit refresh choice from the connect prompt or `R` from the active remote target. Treat the full remote snapshot as the all-device collection path; do not also run separate `E`-style collection on remote login unless selected-device refresh is intentionally implemented later.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; `git diff --check`; local exporter smoke `localhost -Quick -NoSave -AsJson` returned `NEOS` with 195 devices.
+
+Date: 2026-06-06
+Problem: The first remote login/refresh screen looked unprofessional, duplicated credential UI, and failures from sleeping/offline targets leaked into the main TUI.
+Root cause: Get-Credential writes its own host prompt outside DeviceCheck's layout, and refresh/connect failures were being reported through the main status line after the TUI redrew.
+Guardrail/rule: Keep remote connect/refresh as a dedicated modal screen until success, cancel, or acknowledged failure. Prompt for username and password inline with `Read-Host -AsSecureString`, create `PSCredential` manually, and avoid the separate PowerShell credential request UI. When a target is asleep/offline/rejecting credentials, show the failure on the connect/refresh screen and wait for Enter before returning. For now, the refresh screen may show an indeterminate/full-snapshot status line; true per-stage progress requires making the exporter report staged progress or run asynchronously.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; `git diff --check`; local exporter smoke `localhost -Quick -NoSave -AsJson` returned `NEOS` with 195 devices.
+
+Date: 2026-06-06
+Problem: TUI borders wrapped/stretched and remnants remained on very small window widths (under 60 columns) during LAN target switching/login prompts, and error screens blocked window resizing with standard `Read-Host`.
+Root cause: `Restore-TuiHost` was called inside connection workflows, re-enabling terminal auto-wrap (`?7h`). This forced fixed-size elements (minimum 60 columns) to wrap onto multiple lines in narrow windows, breaking layout alignments. Additionally, standard `Read-Host` blocks console input loop, ignoring resize events.
+Guardrail/rule: Do not call `Restore-TuiHost` or enable auto-wrap during connection or prompt screens. Let the viewport clip instead of wrap by keeping wrap off (`?7l`). Replace any blocking `Read-Host` error dialogs with custom responsive `Read-ConsoleKey` loops that capture and redraw on `ResizeEvent`.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Validated syntax with `Get-Command -Syntax -File DeviceCheck.ps1` successfully.
+
+Date: 2026-06-06
+Problem: Leftover background elements (e.g. details pane borders, status lines) from the main menu remained visible during the LAN target connection/login modal, until a manual window resize was triggered.
+Root cause: When entering the connection wizard or transitioning between wizard stages, the first frame is rendered with `$script:RequestForceClear = $false`, meaning the shorter modal frame does not clear the wider/taller main menu contents underneath it. Window resizing sets `$script:RequestForceClear = $true` which triggers the screen wipe.
+Guardrail/rule: Always set `$script:RequestForceClear = $true` at the start of `Invoke-ConnectLanTarget` and at the start/transitions of `New-DeviceCheckCredentialFromPrompt` to force a complete screen wipe on modal entry and stage transitions.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Checked syntax with `Get-Command -Syntax -File DeviceCheck.ps1` successfully.
+
+Date: 2026-06-06
+Problem: If a stale, expired, or mistyped credential is saved to disk/cache for a LAN target, subsequent target switches or refreshes (via `R`) fail immediately with `Access is denied` without offering a way to re-enter credentials.
+Root cause: The remote collection logic automatically resolved credentials from disk/memory cache and bypassed prompting when a cached credential was found. The failures did not clean up the invalid cache.
+Guardrail/rule: Implement `Remove-DeviceCheckStoredCredential` to delete stale credentials from disk (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) and memory cache. Call this on any WinRM connection failure in `Invoke-RemoteSnapshotCollectionScreen` and clear `$script:TargetCredential` on refresh failures in `Invoke-SystemScan`.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Validated syntax with `Get-Command -Syntax -File DeviceCheck.ps1` successfully.
+
+Date: 2026-06-07
+Problem: The progress bar shown while collecting a remote WinRM snapshot was static (`[##########----------]`), making the connection screen feel frozen and offering no cancellation path.
+Root cause: The evidence collection was executed synchronously on the main thread, blocking the console event loop and preventing any TUI updates or key reads until completion.
+Guardrail/rule: Run the remote snapshot collection asynchronously using `[PowerShell]::Create()` and `BeginInvoke()`. In the main thread loop, poll for completion, read keys, and animate the progress bar (marquee plus spinner) every 100ms. Handle window `ResizeEvent` dynamically and allow user cancellation at any time by pressing `ESC` (which calls `$ps.Stop()`).
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Checked syntax with `Get-Command -Syntax -File DeviceCheck.ps1` successfully.
+
+
+

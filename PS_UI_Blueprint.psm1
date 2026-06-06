@@ -198,12 +198,12 @@ function Add-UiFrameBanner {
     }
 
     Add-UiFrameLine -Frame $Frame
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)"
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)$($_C.EraseLn)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
-        Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
+        Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
     }
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)$($_C.EraseLn)"
     Add-UiFrameLine -Frame $Frame
 }
 
@@ -220,7 +220,7 @@ function Add-UiFrameSection {
     $line = [string]::new([char]0x2500, $remaining)
 
     Add-UiFrameLine -Frame $Frame
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)$($_C.EraseLn)"
 }
 
 function Add-UiFrameShortcutSegments {
