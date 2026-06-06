@@ -490,7 +490,7 @@ function Resolve-DisplayHardwareId {
         [object]$Cache
     )
 
-    $displayMatch = [regex]::Match($NormalizedId, '^DISPLAY\\(?<compact>[A-Z0-9]{7})(?:\\|$)')
+    $displayMatch = [regex]::Match($NormalizedId, '^(?:DISPLAY|MONITOR)\\(?<compact>[A-Z0-9]{7})(?:\\|$)')
     if (-not $displayMatch.Success) {
         return $null
     }

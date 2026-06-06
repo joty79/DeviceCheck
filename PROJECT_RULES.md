@@ -489,3 +489,10 @@ Root cause: `DISPLAY\GSM5BD3` is a compact PnP/EDID identity string, while the r
 Guardrail/rule: Treat raw EDID as a separate local evidence layer from `pnp.ids`. Show EDID rows only with clear source/provenance, validate header/checksum, and never promote EDID product code alone into an exact retail model. Treat monitor serial text/numeric serial as privacy-sensitive when creating docs, screenshots, or shared fixtures.
 Files affected: `internal\MonitorEdidResolver.psm1`, `internal\Test-MonitorEdidResolver.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `docs\DEEP_RESEARCH_PROMPT_MONITOR_EDID_IDENTITY.md`, `docs\ANTIGRAVITY_GEMINI_JOB_MONITOR_EDID_LAYER.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for touched scripts/modules; `internal\Test-MonitorEdidResolver.ps1 -AsJson`.
+
+Date: 2026-06-06
+Problem: Monitor details needed richer local evidence beyond registry EDID, but installed monitor INF and WMI strings can look like exact retail models even when they are only local driver/display descriptors.
+Root cause: Windows exposes monitor identity through several partially overlapping layers: registry EDID, `root\wmi` monitor classes, active installed INF sections, and generic `monitor.inf`. These layers can disagree or be generic/overridden.
+Guardrail/rule: Treat WMI and monitor INF as separate local evidence layers. Label INF strings as `INF Name`, not authenticated retail model proof. Keep deterministic EDID tests separate from optional live hardware tests; live WMI/INF checks must require `-IncludeLiveMonitor` so CI/laptop/VM runs do not fail because a monitor class is absent or driver-specific.
+Files affected: `DeviceCheck.ps1`, `internal\MonitorEdidResolver.psm1`, `internal\Test-MonitorEdidResolver.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor -AsJson`; `git diff --check`.

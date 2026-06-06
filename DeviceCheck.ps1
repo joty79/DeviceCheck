@@ -365,6 +365,8 @@ $script:AlsaUcmUsbAudioProfileCache = $null
 $script:MonitorEdidResolverState = 'NotLoaded'
 $script:MonitorEdidResolverError = ''
 $script:MonitorEdidIdentityCache = @{}
+$script:MonitorWmiEvidenceCache = @{}
+$script:MonitorInfEvidenceCache = @{}
 
 function Test-HardwareIdCacheReady {
     param(
@@ -502,6 +504,8 @@ function Initialize-MonitorEdidResolver {
     $script:MonitorEdidResolverState = 'Unavailable'
     $script:MonitorEdidResolverError = ''
     $script:MonitorEdidIdentityCache = @{}
+    $script:MonitorWmiEvidenceCache = @{}
+    $script:MonitorInfEvidenceCache = @{}
 
     try {
         $modulePath = Join-Path -Path $PSScriptRoot -ChildPath 'internal\MonitorEdidResolver.psm1'
@@ -952,6 +956,96 @@ function Get-MonitorEdidIdentityForResolution {
     return $null
 }
 
+function Get-MonitorWmiIdentityForResolution {
+    param(
+        [object]$Resolution,
+        [object]$Evidence
+    )
+
+    if ($script:MonitorEdidResolverState -ne 'Ready') {
+        return $null
+    }
+
+    $candidateSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    function Add-MonitorWmiCandidate {
+        param([AllowEmptyString()][string]$Value)
+        if (-not [string]::IsNullOrWhiteSpace($Value) -and $candidateSet.Add($Value)) {
+            $candidates.Add($Value)
+        }
+    }
+
+    $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
+    Add-MonitorWmiCandidate -Value ([string](Get-NotePropertyValue -Object $device -Name 'InstanceId'))
+    Add-MonitorWmiCandidate -Value ([string](Get-NotePropertyValue -Object $Resolution -Name 'Input'))
+    Add-MonitorWmiCandidate -Value ([string](Get-NotePropertyValue -Object $Resolution -Name 'Normalized'))
+
+    $fields = Get-NotePropertyValue -Object $Resolution -Name 'Fields'
+    $vendorId = [string](Get-NotePropertyValue -Object $fields -Name 'VendorId')
+    $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
+    if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) {
+        Add-MonitorWmiCandidate -Value "DISPLAY\$vendorId$productId"
+    }
+
+    foreach ($candidate in @($candidates)) {
+        if ($script:MonitorWmiEvidenceCache.ContainsKey($candidate)) {
+            $cached = $script:MonitorWmiEvidenceCache[$candidate]
+            if ($null -ne $cached) {
+                return $cached
+            }
+            continue
+        }
+
+        try {
+            $wmiData = Get-MonitorWmiEvidence -InstanceId $candidate
+            $script:MonitorWmiEvidenceCache[$candidate] = $wmiData
+            if ($null -ne $wmiData) {
+                return $wmiData
+            }
+        }
+        catch {
+            $script:MonitorWmiEvidenceCache[$candidate] = $null
+        }
+    }
+
+    return $null
+}
+
+function Get-MonitorInfIdentityForResolution {
+    param(
+        [object]$Resolution,
+        [object]$Evidence
+    )
+
+    if ($script:MonitorEdidResolverState -ne 'Ready') {
+        return $null
+    }
+
+    $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
+    $instanceId = [string](Get-NotePropertyValue -Object $device -Name 'InstanceId')
+    if ([string]::IsNullOrWhiteSpace($instanceId)) {
+        return $null
+    }
+
+    if ($script:MonitorInfEvidenceCache.ContainsKey($instanceId)) {
+        return $script:MonitorInfEvidenceCache[$instanceId]
+    }
+
+    $driver = Get-InstalledDriverEvidenceFields -Evidence $Evidence
+    $hardwareIds = @(Get-CandidateEvidenceHardwareIds -Evidence $Evidence -InstanceId $instanceId)
+
+    try {
+        $infData = Get-MonitorInfEvidence -InfName $driver.InfName -SectionName $driver.InfSection -HardwareIds $hardwareIds
+        $script:MonitorInfEvidenceCache[$instanceId] = $infData
+        return $infData
+    }
+    catch {
+        $script:MonitorInfEvidenceCache[$instanceId] = $null
+        return $null
+    }
+}
+
 function Add-MonitorEdidRows {
     param(
         [System.Collections.Generic.List[object]]$Rows,
@@ -1029,6 +1123,104 @@ function Add-MonitorEdidRows {
     }
 
     return $true
+}
+
+function Get-VideoOutputTechnologyName {
+    param(
+        [int]$Technology
+    )
+    switch ($Technology) {
+        -2 { "Other" }
+        -1 { "Uninitialized" }
+        0  { "HD15 (VGA)" }
+        1  { "S-Video" }
+        2  { "Composite Video" }
+        3  { "Component Video" }
+        4  { "DVI" }
+        5  { "HDMI" }
+        6  { "LVDS" }
+        8  { "D-JPN" }
+        9  { "SDI" }
+        10 { "DisplayPort External" }
+        11 { "DisplayPort Embedded" }
+        12 { "UDI External" }
+        13 { "UDI Embedded" }
+        14 { "SDTV Dongle" }
+        15 { "Miracast" }
+        20 { "Indirect Wired" }
+        21 { "Indirect Virtual" }
+        -2147483648 { "Internal" }
+        2147483648  { "Internal" }
+        Default { "Unknown ($Technology)" }
+    }
+}
+
+function Add-MonitorWmiAndInfRows {
+    param(
+        [System.Collections.Generic.List[object]]$Rows,
+        [object]$Resolution,
+        [object]$Evidence
+    )
+
+    $hasInf = $false
+    $infData = Get-MonitorInfIdentityForResolution -Resolution $Resolution -Evidence $Evidence
+    if ($null -ne $infData) {
+        $hasInf = $true
+        if (-not $infData.IsGeneric) {
+            $Rows.Add((New-HardwareIdentityRow -Key 'INF Name' -Value $infData.ModelName -Color 'Info'))
+            $Rows.Add((New-HardwareIdentityRow -Key 'INF Source' -Value $infData.Source -Color 'White'))
+        }
+        else {
+            $Rows.Add((New-HardwareIdentityRow -Key 'INF Name' -Value "$($infData.ModelName) (Generic)" -Color 'Dim'))
+            $Rows.Add((New-HardwareIdentityRow -Key 'INF Source' -Value $infData.Source -Color 'Dim'))
+        }
+    }
+
+    $hasWmi = $false
+    $wmi = Get-MonitorWmiIdentityForResolution -Resolution $Resolution -Evidence $Evidence
+    if ($null -ne $wmi) {
+        $hasWmi = $true
+        $friendlyName = [string](Get-NotePropertyValue -Object $wmi -Name 'UserFriendlyName')
+        $manufacturerId = [string](Get-NotePropertyValue -Object $wmi -Name 'ManufacturerId')
+        $productCode = [string](Get-NotePropertyValue -Object $wmi -Name 'ProductCode')
+        $widthCm = Get-NotePropertyValue -Object $wmi -Name 'MaxHorizontalCm'
+        $heightCm = Get-NotePropertyValue -Object $wmi -Name 'MaxVerticalCm'
+        $videoOutputTech = Get-NotePropertyValue -Object $wmi -Name 'VideoOutputTechnology'
+        $timing = Get-NotePropertyValue -Object $wmi -Name 'PreferredTiming'
+
+        if (-not [string]::IsNullOrWhiteSpace($friendlyName)) {
+            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Name' -Value $friendlyName -Color 'OK'))
+        }
+
+        $wmiIdParts = @(
+            $manufacturerId
+            $productCode
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if (@($wmiIdParts).Count -gt 0) {
+            $Rows.Add((New-HardwareIdentityRow -Key 'WMI ID' -Value ($wmiIdParts -join ' ') -Color 'Info'))
+        }
+
+        if ($null -ne $videoOutputTech) {
+            $portName = Get-VideoOutputTechnologyName -Technology $videoOutputTech
+            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Port' -Value $portName -Color 'White'))
+        }
+
+        if ($null -ne $widthCm -and $null -ne $heightCm -and ($widthCm -gt 0 -or $heightCm -gt 0)) {
+            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Size' -Value ("{0} x {1} cm" -f $widthCm, $heightCm) -Color 'White'))
+        }
+
+        if ($null -ne $timing -and $timing.Width -gt 0 -and $timing.Height -gt 0) {
+            $timingText = "{0}x{1}" -f $timing.Width, $timing.Height
+            if ($null -ne $timing.RefreshRateHz) {
+                $timingText = "$timingText @ $($timing.RefreshRateHz)Hz"
+            }
+            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Timing' -Value $timingText -Color 'White'))
+        }
+
+        $Rows.Add((New-HardwareIdentityRow -Key 'WMI Source' -Value $wmi.Source -Color 'White'))
+    }
+
+    return ($hasInf -or $hasWmi)
 }
 
 function Get-HardwareResolutionDetailRows {
@@ -1157,6 +1349,7 @@ function Get-HardwareResolutionDetailRows {
             $productId = [string](Get-NotePropertyValue -Object $fields -Name 'ProductId')
             $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
             $hasEdid = Add-MonitorEdidRows -Rows $rows -Resolution $Resolution -Evidence $Evidence
+            $hasWmiOrInf = Add-MonitorWmiAndInfRows -Rows $rows -Resolution $Resolution -Evidence $Evidence
             $displayVendor = if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
                 Get-FormattedHardwareVendorName -Name $vendorName
             } else {
@@ -1168,10 +1361,10 @@ function Get-HardwareResolutionDetailRows {
             if (-not [string]::IsNullOrWhiteSpace($productId)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'EDID Product' -Value $productId -Color 'Info'))
             }
-            $coverageText = if ($hasEdid) {
-                'EDID read from local Windows registry; exact retail model may still need monitor INF/OEM evidence'
+            $coverageText = if ($hasEdid -or $hasWmiOrInf) {
+                'EDID/WMI/INF local monitor evidence parsed; exact retail model may still need offline/OEM evidence'
             } else {
-                'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/OEM evidence'
+                'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/WMI/OEM evidence'
             }
             $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value $coverageText -Color 'Dim'))
             $searchParts = @(

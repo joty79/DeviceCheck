@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [switch] $IncludeLiveMonitor,
     [switch] $AsJson
 )
 
@@ -96,6 +97,37 @@ Add-EdidAssertion -Assertions $assertions -Name 'Invalid EDID header is rejected
     -Passed (-not $invalid.IsValid -and -not $invalid.HeaderValid) `
     -Expected 'invalid header' `
     -Actual ("IsValid={0}; Header={1}" -f $invalid.IsValid, $invalid.HeaderValid)
+
+$presentMonitor = if ($IncludeLiveMonitor) { Get-PnpDevice -Class Monitor -PresentOnly | Select-Object -First 1 } else { $null }
+if ($IncludeLiveMonitor -and $null -ne $presentMonitor) {
+    $wmiEvidence = Get-MonitorWmiEvidence -InstanceId $presentMonitor.InstanceId
+    Add-EdidAssertion -Assertions $assertions -Name 'WMI Monitor Evidence can be queried for present monitor' `
+        -Passed ($null -ne $wmiEvidence -and -not [string]::IsNullOrWhiteSpace($wmiEvidence.ManufacturerId)) `
+        -Expected 'valid WMI evidence' `
+        -Actual ("IsNull={0}; Mfg={1}; Name={2}" -f ($null -eq $wmiEvidence), $wmiEvidence.ManufacturerId, $wmiEvidence.UserFriendlyName)
+
+    # Try to find a custom driver section for the monitor
+    $infName = ''
+    $infSection = ''
+    try {
+        $driverProps = Get-CimInstance -ClassName Win32_PnPSignedDriver | Where-Object { $_.DeviceID -eq $presentMonitor.InstanceId } | Select-Object -First 1
+        if ($driverProps) {
+            $infName = $driverProps.InfName
+        }
+        $sectionProp = Get-PnpDeviceProperty -InstanceId $presentMonitor.InstanceId -KeyName 'DEVPKEY_Device_DriverInfSection' -ErrorAction SilentlyContinue
+        if ($sectionProp) {
+            $infSection = $sectionProp.Data
+        }
+    } catch {}
+
+    if ($infName) {
+        $infEvidence = Get-MonitorInfEvidence -InfName $infName -SectionName $infSection -HardwareIds $presentMonitor.HardwareID
+        Add-EdidAssertion -Assertions $assertions -Name 'INF Monitor Evidence can be parsed/searched' `
+            -Passed ($null -ne $infEvidence -and -not [string]::IsNullOrWhiteSpace($infEvidence.ModelName)) `
+            -Expected 'valid INF evidence' `
+            -Actual ("IsNull={0}; Model={1}; Source={2}" -f ($null -eq $infEvidence), $infEvidence.ModelName, $infEvidence.Source)
+    }
+}
 
 $failed = @($assertions | Where-Object { -not $_.Passed })
 $summary = [pscustomobject]@{

@@ -6,85 +6,85 @@ Evaluating physical monitor hardware configurations locally on the Windows opera
 
 ### **Registry Evidence Paths and Configuration Hives**
 
-The primary repository of physical monitor configuration data on Windows is the hardware subkey under the system Plug and Play registry database 1:  
-HKLM\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY  
+The primary repository of physical monitor configuration data on Windows is the hardware subkey under the system Plug and Play registry database 1:
+HKLM\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY
 When a display is physically attached, the Plug and Play Manager assigns a unique hardware identifier based on its reported Extended Display Identification Data (EDID) and creates a corresponding subkey hierarchy.1 Inside this hierarchy, specific subkeys store the configuration data:
 
-* **Hardware ID Key:** Each display is indexed under a subkey matching its hardware-defined model designation (for example, DISPLAY\\GSM5BD3 for an LG UltraGear monitor).1  
-* **Instance Subkey:** Under the hardware ID key, unique physical instances (representing specific serial numbers or connection paths) are allocated distinct subkeys.1  
+* **Hardware ID Key:** Each display is indexed under a subkey matching its hardware-defined model designation (for example, DISPLAY\\GSM5BD3 for an LG UltraGear monitor).1
+* **Instance Subkey:** Under the hardware ID key, unique physical instances (representing specific serial numbers or connection paths) are allocated distinct subkeys.1
 * **Device Parameters Hive:** The Device Parameters subkey under each active instance contains the operational metadata used by the operating system.1 Under standard configurations, this subkey hosts the EDID binary value, which contains the 128-byte base EDID block (and any extension blocks) retrieved from the display during the initial Plug and Play handshake.1
 
-Registry Key Hierarchy:  
-HKLM\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY  
- └── \<DISPLAY\_ID\> (e.g., GSM5BD3)  
-      └── \<INSTANCE\_ID\> (e.g., 4&1a5b6c7d&0\&UID0)  
-           └── Device Parameters  
-                ├── EDID (REG\_BINARY \- Active base block)  
-                └── EDID\_OVERRIDE (Optional subkey for overrides)  
+Registry Key Hierarchy:
+HKLM\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY
+ └── \<DISPLAY\_ID\> (e.g., GSM5BD3)
+      └── \<INSTANCE\_ID\> (e.g., 4&1a5b6c7d&0\&UID0)
+           └── Device Parameters
+                ├── EDID (REG\_BINARY \- Active base block)
+                └── EDID\_OVERRIDE (Optional subkey for overrides)
                      └── 0 (REG\_BINARY \- Custom block 0 replacement)
 
-The system registry also handles custom display configurations through overrides.4 When a custom display profile is created—either by installing a vendor-supplied monitor INF file or by using specialized tools like the Custom Resolution Utility (CRU)—the operating system writes custom binary values to the registry 3:  
-HKLM\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\\<DISPLAY\_ID\>\\\<INSTANCE\_ID\>\\Device Parameters\\EDID\_OVERRIDE  
+The system registry also handles custom display configurations through overrides.4 When a custom display profile is created—either by installing a vendor-supplied monitor INF file or by using specialized tools like the Custom Resolution Utility (CRU)—the operating system writes custom binary values to the registry 3:
+HKLM\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\\<DISPLAY\_ID\>\\\<INSTANCE\_ID\>\\Device Parameters\\EDID\_OVERRIDE
 Within this subkey, the override blocks are stored as sequential binary values matching their index (for example, value 0 represents the base EDID block).3 During display initialization, the monitor driver checks for keys under this override path.3 Any block defined under the override subkey is used in place of the physical EEPROM data, meaning the active registry configuration may diverge from the physical hardware.3
 
 ### **WMI Repository Classes**
 
 The WMI repository provides structured, standard access to display attributes via the kernel-mode Windows Driver Model (WDM) provider, which parses display parameters directly in the root\\wmi namespace 8:
 
-* **WmiMonitorID**: Exposes processed hardware details, including character arrays for the manufacturer code, product code, year of manufacture, and user-friendly name.  
-* **WmiMonitorBasicDisplayParams**: Represents the physical limits of the active display panel, reporting its horizontal and vertical sizes in centimeters.4  
-* **WmiMonitorConnectionParams**: Contains the physical connection technology, mapping the connection type to the driver-level D3DKMDT\_VIDEO\_OUTPUT\_TECHNOLOGY enumeration.11  
-* **WmiMonitorListedSupportedSourceModes**: Contains an array of VideoModeDescriptor elements, defining the timings, sync polarities, and pixel clocks supported by the panel.13  
+* **WmiMonitorID**: Exposes processed hardware details, including character arrays for the manufacturer code, product code, year of manufacture, and user-friendly name.
+* **WmiMonitorBasicDisplayParams**: Represents the physical limits of the active display panel, reporting its horizontal and vertical sizes in centimeters.4
+* **WmiMonitorConnectionParams**: Contains the physical connection technology, mapping the connection type to the driver-level D3DKMDT\_VIDEO\_OUTPUT\_TECHNOLOGY enumeration.11
+* **WmiMonitorListedSupportedSourceModes**: Contains an array of VideoModeDescriptor elements, defining the timings, sync polarities, and pixel clocks supported by the panel.13
 * **WmiMonitorRawEEdidV1Block**: Exposes the raw, unparsed 128-byte E-EDID block directly from the hardware driver.15 However, this class can fail after system updates or graphics driver regressions, returning "Not Supported" errors.2 To handle this, auditing tools must use direct registry extraction as a reliable fallback.1
 
 ### **Source Inventory and Forensic Utility**
 
 To ensure a comprehensive audit, local and external sources must be systematically collected and evaluated for their forensic reliability.1
 
-| Data Source | Location / Interface | Extraction Method | Forensic Utility & Attributes | Access Constraints |
-| :---- | :---- | :---- | :---- | :---- |
-| **PnP Active Cache** | HKLM\\SYSTEM\\...\\Enum\\DISPLAY\\\<ID\>\\\<INST\>\\Device Parameters\\EDID 1 | Registry binary reading via.NET registry API. | Primary record of active monitor properties. Stores the base display capabilities used by the OS.1 | Requires elevated administrative access on modern Windows systems.1 |
-| **EDID Overrides** | HKLM\\SYSTEM\\...\\Device Parameters\\EDID\_OVERRIDE 4 | Registry subkey enumeration and binary reading.3 | Identifies active software-defined overrides. Used to detect display manipulation or calibration overrides.3 | Requires elevated administrative access.4 |
-| **System INF Files** | C:\\Windows\\INF\\ 1 | Text search for the target PNP ID within monitor-specific INFs.7 | Verifies if driver-defined display attributes match the active registry keys.3 | Read-only access available to standard users.1 |
-| **Driver Store Cache** | C:\\Windows\\System32\\DriverStore\\FileRepository\\ 1 | Driver package parsing and INF indexing.5 | Accesses the original, cryptographically signed display INF files.3 | Read-only access available to standard users.1 |
-| **WMI ID Class** | root\\wmi:WmiMonitorID | WMI/CIM Query via CIM cmdlets.16 | Exposes parsed manufacturer codes, product codes, and serial numbers. | Accessible under standard user privileges.16 |
-| **WMI Raw EDID** | root\\wmi:WmiMonitorRawEEdidV1Block 15 | WMI/CIM Query.16 | Direct access to raw binary blocks.15 Often restricted by driver support or system state.2 | Accessible under standard user privileges.16 |
-| **WMI Basic Params** | root\\wmi:WmiMonitorBasicDisplayParams | WMI/CIM Query.17 | Reads physical dimensions in centimeters.4 Useful for validating geometry calculation logic.4 | Accessible under standard user privileges.17 |
-| **WMI Connection** | root\\wmi:WmiMonitorConnectionParams | WMI/CIM Query.16 | Identifies the connection interface type, such as HDMI, DisplayPort, or LVDS.11 | Accessible under standard user privileges.16 |
-| **UEFI PNP Registry** | https://uefi.org/PNP\_ID\_List 18 | Offline lookup in a local CSV or SQLite DB.1 | Maps 3-character EISA manufacturer codes to the registered company name.19 | Offline local storage access. |
-| **systemd hwdb** | https://www.freedesktop.org/software/systemd/man/hwdb.html 20 | Key-value search using globbed model strings.20 | Provides community-verified mapping between product IDs and retail model names.1 | Offline local storage access. |
+| Data Source            | Location / Interface                                                          | Extraction Method                                                | Forensic Utility & Attributes                                                                                | Access Constraints                                                  |
+|:---------------------- |:----------------------------------------------------------------------------- |:---------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------ |:------------------------------------------------------------------- |
+| **PnP Active Cache**   | HKLM\\SYSTEM\\...\\Enum\\DISPLAY\\\<ID\>\\\<INST\>\\Device Parameters\\EDID 1 | Registry binary reading via.NET registry API.                    | Primary record of active monitor properties. Stores the base display capabilities used by the OS.1           | Requires elevated administrative access on modern Windows systems.1 |
+| **EDID Overrides**     | HKLM\\SYSTEM\\...\\Device Parameters\\EDID\_OVERRIDE 4                        | Registry subkey enumeration and binary reading.3                 | Identifies active software-defined overrides. Used to detect display manipulation or calibration overrides.3 | Requires elevated administrative access.4                           |
+| **System INF Files**   | C:\\Windows\\INF\\ 1                                                          | Text search for the target PNP ID within monitor-specific INFs.7 | Verifies if driver-defined display attributes match the active registry keys.3                               | Read-only access available to standard users.1                      |
+| **Driver Store Cache** | C:\\Windows\\System32\\DriverStore\\FileRepository\\ 1                        | Driver package parsing and INF indexing.5                        | Accesses the original, cryptographically signed display INF files.3                                          | Read-only access available to standard users.1                      |
+| **WMI ID Class**       | root\\wmi:WmiMonitorID                                                        | WMI/CIM Query via CIM cmdlets.16                                 | Exposes parsed manufacturer codes, product codes, and serial numbers.                                        | Accessible under standard user privileges.16                        |
+| **WMI Raw EDID**       | root\\wmi:WmiMonitorRawEEdidV1Block 15                                        | WMI/CIM Query.16                                                 | Direct access to raw binary blocks.15 Often restricted by driver support or system state.2                   | Accessible under standard user privileges.16                        |
+| **WMI Basic Params**   | root\\wmi:WmiMonitorBasicDisplayParams                                        | WMI/CIM Query.17                                                 | Reads physical dimensions in centimeters.4 Useful for validating geometry calculation logic.4                | Accessible under standard user privileges.17                        |
+| **WMI Connection**     | root\\wmi:WmiMonitorConnectionParams                                          | WMI/CIM Query.16                                                 | Identifies the connection interface type, such as HDMI, DisplayPort, or LVDS.11                              | Accessible under standard user privileges.16                        |
+| **UEFI PNP Registry**  | https://uefi.org/PNP\_ID\_List 18                                             | Offline lookup in a local CSV or SQLite DB.1                     | Maps 3-character EISA manufacturer codes to the registered company name.19                                   | Offline local storage access.                                       |
+| **systemd hwdb**       | https://www.freedesktop.org/software/systemd/man/hwdb.html 20                 | Key-value search using globbed model strings.20                  | Provides community-verified mapping between product IDs and retail model names.1                             | Offline local storage access.                                       |
 
 ## **Offline Mapping Database Import and Cache Optimization Plan**
 
 To resolve hardware identifiers to exact retail model names without using online lookups, the local tool must utilize a pre-compiled offline database.1 This design choice ensures reliability, provides low latency, and protects user privacy during system audits.1
 
-Mapping Resolution Flow:  
- \-\> Extract EISA Mfg & Product ID  
-                             │  
-                             ▼  
-               
-                 ├── Step 1: Query UEFI PNP Registry (Resolve Vendor Name)  
-                 └── Step 2: Query systemd hwdb Pattern (Resolve Retail Model)  
-                             │  
-                             ▼  
-               
+Mapping Resolution Flow:
+ \-\> Extract EISA Mfg & Product ID
+                             │
+                             ▼
+
+                 ├── Step 1: Query UEFI PNP Registry (Resolve Vendor Name)
+                 └── Step 2: Query systemd hwdb Pattern (Resolve Retail Model)
+                             │
+                             ▼
+
                  └── PPI & Dimension sanity checks (Catch divergence traps)
 
 ### **Database Integration and Compilation Strategy**
 
 The offline database merges records from three main open-source sources to map hardware identifiers to retail models 1:
 
-1. **UEFI PNP and ACPI Vendor Registries:** Maintained by the UEFI Forum, this registry lists verified 3-character PNP and 4-character ACPI manufacturer codes.18 In late 2024, the UEFI Forum stopped issuing new 3-character PNP codes, making ACPI identifiers the primary format for modern display devices.19  
-2. **systemd Hardware Database (hwdb):** Part of the systemd and udev ecosystems, this database maps hardware attributes using shell globbing rules.20 These patterns associate device strings with specific retail properties.20  
+1. **UEFI PNP and ACPI Vendor Registries:** Maintained by the UEFI Forum, this registry lists verified 3-character PNP and 4-character ACPI manufacturer codes.18 In late 2024, the UEFI Forum stopped issuing new 3-character PNP codes, making ACPI identifiers the primary format for modern display devices.19
+2. **systemd Hardware Database (hwdb):** Part of the systemd and udev ecosystems, this database maps hardware attributes using shell globbing rules.20 These patterns associate device strings with specific retail properties.20
 3. **Linux Hardware EDID Repository:** Maintained under GPL or permissive licenses, this repository indexes real-world EDID binary blocks and maps them to their commercial names.21
 
 To ensure efficient queries, the tool compiles these raw databases into a local cache.1 For PowerShell environments, compiling the text-based source files into a structured SQLite database file or a compressed, read-only PowerShell Data File (.psd1) during build time optimizes query performance and protects lookup tables from unauthorized modification.1
 
-| Mapping Database Source | License | Extraction & Build Pipeline | File Format & Size | Caching Security & Optimization |
-| :---- | :---- | :---- | :---- | :---- |
-| **UEFI PNP Registry** 18 | Public Domain / Permissive | Automated build scripts download uefi.org/PNP\_ID\_List as a CSV, parsing the three-letter key and company name.18 | SQLite Table / PSD1 (approx. 450 KB) | Read-only local cache. Values are serialized as static lookup tables to prevent runtime SQL injection. |
-| **systemd hwdb** 20 | LGPL-2.1-or-later | Direct extraction of udev monitor definitions.20 Parses model patterns and stores properties.20 | Compiled Binary / SQLite Index (approx. 3.2 MB) | Properties are indexed by EISA prefix, allowing ![][image1] lookup complexity during scanning. |
-| **linux-hardware EDID** 23 | GPL-2.0-or-later / CC-BY-SA | Extracts verified EDID records from community probes, parsing manufacturer and product IDs.21 | Structured Key-Value Map (approx. 8.5 MB) | Serialized as binary blobs with SHA-256 integrity checks, preventing tampering with the offline reference data. |
+| Mapping Database Source    | License                     | Extraction & Build Pipeline                                                                                        | File Format & Size                              | Caching Security & Optimization                                                                                 |
+|:-------------------------- |:--------------------------- |:------------------------------------------------------------------------------------------------------------------ |:----------------------------------------------- |:--------------------------------------------------------------------------------------------------------------- |
+| **UEFI PNP Registry** 18   | Public Domain / Permissive  | Automated build scripts download uefi.org/PNP\_ID\_List as a CSV, parsing the three-letter key and company name.18 | SQLite Table / PSD1 (approx. 450 KB)            | Read-only local cache. Values are serialized as static lookup tables to prevent runtime SQL injection.          |
+| **systemd hwdb** 20        | LGPL-2.1-or-later           | Direct extraction of udev monitor definitions.20 Parses model patterns and stores properties.20                    | Compiled Binary / SQLite Index (approx. 3.2 MB) | Properties are indexed by EISA prefix, allowing ![][image1] lookup complexity during scanning.                  |
+| **linux-hardware EDID** 23 | GPL-2.0-or-later / CC-BY-SA | Extracts verified EDID records from community probes, parsing manufacturer and product IDs.21                      | Structured Key-Value Map (approx. 8.5 MB)       | Serialized as binary blobs with SHA-256 integrity checks, preventing tampering with the offline reference data. |
 
 ## **Precise EDID Decoding Specifications and Algorithmic Analysis**
 
@@ -92,88 +92,88 @@ To parse raw binary data into structured configuration records, an offline decod
 
 ### **Bitwise Extraction of EISA Manufacturer and Product Codes**
 
-The EISA manufacturer ID is stored as a 16-bit big-endian value across bytes 0x08 and 0x09 of the base block.24 It is composed of three packed 5-bit characters, while the most significant bit (Bit 15\) is reserved and must be 0 24:  
-![][image2]  
-To unpack the three 5-bit integers representing characters (where ![][image3], ![][image4], up to ![][image5]), apply the following bitwise operations 24:  
-![][image6]  
-![][image7]  
-![][image8]  
-Convert each 5-bit integer to its corresponding ASCII character by adding ![][image9] (![][image10] decimal) 24:  
-![][image11]  
-The product code at bytes 0x0A and 0x0B is stored as a 16-bit little-endian integer 24:  
+The EISA manufacturer ID is stored as a 16-bit big-endian value across bytes 0x08 and 0x09 of the base block.24 It is composed of three packed 5-bit characters, while the most significant bit (Bit 15\) is reserved and must be 0 24:
+![][image2]
+To unpack the three 5-bit integers representing characters (where ![][image3], ![][image4], up to ![][image5]), apply the following bitwise operations 24:
+![][image6]
+![][image7]
+![][image8]
+Convert each 5-bit integer to its corresponding ASCII character by adding ![][image9] (![][image10] decimal) 24:
+![][image11]
+The product code at bytes 0x0A and 0x0B is stored as a 16-bit little-endian integer 24:
 ![][image12]
 
 ### **Descriptor Parsing and Block Typology**
 
 The base EDID block contains four 18-byte descriptor fields from offset 0x36 to 0x7D.27 The parser must first evaluate the pixel clock bytes located at offsets 0 and 1 of the descriptor 27:
 
-* If the pixel clock is non-zero, the block is parsed as a Detailed Timing Descriptor (DTD).27  
+* If the pixel clock is non-zero, the block is parsed as a Detailed Timing Descriptor (DTD).27
 * If the pixel clock is zero (0x0000), the field is parsed as a display descriptor.27 In a display descriptor, byte 2 is always 0x00 and byte 3 acts as the descriptor type flag 27:
 
-![][image13]  
+![][image13]
 Any string extracted from these blocks must be trimmed of trailing line feeds (0x0A) and padding spaces (0x20).27
 
 ### **Detailed Timing Descriptor Parsing**
 
 When parsing a descriptor block as a DTD, the raw bytes are decoded to extract the display's native timing parameters 25:
 
-1. **Pixel Clock Rate:** Decoded from bytes 0 and 1 as a little-endian integer multiplied by ![][image14] Hz.13  
-2. **Horizontal Active Pixels:** Combines the low 8 bits of byte 2 with the high 4 bits of byte 4\.13  
-3. **Horizontal Blanking Pixels:** Combines the low 8 bits of byte 3 with the low 4 bits of byte 4\.13  
-4. **Vertical Active Pixels:** Combines the low 8 bits of byte 5 with the high 4 bits of byte 7\.13  
+1. **Pixel Clock Rate:** Decoded from bytes 0 and 1 as a little-endian integer multiplied by ![][image14] Hz.13
+2. **Horizontal Active Pixels:** Combines the low 8 bits of byte 2 with the high 4 bits of byte 4\.13
+3. **Horizontal Blanking Pixels:** Combines the low 8 bits of byte 3 with the low 4 bits of byte 4\.13
+4. **Vertical Active Pixels:** Combines the low 8 bits of byte 5 with the high 4 bits of byte 7\.13
 5. **Vertical Blanking Pixels:** Combines the low 8 bits of byte 6 with the low 4 bits of byte 7\.13
 
 These parameters represent the raw timings of the connected display, serving as reference points to validate active driver settings.3
 
 ### **Checksum Validation and Multi-Block Assembly**
 
-To verify block integrity, the sum of all 128 bytes must be congruent to zero modulo 256 27:  
-![][image15]  
-If validation succeeds, byte 0x7E is checked to determine if extension blocks are present.25 If this value is greater than zero, the parser reads subsequent 128-byte segments.28  
+To verify block integrity, the sum of all 128 bytes must be congruent to zero modulo 256 27:
+![][image15]
+If validation succeeds, byte 0x7E is checked to determine if extension blocks are present.25 If this value is greater than zero, the parser reads subsequent 128-byte segments.28
 For example, when parsing a CTA-861 (HDMI/DisplayPort) extension block, the parser scans for Vendor-Specific Data Blocks (VSDB), Audio Data Blocks, and HDR Static Metadata blocks to map advanced color, luminance, and HDR support.28
 
 ## **Confidence Scoring Model and Assertion Boundaries**
 
 Auditing tools must systematically evaluate the quality of gathered display data.1 A 6-tier confidence scoring model classifies findings based on their source and verifiability.1
 
-| Tier | Name / Label | Verification Criteria | Recommended Tool UI Label | Permissible Display String |
-| :---- | :---- | :---- | :---- | :---- |
-| **Level 6** | **Authenticated OEM Spec** | Active registry EDID, WMI descriptors, and installed INF files match a verified entry in the local mapping database.1 | AUTHENTICATED OEM SPEC | Exact retail model designation (for example, "Dell U2723QE").1 |
-| **Level 5** | **Matched Retail Model** | Registry and WMI classes match a verified database entry, but the active INF driver is generic (e.g., monitor.inf).1 | MATCHED RETAIL MODEL | Exact retail model designation resolved from database.1 |
-| **Level 4** | **Profiled / Overridden** | The system has an active EDID\_OVERRIDE registry key, or the INF driver defines custom parameters that override the hardware EEPROM.3 | PROFILED / OVERRIDDEN | Retail model with override flag (for example, "LG UltraGear (Override Detected)").4 |
-| **Level 3** | **Identified Hardware Name** | Base EDID block is valid and contains an ASCII model name descriptor at offset 0xFC, but this ID does not exist in the local database.1 | IDENTIFIED HARDWARE NAME | String read directly from the EDID descriptor (for example, "Generic LG Display").5 |
-| **Level 2** | **Verified Hardware Base** | Base EDID block has a valid checksum, but it lacks ASCII string descriptors for the model name or serial number.27 | VERIFIED HARDWARE BASE | Unresolved manufacturer and product code (for example, "EISA: GSM-5BD3").1 |
-| **Level 1** | **Incomplete / Cached** | No valid binary EDID block could be extracted from the registry or WMI. The tool can only read cached PnP keys.1 | INCOMPLETE / CACHED | PnP device identifier (for example, "DISPLAY\\GSM5BD3").1 |
+| Tier        | Name / Label                 | Verification Criteria                                                                                                                   | Recommended Tool UI Label | Permissible Display String                                                          |
+|:----------- |:---------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------- |:------------------------- |:----------------------------------------------------------------------------------- |
+| **Level 6** | **Authenticated OEM Spec**   | Active registry EDID, WMI descriptors, and installed INF files match a verified entry in the local mapping database.1                   | AUTHENTICATED OEM SPEC    | Exact retail model designation (for example, "Dell U2723QE").1                      |
+| **Level 5** | **Matched Retail Model**     | Registry and WMI classes match a verified database entry, but the active INF driver is generic (e.g., monitor.inf).1                    | MATCHED RETAIL MODEL      | Exact retail model designation resolved from database.1                             |
+| **Level 4** | **Profiled / Overridden**    | The system has an active EDID\_OVERRIDE registry key, or the INF driver defines custom parameters that override the hardware EEPROM.3   | PROFILED / OVERRIDDEN     | Retail model with override flag (for example, "LG UltraGear (Override Detected)").4 |
+| **Level 3** | **Identified Hardware Name** | Base EDID block is valid and contains an ASCII model name descriptor at offset 0xFC, but this ID does not exist in the local database.1 | IDENTIFIED HARDWARE NAME  | String read directly from the EDID descriptor (for example, "Generic LG Display").5 |
+| **Level 2** | **Verified Hardware Base**   | Base EDID block has a valid checksum, but it lacks ASCII string descriptors for the model name or serial number.27                      | VERIFIED HARDWARE BASE    | Unresolved manufacturer and product code (for example, "EISA: GSM-5BD3").1          |
+| **Level 1** | **Incomplete / Cached**      | No valid binary EDID block could be extracted from the registry or WMI. The tool can only read cached PnP keys.1                        | INCOMPLETE / CACHED       | PnP device identifier (for example, "DISPLAY\\GSM5BD3").1                           |
 
 ### **Validation Boundaries and Prohibited Assertions**
 
 To prevent false positives in hardware auditing, the tool must enforce several validation boundaries:
 
-* **Do Not Assume Unique Serial Numbers:** Many manufacturers leave the 32-bit serial number field (bytes 12–15) blank or set it to generic values across entire production runs.27 The tool must never treat this field as a globally unique identifier unless it is combined with a verified ASCII serial number descriptor block (type 0xFF).1  
-* **Do Not Assume Unmodified Registry Data:** If an EDID\_OVERRIDE key is present, the active EDID value in the registry does not represent the raw hardware EEPROM.3 The tool must clearly report this override to prevent administrative tampering from masking the actual connected hardware.3  
+* **Do Not Assume Unique Serial Numbers:** Many manufacturers leave the 32-bit serial number field (bytes 12–15) blank or set it to generic values across entire production runs.27 The tool must never treat this field as a globally unique identifier unless it is combined with a verified ASCII serial number descriptor block (type 0xFF).1
+* **Do Not Assume Unmodified Registry Data:** If an EDID\_OVERRIDE key is present, the active EDID value in the registry does not represent the raw hardware EEPROM.3 The tool must clearly report this override to prevent administrative tampering from masking the actual connected hardware.3
 * **Do Not Trust EISA Codes Blindly:** Due to firmware reuse, different physical display panels can share the same EISA product code.32 Auditing tools must avoid making assertions about physical screen geometry based solely on the product code and instead cross-reference these identifiers with other evidence sources, such as the active connection technology or physical size descriptors.1
 
 ## **DeviceCheck User Interface Row Recommendations**
 
 The auditing tool's user interface must clearly present the resolved hardware parameters alongside their respective confidence levels.1 This design helps system administrators quickly identify configuration overrides or hardware anomalies.1
 
-\+------------------------------------------------------------------------------------------------+  
-| DISPLAY AUDIT SUMMARY                                                                          |  
-\+------------------------------------------------------------------------------------------------+  
-| Resolved Model  : LG UltraGear (27GP850-B)            | Confidence Level: Level 5 \- Matched    |  
-| Connection      : DisplayPort External (Direct)       | Geometry        : 59.7 cm x 33.6 cm    |  
-| Override Status : No Active Override Detected         | PnP Hardware ID : DISPLAY\\GSM5BD3      |  
+\+------------------------------------------------------------------------------------------------+
+| DISPLAY AUDIT SUMMARY                                                                          |
+\+------------------------------------------------------------------------------------------------+
+| Resolved Model  : LG UltraGear (27GP850-B)            | Confidence Level: Level 5 \- Matched    |
+| Connection      : DisplayPort External (Direct)       | Geometry        : 59.7 cm x 33.6 cm    |
+| Override Status : No Active Override Detected         | PnP Hardware ID : DISPLAY\\GSM5BD3      |
 \+------------------------------------------------------------------------------------------------+
 
-| UI Element / Field | Proposed Label | Value Format | Source Key / Path | Confidence Context | Handling Flags |
-| :---- | :---- | :---- | :---- | :---- | :---- |
-| **Manufacturer** | Manufacturer | ASCII String (e.g., "LG Electronics") | WmiMonitorID / UEFI DB.8 | Level 2 and above.1 | Resolved from UEFI PNP ID table.18 |
-| **Retail Model** | Model Name | ASCII String (e.g., "27GP850-B") | systemd hwdb mapping.20 | Level 5 and above.1 | Flags as "Generic Monitor" if unresolved.1 |
-| **Registry Path** | Instance Path | Path String (e.g., DISPLAY\\GSM5BD3\\4&...) | PnP instance subkey.1 | Level 1 and above.1 | Sanitizes instance hashes. |
-| **Hardware Serial** | Serial Number | SHA-256 Hex Hash (e.g., 8f7a9c...) | EDID block offset 0x36/0xFF.1 | Level 3 and above.1 | Redacts and hashes raw data for privacy.1 |
-| **Physical Size** | Dimensions (W x H) | Decimal (e.g., 59.7 cm x 33.6 cm) | WmiMonitorBasicDisplayParams.4 | Level 2 and above.1 | Displays error if dimensions are zero.24 |
-| **Connection Port** | Connection Type | Enum String (e.g., "DisplayPort") | WmiMonitorConnectionParams.11 | Level 2 and above.1 | Maps port index to technology name.12 |
-| **Override State** | Override Status | Boolean (e.g., "Active Override Detected") | EDID\_OVERRIDE subkey.3 | Level 4 and above.1 | Flags registry modifications.3 |
+| UI Element / Field  | Proposed Label     | Value Format                                | Source Key / Path              | Confidence Context  | Handling Flags                             |
+|:------------------- |:------------------ |:------------------------------------------- |:------------------------------ |:------------------- |:------------------------------------------ |
+| **Manufacturer**    | Manufacturer       | ASCII String (e.g., "LG Electronics")       | WmiMonitorID / UEFI DB.8       | Level 2 and above.1 | Resolved from UEFI PNP ID table.18         |
+| **Retail Model**    | Model Name         | ASCII String (e.g., "27GP850-B")            | systemd hwdb mapping.20        | Level 5 and above.1 | Flags as "Generic Monitor" if unresolved.1 |
+| **Registry Path**   | Instance Path      | Path String (e.g., DISPLAY\\GSM5BD3\\4&...) | PnP instance subkey.1          | Level 1 and above.1 | Sanitizes instance hashes.                 |
+| **Hardware Serial** | Serial Number      | SHA-256 Hex Hash (e.g., 8f7a9c...)          | EDID block offset 0x36/0xFF.1  | Level 3 and above.1 | Redacts and hashes raw data for privacy.1  |
+| **Physical Size**   | Dimensions (W x H) | Decimal (e.g., 59.7 cm x 33.6 cm)           | WmiMonitorBasicDisplayParams.4 | Level 2 and above.1 | Displays error if dimensions are zero.24   |
+| **Connection Port** | Connection Type    | Enum String (e.g., "DisplayPort")           | WmiMonitorConnectionParams.11  | Level 2 and above.1 | Maps port index to technology name.12      |
+| **Override State**  | Override Status    | Boolean (e.g., "Active Override Detected")  | EDID\_OVERRIDE subkey.3        | Level 4 and above.1 | Flags registry modifications.3             |
 
 ## **PowerShell 7 Implementation Harness and Regression Test Fixtures**
 
@@ -181,222 +181,225 @@ To implement this architecture in the DeviceCheck utility, the PowerShell 7 modu
 
 ### **Production-Grade Extraction Module**
 
-PowerShell  
-function Get-DeviceCheckMonitorEvidence {  
-     
-    param()  
-    process {  
-        $EvidenceCollection \=\]::new()  
+PowerShell
+function Get-DeviceCheckMonitorEvidence {
+
+    param()
+    process {
+        $EvidenceCollection \=\]::new()
         $DisplayRegPath \= "HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY"
 
-        if (Test-Path $DisplayRegPath) {  
-            $Devices \= Get-ChildItem \-Path $DisplayRegPath \-ErrorAction SilentlyContinue  
-            foreach ($Device in $Devices) {  
-                $Instances \= Get-ChildItem \-Path $Device.PSPath \-ErrorAction SilentlyContinue  
-                foreach ($Instance in $Instances) {  
-                    $ParamsPath \= Join-Path $Instance.PSPath "Device Parameters"  
-                    if (Test-Path $ParamsPath) {  
-                        $EdidBytes \= $null  
-                        $IsOverride \= $false  
+        if (Test-Path $DisplayRegPath) {
+            $Devices \= Get-ChildItem \-Path $DisplayRegPath \-ErrorAction SilentlyContinue
+            foreach ($Device in $Devices) {
+                $Instances \= Get-ChildItem \-Path $Device.PSPath \-ErrorAction SilentlyContinue
+                foreach ($Instance in $Instances) {
+                    $ParamsPath \= Join-Path $Instance.PSPath "Device Parameters"
+                    if (Test-Path $ParamsPath) {
+                        $EdidBytes \= $null
+                        $IsOverride \= $false
                         $OverridePath \= Join-Path $ParamsPath "EDID\_OVERRIDE"
 
-                        \# Check for active EDID overrides first  
-                        if (Test-Path $OverridePath) {  
-                            $OverrideValue \= Get-ItemProperty \-Path $OverridePath \-Name "0" \-ErrorAction SilentlyContinue  
-                            if ($OverrideValue \-and $OverrideValue. "0") {  
-                                $EdidBytes \= $OverrideValue. "0"  
-                                $IsOverride \= $true  
-                            }  
+                        \# Check for active EDID overrides first
+                        if (Test-Path $OverridePath) {
+                            $OverrideValue \= Get-ItemProperty \-Path $OverridePath \-Name "0" \-ErrorAction SilentlyContinue
+                            if ($OverrideValue \-and $OverrideValue. "0") {
+                                $EdidBytes \= $OverrideValue. "0"
+                                $IsOverride \= $true
+                            }
                         }
 
-                        \# Fallback to standard raw EDID  
-                        if ($null \-eq $EdidBytes) {  
-                            $ParamProps \= Get-ItemProperty \-Path $ParamsPath \-ErrorAction SilentlyContinue  
-                            if ($ParamProps \-and $ParamProps.EDID) {  
-                                $EdidBytes \= $ParamProps.EDID  
-                            }  
+                        \# Fallback to standard raw EDID
+                        if ($null \-eq $EdidBytes) {
+                            $ParamProps \= Get-ItemProperty \-Path $ParamsPath \-ErrorAction SilentlyContinue
+                            if ($ParamProps \-and $ParamProps.EDID) {
+                                $EdidBytes \= $ParamProps.EDID
+                            }
                         }
 
-                        if ($null \-ne $EdidBytes \-and $EdidBytes.Count \-ge 128) {  
-                            $Decoded \= Convert-EdidBytes \-RawBytes $EdidBytes  
-                            $CimConn \= Get-CimInstance \-Namespace root/wmi \-ClassName WmiMonitorConnectionParams \-ErrorAction SilentlyContinue |   
+                        if ($null \-ne $EdidBytes \-and $EdidBytes.Count \-ge 128) {
+                            $Decoded \= Convert-EdidBytes \-RawBytes $EdidBytes
+                            $CimConn \= Get-CimInstance \-Namespace root/wmi \-ClassName WmiMonitorConnectionParams \-ErrorAction SilentlyContinue |
                                        Where-Object { $\_.InstanceName \-like "\*$($Instance.PSChildName)\*" }
 
                             $OutputTech \= if ($CimConn) { $CimConn.VideoOutputTechnology } else { \-2 }
 
-                            $EvidenceCollection.Add(@{  
-                                InstanceId           \= "$($Device.PSChildName)\\$($Instance.PSChildName)"  
-                                ManufacturerId       \= $Decoded.ManufacturerId  
-                                ProductCode          \= $Decoded.ProductCode  
-                                SerialNumber         \= $Decoded.SerialNumber  
-                                FriendlyName         \= $Decoded.FriendlyName  
-                                MaxHorizontalCm      \= $Decoded.MaxHorizontalCm  
-                                MaxVerticalCm        \= $Decoded.MaxVerticalCm  
-                                IsOverrideActive     \= $IsOverride  
-                                ConnectionTechnology \= $OutputTech  
-                                ConfidenceLevel      \= (Get-ConfidenceTier \-Decoded $Decoded \-IsOverride $IsOverride)  
-                            })  
-                        }  
-                    }  
-                }  
-            }  
-        }  
-        return $EvidenceCollection  
-    }  
+                            $EvidenceCollection.Add(@{
+                                InstanceId           \= "$($Device.PSChildName)\\$($Instance.PSChildName)"
+                                ManufacturerId       \= $Decoded.ManufacturerId
+                                ProductCode          \= $Decoded.ProductCode
+                                SerialNumber         \= $Decoded.SerialNumber
+                                FriendlyName         \= $Decoded.FriendlyName
+                                MaxHorizontalCm      \= $Decoded.MaxHorizontalCm
+                                MaxVerticalCm        \= $Decoded.MaxVerticalCm
+                                IsOverrideActive     \= $IsOverride
+                                ConnectionTechnology \= $OutputTech
+                                ConfidenceLevel      \= (Get-ConfidenceTier \-Decoded $Decoded \-IsOverride $IsOverride)
+                            })
+                        }
+                    }
+                }
+            }
+        }
+        return $EvidenceCollection
+    }
+
 }
 
-function Convert-EdidBytes {  
-     
-    param(  
-        \[Parameter(Mandatory\=$true)\]  
-        \[byte\]$RawBytes  
-    )  
-    process {  
-        \# Verify block integrity  
-        $ValidHeader \= ($RawBytes\[0..7\] \-join " ") \-eq "0 255 255 255 255 255 255 0"  
-        $Checksum \= 0  
-        foreach ($B in $RawBytes\[0..127\]) { $Checksum \= ($Checksum \+ $B) % 256 }  
+function Convert-EdidBytes {
+
+    param(
+        \[Parameter(Mandatory\=$true)\]
+        \[byte\]$RawBytes
+    )
+    process {
+        \# Verify block integrity
+        $ValidHeader \= ($RawBytes\[0..7\] \-join " ") \-eq "0 255 255 255 255 255 255 0"
+        $Checksum \= 0
+        foreach ($B in $RawBytes\[0..127\]) { $Checksum \= ($Checksum \+ $B) % 256 }
         $IsValid \= ($Checksum \-eq 0) \-and $ValidHeader
 
-        if (\-not $IsValid) {  
-            return @{ ManufacturerId \= "ERR"; ProductCode \= "ERR"; IsValid \= $false }  
+        if (\-not $IsValid) {
+            return @{ ManufacturerId \= "ERR"; ProductCode \= "ERR"; IsValid \= $false }
         }
 
-        \# Unpack EISA Manufacturer ID  
-        $EisaValue \= ($RawBytes \-shl 8) \-bor $RawBytes  
-        $Char1 \= \[char\](((($EisaValue \-shr 10) \-band 0x1F) \+ 0x40))  
-        $Char2 \= \[char\](((($EisaValue \-shr 5) \-band 0x1F) \+ 0x40))  
-        $Char3 \= \[char\]((($EisaValue \-band 0x1F) \+ 0x40))  
+        \# Unpack EISA Manufacturer ID
+        $EisaValue \= ($RawBytes \-shl 8) \-bor $RawBytes
+        $Char1 \= \[char\](((($EisaValue \-shr 10) \-band 0x1F) \+ 0x40))
+        $Char2 \= \[char\](((($EisaValue \-shr 5) \-band 0x1F) \+ 0x40))
+        $Char3 \= \[char\]((($EisaValue \-band 0x1F) \+ 0x40))
         $MfgId \= "$Char1$Char2$Char3"
 
-        \# Unpack 16-bit Product Code (Little-Endian)  
-        $ProdCodeVal \= ($RawBytes \-shl 8) \-bor $RawBytes  
+        \# Unpack 16-bit Product Code (Little-Endian)
+        $ProdCodeVal \= ($RawBytes \-shl 8) \-bor $RawBytes
         $ProdCode \= $ProdCodeVal.ToString("X4")
 
-        \# Parse physical sizes  
-        $MaxHoriz \= $RawBytes  
+        \# Parse physical sizes
+        $MaxHoriz \= $RawBytes
         $MaxVert  \= $RawBytes
 
-        \# Read ASCII Descriptors (Offsets 0x36, 0x48, 0x5A, 0x6C)  
-        $FriendlyName \= $null  
-        $SerialStr \= $null  
+        \# Read ASCII Descriptors (Offsets 0x36, 0x48, 0x5A, 0x6C)
+        $FriendlyName \= $null
+        $SerialStr \= $null
         $Offsets \= @(0x36, 0x48, 0x5A, 0x6C)
 
-        foreach ($Offset in $Offsets) {  
-            if ($RawBytes\[$Offset\] \-eq 0 \-and $RawBytes\[$Offset\+1\] \-eq 0 \-and $RawBytes\[$Offset\+2\] \-eq 0) {  
-                $Type \= $RawBytes\[$Offset\+3\]  
-                if ($Type \-eq 0xFC) {  
-                    $FriendlyName \=::ASCII.GetString($RawBytes\[($Offset\+5)..($Offset\+17)\]).Trim()  
-                }  
-                elseif ($Type \-eq 0xFF) {  
-                    $SerialStr \=::ASCII.GetString($RawBytes\[($Offset\+5)..($Offset\+17)\]).Trim()  
-                }  
-            }  
+        foreach ($Offset in $Offsets) {
+            if ($RawBytes\[$Offset\] \-eq 0 \-and $RawBytes\[$Offset\+1\] \-eq 0 \-and $RawBytes\[$Offset\+2\] \-eq 0) {
+                $Type \= $RawBytes\[$Offset\+3\]
+                if ($Type \-eq 0xFC) {
+                    $FriendlyName \=::ASCII.GetString($RawBytes\[($Offset\+5)..($Offset\+17)\]).Trim()
+                }
+                elseif ($Type \-eq 0xFF) {
+                    $SerialStr \=::ASCII.GetString($RawBytes\[($Offset\+5)..($Offset\+17)\]).Trim()
+                }
+            }
         }
 
-        return @{  
-            ManufacturerId  \= $MfgId  
-            ProductCode     \= $ProdCode  
-            SerialNumber    \= $SerialStr  
-            FriendlyName    \= $FriendlyName  
-            MaxHorizontalCm \= $MaxHoriz  
-            MaxVerticalCm   \= $MaxVert  
-            IsValid         \= $true  
-        }  
-    }  
+        return @{
+            ManufacturerId  \= $MfgId
+            ProductCode     \= $ProdCode
+            SerialNumber    \= $SerialStr
+            FriendlyName    \= $FriendlyName
+            MaxHorizontalCm \= $MaxHoriz
+            MaxVerticalCm   \= $MaxVert
+            IsValid         \= $true
+        }
+    }
+
 }
 
-function Get-ConfidenceTier {  
-    param($Decoded, $IsOverride)  
-    if ($IsOverride) { return 4 }  
-    if (\-not $Decoded.IsValid) { return 1 }  
-    if ($null \-ne $Decoded.FriendlyName) { return 3 }  
-    return 2  
+function Get-ConfidenceTier {
+    param($Decoded, $IsOverride)
+    if ($IsOverride) { return 4 }
+    if (\-not $Decoded.IsValid) { return 1 }
+    if ($null \-ne $Decoded.FriendlyName) { return 3 }
+    return 2
 }
 
 ### **Mock Test Fixtures and Regression Validation**
 
 To ensure the reliability of the decoding module, the test harness uses Pester (the standard PowerShell testing framework) to validate parsing logic, override detection, and edge cases against mock EDID data.1
 
-PowerShell  
-Describe "DeviceCheck Monitor Resolution and Validation Suite" {  
-    BeforeAll {  
-        \# Create a mock 128-byte EDID block (LG UltraGear GSM5BD3 profile)  
-        $Script:MockEdid \= \[byte\]::new(128)  
-        \# Apply standard EDID header pattern: 00 FF FF FF FF FF FF 00  
-        $Script:MockEdid\[0..7\] \= 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00  
-          
-        \# Inject EISA Code for GSM (unpacked)  
-        \# G \= 7, S \= 19, M \= 13\.  
-        $Script:MockEdid \= 0x1C  \# Big-endian byte 1  
-        $Script:MockEdid \= 0x6D  \# Big-endian byte 2  
-          
-        \# Inject Product Code: 5BD3 (Little-endian: D3 5B)  
-        $Script:MockEdid \= 0xD3  
-        $Script:MockEdid \= 0x5B  
-          
-        \# Set physical sizes: Width \= 60 cm, Height \= 34 cm  
-        $Script:MockEdid \= 60  
+PowerShell
+Describe "DeviceCheck Monitor Resolution and Validation Suite" {
+    BeforeAll {
+        \# Create a mock 128-byte EDID block (LG UltraGear GSM5BD3 profile)
+        $Script:MockEdid \= \[byte\]::new(128)
+        \# Apply standard EDID header pattern: 00 FF FF FF FF FF FF 00
+        $Script:MockEdid\[0..7\] \= 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
+
+        \# Inject EISA Code for GSM (unpacked)
+        \# G \= 7, S \= 19, M \= 13\.
+        $Script:MockEdid \= 0x1C  \# Big-endian byte 1
+        $Script:MockEdid \= 0x6D  \# Big-endian byte 2
+
+        \# Inject Product Code: 5BD3 (Little-endian: D3 5B)
+        $Script:MockEdid \= 0xD3
+        $Script:MockEdid \= 0x5B
+
+        \# Set physical sizes: Width \= 60 cm, Height \= 34 cm
+        $Script:MockEdid \= 60
         $Script:MockEdid \= 34
 
-        \# Inject ASCII Name Descriptor (LG ULTRAGEAR) at block offset 0x36  
-        $Script:MockEdid\[0x36\]   \= 0x00  
-        $Script:MockEdid\[0x36\+1\] \= 0x00  
-        $Script:MockEdid\[0x36\+2\] \= 0x00  
-        $Script:MockEdid\[0x36\+3\] \= 0xFC \# Monitor Name flag  
-        $Script:MockEdid\[0x36\+4\] \= 0x00  
-        $NameStringBytes \=::ASCII.GetBytes("LG ULTRAGEAR")  
-       ::Copy($NameStringBytes, 0, $Script:MockEdid, 0x36+5, $NameStringBytes.Length)  
+        \# Inject ASCII Name Descriptor (LG ULTRAGEAR) at block offset 0x36
+        $Script:MockEdid\[0x36\]   \= 0x00
+        $Script:MockEdid\[0x36\+1\] \= 0x00
+        $Script:MockEdid\[0x36\+2\] \= 0x00
+        $Script:MockEdid\[0x36\+3\] \= 0xFC \# Monitor Name flag
+        $Script:MockEdid\[0x36\+4\] \= 0x00
+        $NameStringBytes \=::ASCII.GetBytes("LG ULTRAGEAR")
+       ::Copy($NameStringBytes, 0, $Script:MockEdid, 0x36+5, $NameStringBytes.Length)
         $Script:MockEdid \= 0x0A \# LF terminator
 
-        \# Set valid checksum at byte 127  
-        $Sum \= 0  
-        for ($i \= 0; $i \-lt 127; $i\++) { $Sum \= ($Sum \+ $Script:MockEdid\[$i\]) % 256 }  
-        $Script:MockEdid \= (256 \- $Sum) % 256  
+        \# Set valid checksum at byte 127
+        $Sum \= 0
+        for ($i \= 0; $i \-lt 127; $i\++) { $Sum \= ($Sum \+ $Script:MockEdid\[$i\]) % 256 }
+        $Script:MockEdid \= (256 \- $Sum) % 256
     }
 
-    Context "Base EDID Parsing Mechanics" {  
-        It "Successfully decodes EISA Manufacturer ID and Product Code" {  
-            $Result \= Convert-EdidBytes \-RawBytes $Script:MockEdid  
-            $Result.IsValid | Should \-Be $true  
-            $Result.ManufacturerId | Should \-Be "GSM"  
-            $Result.ProductCode | Should \-Be "5BD3"  
+    Context "Base EDID Parsing Mechanics" {
+        It "Successfully decodes EISA Manufacturer ID and Product Code" {
+            $Result \= Convert-EdidBytes \-RawBytes $Script:MockEdid
+            $Result.IsValid | Should \-Be $true
+            $Result.ManufacturerId | Should \-Be "GSM"
+            $Result.ProductCode | Should \-Be "5BD3"
         }
 
-        It "Extracts ASCII Monitor Name Descriptor from offset 0x36" {  
-            $Result \= Convert-EdidBytes \-RawBytes $Script:MockEdid  
-            $Result.FriendlyName | Should \-Be "LG ULTRAGEAR"  
+        It "Extracts ASCII Monitor Name Descriptor from offset 0x36" {
+            $Result \= Convert-EdidBytes \-RawBytes $Script:MockEdid
+            $Result.FriendlyName | Should \-Be "LG ULTRAGEAR"
         }
 
-        It "Correctly fails validation if the checksum is corrupt" {  
-            $BadEdid \= $Script:MockEdid.Clone()  
-            $BadEdid \= ($BadEdid \+ 1) % 256 \# Invalidate checksum  
-            $Result \= Convert-EdidBytes \-RawBytes $BadEdid  
-            $Result.IsValid | Should \-Be $false  
-        }  
+        It "Correctly fails validation if the checksum is corrupt" {
+            $BadEdid \= $Script:MockEdid.Clone()
+            $BadEdid \= ($BadEdid \+ 1) % 256 \# Invalidate checksum
+            $Result \= Convert-EdidBytes \-RawBytes $BadEdid
+            $Result.IsValid | Should \-Be $false
+        }
     }
 
-    Context "Privacy and Anonymization Logic" {  
-        It "Successfully hashes serial number strings using SHA-256" {  
-            $RawSerial \= "LGTFT2026AUDIT"  
-            $Anonymized \= Protect-DeviceCheckPrivacy \-RawEdid $Script:MockEdid \-AsciiSerial $RawSerial  
-            $Anonymized.AnonymizedHash | Should \-Not \-Be $RawSerial  
-            $Anonymized.AnonymizedHash.Length | Should \-Be 64 \# Length of SHA-256 hex string  
-        }  
+    Context "Privacy and Anonymization Logic" {
+        It "Successfully hashes serial number strings using SHA-256" {
+            $RawSerial \= "LGTFT2026AUDIT"
+            $Anonymized \= Protect-DeviceCheckPrivacy \-RawEdid $Script:MockEdid \-AsciiSerial $RawSerial
+            $Anonymized.AnonymizedHash | Should \-Not \-Be $RawSerial
+            $Anonymized.AnonymizedHash.Length | Should \-Be 64 \# Length of SHA-256 hex string
+        }
     }
 
-    Context "Divergence Traps and Geometric Analysis" {  
-        It "Correctly flags the GSM5BD3 27-inch vs 32-inch PPI mismatch" {  
-            \# Scenario: Raw EDID reports 31.5" (69 cm x 39 cm), but the physical device is 27" (105 PPI)  
-            $ReportedWidth \= 69  
-            $ReportedHeight \= 39  
-            $ReportedDiagonalInches \=::Sqrt(($ReportedWidth\*$ReportedWidth) \+ ($ReportedHeight\*$ReportedHeight)) / 2.54  
-              
-            \# 27" target panel diagonal is approx 68.58 cm  
-            $DivergenceDetected \= $ReportedDiagonalInches \-gt 31.0 \-and $Script:MockEdid\[10..11\] \-eq @(0xD3, 0x5B)  
-            $DivergenceDetected | Should \-Be $true  
-        }  
-    }  
+    Context "Divergence Traps and Geometric Analysis" {
+        It "Correctly flags the GSM5BD3 27-inch vs 32-inch PPI mismatch" {
+            \# Scenario: Raw EDID reports 31.5" (69 cm x 39 cm), but the physical device is 27" (105 PPI)
+            $ReportedWidth \= 69
+            $ReportedHeight \= 39
+            $ReportedDiagonalInches \=::Sqrt(($ReportedWidth\*$ReportedWidth) \+ ($ReportedHeight\*$ReportedHeight)) / 2.54
+
+            \# 27" target panel diagonal is approx 68.58 cm
+            $DivergenceDetected \= $ReportedDiagonalInches \-gt 31.0 \-and $Script:MockEdid\[10..11\] \-eq @(0xD3, 0x5B)
+            $DivergenceDetected | Should \-Be $true
+        }
+    }
+
 }
 
 This test suite ensures that changes to the decoding logic do not break core parsing capabilities, validation protocols, or privacy safeguards.1
@@ -409,10 +412,10 @@ When building a local monitor verification module, developers should avoid sever
 
 A major implementation error is reading the standard EDID registry key under Device Parameters and assuming it contains the physical monitor hardware configuration.1 Since Windows applies overrides from the EDID\_OVERRIDE subkey without modifying the original hardware key, auditing tools must explicitly verify if an override key is active.3 Failing to perform this check makes the tool vulnerable to administrative tampering, which can mask unauthorized hardware configurations.3
 
-Divergence Trap Example:  
- ──(Divergence Path)──\>  
-      \- Size: 27 inches                                  \- Size: 18 inches  
-      \- Actual PPI: 105                                  \- Modified PPI: 120  
+Divergence Trap Example:
+ ──(Divergence Path)──\>
+      \- Size: 27 inches                                  \- Size: 18 inches
+      \- Actual PPI: 105                                  \- Modified PPI: 120
       \- Native: 2560x1440                                \- Native: 1920x1080
 
 ### **Trusting standard 32-bit Serial Numbers Globally**
@@ -425,43 +428,43 @@ Relying exclusively on WMI classes (such as WmiMonitorRawEEdidV1Block) for hardw
 
 ### **Failing to Validate Display Dimensions and Connection Mappings**
 
-Calculating display parameters like PPI or aspect ratios using raw size values from bytes 21 and 22 can lead to division-by-zero errors.24 For devices without defined physical panels—such as projectors, virtual display adapters, or streaming dongles—these fields are often reported as zero.24 Auditing tools must validate these dimensions before performing geometric calculations.  
+Calculating display parameters like PPI or aspect ratios using raw size values from bytes 21 and 22 can lead to division-by-zero errors.24 For devices without defined physical panels—such as projectors, virtual display adapters, or streaming dongles—these fields are often reported as zero.24 Auditing tools must validate these dimensions before performing geometric calculations.
 Additionally, connection parameters reported by WmiMonitorConnectionParams can be misleading.11 For example, when using video extenders, switchers, or Thunderbolt docking stations, the operating system may report a direct DisplayPort connection (type 10\) even if the physical monitor is connected via HDMI.33 Security audits must document these intermediate connection layers to maintain accurate environment records.28
 
 #### **Works cited**
 
-1. DEEP\_RESEARCH\_PROMPT\_MONITOR\_EDID\_IDENTITY.md  
-2. WmiMonitorRawEEdidV1Block no longer works in Windows 10 \- Stack Overflow, accessed June 6, 2026, [https://stackoverflow.com/questions/34700621/wmimonitorraweedidv1block-no-longer-works-in-windows-10](https://stackoverflow.com/questions/34700621/wmimonitorraweedidv1block-no-longer-works-in-windows-10)  
-3. Using an INF File to Override EDIDs \- Windows drivers | Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)  
-4. EDID Editor for Windows 11/10 tablet, accessed June 6, 2026, [https://migueltek.com/tool/simple-edid-editor-for-win-11/](https://migueltek.com/tool/simple-edid-editor-for-win-11/)  
-5. Draft 3D is not working. After using Draft 3D, After Effects closes. \- Adobe Community, accessed June 6, 2026, [https://community.adobe.com/bug-reports-528/draft-3d-is-not-working-after-using-draft-3d-after-effects-closes-1217039](https://community.adobe.com/bug-reports-528/draft-3d-is-not-working-after-using-draft-3d-after-effects-closes-1217039)  
-6. On 1.15, not recovering after exiting a game. · Issue \#34 · Nonary/MonitorSwapAutomation, accessed June 6, 2026, [https://github.com/Nonary/MonitorSwapAutomation/issues/34](https://github.com/Nonary/MonitorSwapAutomation/issues/34)  
-7. Edid Override Windows 10 \- Google Groups, accessed June 6, 2026, [https://groups.google.com/g/google-cloud-memorystore-discuss/c/vry\_Ka0wGNA](https://groups.google.com/g/google-cloud-memorystore-discuss/c/vry_Ka0wGNA)  
-8. WmiMonitorID class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorid](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorid)  
-9. WMI Core Provider \- Win32 apps | Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmi-core-provider-](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmi-core-provider-)  
-10. WmiMonitorBasicDisplayParams class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorbasicdisplayparams](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorbasicdisplayparams)  
-11. WmiMonitorConnectionParams class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorconnectionparams](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorconnectionparams)  
-12. Detect/identify the port (HDMI, other) the monitor is connected to in Windows 7/8/10 Win32 C++ \- Stack Overflow, accessed June 6, 2026, [https://stackoverflow.com/questions/31712915/detect-identify-the-port-hdmi-other-the-monitor-is-connected-to-in-windows-7](https://stackoverflow.com/questions/31712915/detect-identify-the-port-hdmi-other-the-monitor-is-connected-to-in-windows-7)  
-13. VideoModeDescriptor class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/videomodedescriptor](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/videomodedescriptor)  
-14. WmiMonitorListedSupportedSour, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorlistedsupportedsourcemodes](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorlistedsupportedsourcemodes)  
-15. WmiMonitorRawEEdidV1Block class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorraweedidv1block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorraweedidv1block)  
-16. PowerShell commands to obtain system details \- GitHub Gist, accessed June 6, 2026, [https://gist.github.com/sysrage/874492c74b3fd0d1438012337e43d6fd](https://gist.github.com/sysrage/874492c74b3fd0d1438012337e43d6fd)  
-17. powershell \- Separate the Monitor Display Information output \- Stack Overflow, accessed June 6, 2026, [https://stackoverflow.com/questions/55615095/separate-the-monitor-display-information-output](https://stackoverflow.com/questions/55615095/separate-the-monitor-display-information-output)  
-18. PNP ID Registry | Unified Extensible Firmware Interface Forum, accessed June 6, 2026, [https://uefi.org/PNP\_ID\_List](https://uefi.org/PNP_ID_List)  
-19. PNP ID and ACPI ID Registry | Unified Extensible Firmware Interface Forum, accessed June 6, 2026, [https://uefi.org/PNP\_ACPI\_Registry](https://uefi.org/PNP_ACPI_Registry)  
-20. hwdb \- Freedesktop.org, accessed June 6, 2026, [https://www.freedesktop.org/software/systemd/man/hwdb.html](https://www.freedesktop.org/software/systemd/man/hwdb.html)  
-21. Get pnp.ids from uefi.org? · Issue \#4 · vcrhonek/hwdata \- GitHub, accessed June 6, 2026, [https://github.com/vcrhonek/hwdata/issues/4](https://github.com/vcrhonek/hwdata/issues/4)  
-22. update\_udev\_hwdb: fix multilib issue with systemd \- Patchwork, accessed June 6, 2026, [https://patchwork.yoctoproject.org/project/oe-core/patch/20220415143803.13980-1-kai.kang@windriver.com/](https://patchwork.yoctoproject.org/project/oe-core/patch/20220415143803.13980-1-kai.kang@windriver.com/)  
-23. GitHub \- linuxhw/EDID: EDID repository for LCD monitors, accessed June 6, 2026, [https://github.com/linuxhw/EDID](https://github.com/linuxhw/EDID)  
-24. Extended Display Identification Data \- Wikipedia, accessed June 6, 2026, [https://en.wikipedia.org/wiki/Extended\_Display\_Identification\_Data](https://en.wikipedia.org/wiki/Extended_Display_Identification_Data)  
-25. EDID ( Extended display identification data ) \- Doctor HDMI, accessed June 6, 2026, [http://www.drhdmi.eu/dictionary/edid.html](http://www.drhdmi.eu/dictionary/edid.html)  
-26. accessed June 6, 2026, [https://grokipedia.com/page/Extended\_Display\_Identification\_Data\#:\~:text=Bytes%2010%20and%2011%20specify,models%20from%20the%20same%20vendor.](https://grokipedia.com/page/Extended_Display_Identification_Data#:~:text=Bytes%2010%20and%2011%20specify,models%20from%20the%20same%20vendor.)  
-27. EDID \- OSDev Wiki, accessed June 6, 2026, [https://wiki.osdev.org/EDID](https://wiki.osdev.org/EDID)  
-28. Unpacking EDID \- UnifiedCommunications.com, accessed June 6, 2026, [https://unifiedcommunications.com/unpacking-edid/](https://unifiedcommunications.com/unpacking-edid/)  
-29. Extended Display Identification Data \- Grokipedia, accessed June 6, 2026, [https://grokipedia.com/page/Extended\_Display\_Identification\_Data](https://grokipedia.com/page/Extended_Display_Identification_Data)  
-30. CTA-861.3 \- HDR Static Metadata Extensions \- Standards | GlobalSpec, accessed June 6, 2026, [https://standards.globalspec.com/std/10037169/cta-861-3](https://standards.globalspec.com/std/10037169/cta-861-3)  
-31. EDID Editor \- Application Notes \- Lightware Visual Engineering, accessed June 6, 2026, [https://assets.prod.pim.lightware.com/assets/File-Downloads/Guides-and-Manuals/Application-Note/EDID\_Editor\_ApplicationNotes.pdf](https://assets.prod.pim.lightware.com/assets/File-Downloads/Guides-and-Manuals/Application-Note/EDID_Editor_ApplicationNotes.pdf)  
-32. Need firmware file for LG 27GP850-B.AUS : r/Monitors \- Reddit, accessed June 6, 2026, [https://www.reddit.com/r/Monitors/comments/qqcj1j/need\_firmware\_file\_for\_lg\_27gp850baus/](https://www.reddit.com/r/Monitors/comments/qqcj1j/need_firmware_file_for_lg_27gp850baus/)  
+1. DEEP\_RESEARCH\_PROMPT\_MONITOR\_EDID\_IDENTITY.md
+2. WmiMonitorRawEEdidV1Block no longer works in Windows 10 \- Stack Overflow, accessed June 6, 2026, [https://stackoverflow.com/questions/34700621/wmimonitorraweedidv1block-no-longer-works-in-windows-10](https://stackoverflow.com/questions/34700621/wmimonitorraweedidv1block-no-longer-works-in-windows-10)
+3. Using an INF File to Override EDIDs \- Windows drivers | Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)
+4. EDID Editor for Windows 11/10 tablet, accessed June 6, 2026, [https://migueltek.com/tool/simple-edid-editor-for-win-11/](https://migueltek.com/tool/simple-edid-editor-for-win-11/)
+5. Draft 3D is not working. After using Draft 3D, After Effects closes. \- Adobe Community, accessed June 6, 2026, [https://community.adobe.com/bug-reports-528/draft-3d-is-not-working-after-using-draft-3d-after-effects-closes-1217039](https://community.adobe.com/bug-reports-528/draft-3d-is-not-working-after-using-draft-3d-after-effects-closes-1217039)
+6. On 1.15, not recovering after exiting a game. · Issue \#34 · Nonary/MonitorSwapAutomation, accessed June 6, 2026, [https://github.com/Nonary/MonitorSwapAutomation/issues/34](https://github.com/Nonary/MonitorSwapAutomation/issues/34)
+7. Edid Override Windows 10 \- Google Groups, accessed June 6, 2026, [https://groups.google.com/g/google-cloud-memorystore-discuss/c/vry\_Ka0wGNA](https://groups.google.com/g/google-cloud-memorystore-discuss/c/vry_Ka0wGNA)
+8. WmiMonitorID class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorid](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorid)
+9. WMI Core Provider \- Win32 apps | Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmi-core-provider-](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmi-core-provider-)
+10. WmiMonitorBasicDisplayParams class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorbasicdisplayparams](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorbasicdisplayparams)
+11. WmiMonitorConnectionParams class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorconnectionparams](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorconnectionparams)
+12. Detect/identify the port (HDMI, other) the monitor is connected to in Windows 7/8/10 Win32 C++ \- Stack Overflow, accessed June 6, 2026, [https://stackoverflow.com/questions/31712915/detect-identify-the-port-hdmi-other-the-monitor-is-connected-to-in-windows-7](https://stackoverflow.com/questions/31712915/detect-identify-the-port-hdmi-other-the-monitor-is-connected-to-in-windows-7)
+13. VideoModeDescriptor class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/videomodedescriptor](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/videomodedescriptor)
+14. WmiMonitorListedSupportedSour, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorlistedsupportedsourcemodes](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorlistedsupportedsourcemodes)
+15. WmiMonitorRawEEdidV1Block class \- Win32 apps \- Microsoft Learn, accessed June 6, 2026, [https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorraweedidv1block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorraweedidv1block)
+16. PowerShell commands to obtain system details \- GitHub Gist, accessed June 6, 2026, [https://gist.github.com/sysrage/874492c74b3fd0d1438012337e43d6fd](https://gist.github.com/sysrage/874492c74b3fd0d1438012337e43d6fd)
+17. powershell \- Separate the Monitor Display Information output \- Stack Overflow, accessed June 6, 2026, [https://stackoverflow.com/questions/55615095/separate-the-monitor-display-information-output](https://stackoverflow.com/questions/55615095/separate-the-monitor-display-information-output)
+18. PNP ID Registry | Unified Extensible Firmware Interface Forum, accessed June 6, 2026, [https://uefi.org/PNP\_ID\_List](https://uefi.org/PNP_ID_List)
+19. PNP ID and ACPI ID Registry | Unified Extensible Firmware Interface Forum, accessed June 6, 2026, [https://uefi.org/PNP\_ACPI\_Registry](https://uefi.org/PNP_ACPI_Registry)
+20. hwdb \- Freedesktop.org, accessed June 6, 2026, [https://www.freedesktop.org/software/systemd/man/hwdb.html](https://www.freedesktop.org/software/systemd/man/hwdb.html)
+21. Get pnp.ids from uefi.org? · Issue \#4 · vcrhonek/hwdata \- GitHub, accessed June 6, 2026, [https://github.com/vcrhonek/hwdata/issues/4](https://github.com/vcrhonek/hwdata/issues/4)
+22. update\_udev\_hwdb: fix multilib issue with systemd \- Patchwork, accessed June 6, 2026, [https://patchwork.yoctoproject.org/project/oe-core/patch/20220415143803.13980-1-kai.kang@windriver.com/](https://patchwork.yoctoproject.org/project/oe-core/patch/20220415143803.13980-1-kai.kang@windriver.com/)
+23. GitHub \- linuxhw/EDID: EDID repository for LCD monitors, accessed June 6, 2026, [https://github.com/linuxhw/EDID](https://github.com/linuxhw/EDID)
+24. Extended Display Identification Data \- Wikipedia, accessed June 6, 2026, [https://en.wikipedia.org/wiki/Extended\_Display\_Identification\_Data](https://en.wikipedia.org/wiki/Extended_Display_Identification_Data)
+25. EDID ( Extended display identification data ) \- Doctor HDMI, accessed June 6, 2026, [http://www.drhdmi.eu/dictionary/edid.html](http://www.drhdmi.eu/dictionary/edid.html)
+26. accessed June 6, 2026, [https://grokipedia.com/page/Extended\_Display\_Identification\_Data\#:\~:text=Bytes%2010%20and%2011%20specify,models%20from%20the%20same%20vendor.](https://grokipedia.com/page/Extended_Display_Identification_Data#:~:text=Bytes%2010%20and%2011%20specify,models%20from%20the%20same%20vendor.)
+27. EDID \- OSDev Wiki, accessed June 6, 2026, [https://wiki.osdev.org/EDID](https://wiki.osdev.org/EDID)
+28. Unpacking EDID \- UnifiedCommunications.com, accessed June 6, 2026, [https://unifiedcommunications.com/unpacking-edid/](https://unifiedcommunications.com/unpacking-edid/)
+29. Extended Display Identification Data \- Grokipedia, accessed June 6, 2026, [https://grokipedia.com/page/Extended\_Display\_Identification\_Data](https://grokipedia.com/page/Extended_Display_Identification_Data)
+30. CTA-861.3 \- HDR Static Metadata Extensions \- Standards | GlobalSpec, accessed June 6, 2026, [https://standards.globalspec.com/std/10037169/cta-861-3](https://standards.globalspec.com/std/10037169/cta-861-3)
+31. EDID Editor \- Application Notes \- Lightware Visual Engineering, accessed June 6, 2026, [https://assets.prod.pim.lightware.com/assets/File-Downloads/Guides-and-Manuals/Application-Note/EDID\_Editor\_ApplicationNotes.pdf](https://assets.prod.pim.lightware.com/assets/File-Downloads/Guides-and-Manuals/Application-Note/EDID_Editor_ApplicationNotes.pdf)
+32. Need firmware file for LG 27GP850-B.AUS : r/Monitors \- Reddit, accessed June 6, 2026, [https://www.reddit.com/r/Monitors/comments/qqcj1j/need\_firmware\_file\_for\_lg\_27gp850baus/](https://www.reddit.com/r/Monitors/comments/qqcj1j/need_firmware_file_for_lg_27gp850baus/)
 33. Detecting VGA/DVI/HDMI : r/sysadmin \- Reddit, accessed June 6, 2026, [https://www.reddit.com/r/sysadmin/comments/epkmv9/detecting\_vgadvihdmi/](https://www.reddit.com/r/sysadmin/comments/epkmv9/detecting_vgadvihdmi/)
 
 [image1]: <data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACYAAAAWCAYAAACsR+4DAAACKElEQVR4Xu2WPUgdQRSFbzCBSIJREY0giMFGsFNsFKsEtDCCltrZioWCgqWSOkEFLQJiIRi7IEIQi5c0CdhqY6cIFiJWivh/zptdGe+b2R3NghZ+cHhv7+zP2XvvzKzIM4/PO+iVDibwGnqrg2nwAVVQtYRdPAhNy/2M1UK/oWY94OIF9Bc6gXahPegCarVPcrABVeqghW+sBdqOfr3UQD+hbqjIipdDl1CvFbOphz7pYMQbaAAa0wMRTMQktK4HCFN5IMY50+viC3QNTal4I3SoYqRUTJb4ggviN0ZobkZMj97hj5iH9usBiy4x57BkZVacvbVvHbtIM0Y6oI86yAf+E4dji9jYjpgJQTirVsVTBosQYx/EVOWWPuhITEmSmJfCjDVBx5L+0BBjL6EtqIIHrO2iFJbHBS+iMRrkdaQzivXEJ3kIMUZuq8H1KSfGXPwwH1diTHy2YnF5+ZtEqDFOogb+iY3xwiRo2tWHWRtjW7A98rDh2MBsZBc0vwaNSmFW26BzaFjFNaHG7ImVd+hrfm4vs2LK6NpqmHamf1wPKEKMcSHOibX9xWVaigZjSsTc8BQasuI2nEGcFOxRH7znCvRV/FUhvNd3HeQiyb2RqWRpf0Bn0DJUZ52n4UtxltKchhniC7vk6klWjktXZnDb2dTBe1IM/ZLCHv5vuJUlZTYNfgDwSyZzODG+ycPemMtPDhpR8cx4D82J+XQKpR2aEPeMf3rcAEJhas23y1nTAAAAAElFTkSuQmCC>

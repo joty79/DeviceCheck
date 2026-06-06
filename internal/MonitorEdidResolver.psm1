@@ -225,4 +225,233 @@ function Get-MonitorEdidFromRegistry {
     return $null
 }
 
-Export-ModuleMember -Function ConvertFrom-EdidBytes, Get-MonitorEdidFromRegistry
+function Get-MonitorWmiEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$InstanceId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($InstanceId)) {
+        return $null
+    }
+
+    function Convert-CharCodesToString {
+        param($Codes)
+        if ($null -eq $Codes -or $Codes.Count -eq 0) { return '' }
+        try {
+            $bytes = [byte[]]@($Codes)
+            $str = [System.Text.Encoding]::ASCII.GetString($bytes)
+            return $str.Trim(([char]0), ' ', "`r", "`n", "`t")
+        }
+        catch {
+            return ''
+        }
+    }
+
+    $wmiId = $null
+    $wmiBasic = $null
+    $wmiConn = $null
+    $wmiModes = $null
+
+    try {
+        $wmiId = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
+            Select-Object -First 1
+    } catch {}
+
+    try {
+        $wmiBasic = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
+            Select-Object -First 1
+    } catch {}
+
+    try {
+        $wmiConn = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
+            Select-Object -First 1
+    } catch {}
+
+    try {
+        $wmiModes = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
+            Select-Object -First 1
+    } catch {}
+
+    if ($null -eq $wmiId -and $null -eq $wmiBasic -and $null -eq $wmiConn -and $null -eq $wmiModes) {
+        return $null
+    }
+
+    $manufacturerId = ''
+    $productCode = ''
+    $userFriendlyName = ''
+    $serialNumber = ''
+    $weekOfManufacture = $null
+    $yearOfManufacture = $null
+
+    if ($wmiId) {
+        $manufacturerId = Convert-CharCodesToString -Codes $wmiId.ManufacturerName
+        $productCode = Convert-CharCodesToString -Codes $wmiId.ProductCodeID
+        $userFriendlyName = Convert-CharCodesToString -Codes $wmiId.UserFriendlyName
+        $serialNumber = Convert-CharCodesToString -Codes $wmiId.SerialNumberID
+        $weekOfManufacture = $wmiId.WeekOfManufacture
+        $yearOfManufacture = $wmiId.YearOfManufacture
+    }
+
+    $maxHorizontalCm = $null
+    $maxVerticalCm = $null
+    if ($wmiBasic) {
+        $maxHorizontalCm = $wmiBasic.MaxHorizontalImageSize
+        $maxVerticalCm = $wmiBasic.MaxVerticalImageSize
+    }
+
+    $videoOutputTech = $null
+    if ($wmiConn) {
+        $videoOutputTech = $wmiConn.VideoOutputTechnology
+    }
+
+    $preferredTiming = $null
+    if ($wmiModes) {
+        $idx = $wmiModes.PreferredMonitorSourceModeIndex
+        if ($null -ne $idx -and $idx -lt $wmiModes.MonitorSourceModes.Count) {
+            $prefMode = $wmiModes.MonitorSourceModes[$idx]
+            $refreshRate = $null
+            if ($prefMode.VerticalRefreshRateDenominator -gt 0) {
+                $refreshRate = [Math]::Round($prefMode.VerticalRefreshRateNumerator / $prefMode.VerticalRefreshRateDenominator, 2)
+            }
+            $preferredTiming = [pscustomobject]@{
+                Width = $prefMode.HorizontalActivePixels
+                Height = $prefMode.VerticalActivePixels
+                RefreshRateHz = $refreshRate
+                PixelClockKHz = [Math]::Round($prefMode.PixelClockRate / 1000.0)
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        InstanceName          = if ($wmiId) { $wmiId.InstanceName } elseif ($wmiBasic) { $wmiBasic.InstanceName } else { '' }
+        ManufacturerId        = $manufacturerId
+        ProductCode           = $productCode
+        UserFriendlyName      = $userFriendlyName
+        SerialNumber          = $serialNumber
+        ManufactureWeek       = $weekOfManufacture
+        ManufactureYear       = $yearOfManufacture
+        MaxHorizontalCm       = $maxHorizontalCm
+        MaxVerticalCm         = $maxVerticalCm
+        VideoOutputTechnology = $videoOutputTech
+        PreferredTiming       = $preferredTiming
+        Source                = 'WMI Monitor Core'
+    }
+}
+
+function Get-MonitorInfEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$InfName,
+        [Parameter(Mandatory)]
+        [string]$SectionName,
+        [Parameter(Mandatory)]
+        [string[]]$HardwareIds
+    )
+
+    $infDir = "C:\Windows\INF"
+
+    function Get-ModelNameFromInf {
+        param([string]$Path, [string]$Section)
+        if (-not (Test-Path -LiteralPath $Path)) { return $null }
+        $lines = Get-Content -LiteralPath $Path
+        $token = $null
+        foreach ($line in $lines) {
+            if ($line -match '^\s*%([^%]+)%\s*=\s*([A-Za-z0-9_.-]+)') {
+                if ($Matches[2].Trim() -ieq $Section) {
+                    $token = $Matches[1].Trim()
+                    break
+                }
+            }
+        }
+        if (-not $token) {
+            foreach ($line in $lines) {
+                if ($line -match '^\s*%([^%]+)%\s*=\s*([^,\s]+)') {
+                    $s = $Matches[2].Trim()
+                    if ($Section -like "$s*") {
+                        $token = $Matches[1].Trim()
+                        break
+                    }
+                }
+            }
+        }
+        if ($token) {
+            foreach ($line in $lines) {
+                if ($line -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*"(.*)"') -or
+                    $line -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*(.*)')) {
+                    return $Matches[1].Trim('"').Trim()
+                }
+            }
+        }
+        return $null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($InfName)) {
+        if ($InfName -ine 'monitor.inf') {
+            $assignedPath = Join-Path $infDir $InfName
+            $model = Get-ModelNameFromInf -Path $assignedPath -Section $SectionName
+            if ($model) {
+                return [pscustomobject]@{
+                    ModelName = $model
+                    InfPath   = $assignedPath
+                    IsGeneric = $false
+                    Source    = "Installed monitor INF ($InfName)"
+                }
+            }
+        }
+    }
+
+    if ($HardwareIds) {
+        $cleanIds = @($HardwareIds | ForEach-Object { ($_ -replace '^MONITOR\\', '') })
+        try {
+            $oemInfs = Get-ChildItem -Path $infDir -Filter 'oem*.inf' -ErrorAction SilentlyContinue
+            foreach ($inf in $oemInfs) {
+                $lines = Get-Content -LiteralPath $inf.FullName -ErrorAction SilentlyContinue
+                if (-not $lines) { continue }
+                foreach ($line in $lines) {
+                    foreach ($id in $cleanIds) {
+                        if ($line -match ('Monitor\\' + [regex]::Escape($id)) -or $line -match [regex]::Escape($id)) {
+                            if ($line -match '^\s*%([^%]+)%\s*=\s*([A-Za-z0-9_.-]+)') {
+                                $token = $Matches[1].Trim()
+                                $section = $Matches[2].Trim()
+                                foreach ($strLine in $lines) {
+                                    if ($strLine -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*"(.*)"') -or
+                                        $strLine -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*(.*)')) {
+                                        return [pscustomobject]@{
+                                            ModelName = $Matches[1].Trim('"').Trim()
+                                            InfPath   = $inf.FullName
+                                            IsGeneric = $false
+                                            Source    = "Found in monitor INF ($($inf.Name))"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    if ($InfName -eq 'monitor.inf') {
+        $monitorInfPath = Join-Path $infDir 'monitor.inf'
+        $model = Get-ModelNameFromInf -Path $monitorInfPath -Section $SectionName
+        if (-not $model) { $model = "Generic PnP Monitor" }
+        return [pscustomobject]@{
+            ModelName = $model
+            InfPath   = $monitorInfPath
+            IsGeneric = $true
+            Source    = "Generic System INF (monitor.inf)"
+        }
+    }
+
+    return $null
+}
+
+Export-ModuleMember -Function ConvertFrom-EdidBytes, Get-MonitorEdidFromRegistry, Get-MonitorWmiEvidence, Get-MonitorInfEvidence
