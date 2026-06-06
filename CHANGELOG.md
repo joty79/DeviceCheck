@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Removed redundant keybinding help strings (`R rescans devices. E scans evidence...`) from the header banner subtitle in `DeviceCheck.ps1` since those shortcuts are already displayed in the navigation footer.
+- Ignored the generated `tui_benchmark.log` file so local TUI performance runs do not leave noisy untracked artifacts.
 - Updated `Write-UiBanner` in `PS_UI_Blueprint.psm1` to safely truncate long titles or subtitles using the BMP-safe ellipsis character `[char]0x2026` and pad them correctly, preventing negative padding string multiplication crashes on narrow windows.
 - Cleaned up TUI status message logic in `DeviceCheck.ps1` to prevent duplicate system summary printing: initialized the status line with a clean welcome message, and simplified system scan status messages during scan operations.
 
