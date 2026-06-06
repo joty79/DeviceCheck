@@ -496,3 +496,10 @@ Root cause: Windows exposes monitor identity through several partially overlappi
 Guardrail/rule: Treat WMI and monitor INF as separate local evidence layers. Label INF strings as `INF Name`, not authenticated retail model proof. Keep deterministic EDID tests separate from optional live hardware tests; live WMI/INF checks must require `-IncludeLiveMonitor` so CI/laptop/VM runs do not fail because a monitor class is absent or driver-specific.
 Files affected: `DeviceCheck.ps1`, `internal\MonitorEdidResolver.psm1`, `internal\Test-MonitorEdidResolver.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor -AsJson`; `git diff --check`.
+
+Date: 2026-06-06
+Problem: AOC monitors showed `Unknown display vendor` in the HardwareId breakdown even though Windows manufacturer, EDID, WMI, and INF evidence identified the monitor family.
+Root cause: The offline `pnp.ids` cache does not include every monitor EISA code; `AOC` was missing there, so the DISPLAY resolver correctly stayed at `PARSED-DISPLAY` but the UI wording made that look like total non-recognition.
+Guardrail/rule: For DISPLAY/MONITOR breakdowns, use local Windows manufacturer evidence as a clearly labeled fallback when `pnp.ids` lacks the EISA code. Keep the local identity section concise for monitors: avoid repeating EDID/WMI/INF sources and duplicate size/timing/name rows.
+Files affected: `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; `internal\Test-MonitorEdidResolver.ps1 -AsJson`; `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor -AsJson`; `git diff --check`.

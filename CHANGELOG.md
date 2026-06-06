@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the ChatGPT/Gemini research PDFs and `docs\LOCAL_HARDWARE_IDENTITY_DATABASE_PLAN.md` as the laptop-ready roadmap for the local evidence database, source provenance, confidence model, and regression harness.
 
 ### Changed
+- Reduced selected-monitor `Local Hardware Identity` noise by hiding duplicate EDID/WMI/INF source rows and keeping a compact monitor summary with name, ID, size, manufacture date, native timing, connection, checksum, and evidence source family.
+- Improved DISPLAY/MONITOR Hardware ID breakdowns so missing `pnp.ids` EISA vendor entries can fall back to the local Windows manufacturer string instead of showing `Unknown display vendor`.
 - Improved selected-monitor details so DISPLAY devices can show local Windows registry EDID rows when raw EDID is readable, while still labeling exact retail model discovery as requiring stronger INF/OEM/source evidence.
 - Improved monitor and disk selected-device details so DISPLAY monitor IDs and USBSTOR/IDE disk IDs no longer fall through to generic PNP/unsupported identity when Windows exposes enough structured identity text.
 - Improved selected-device Hardware ID breakdown and Local Hardware Identity rows for Realtek HD Audio devices so HDAUDIO IDs no longer fall through to misleading PNP compact parsing such as `VEN_HDA` / `DEV_UDIO`.

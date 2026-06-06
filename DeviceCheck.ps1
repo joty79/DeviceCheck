@@ -1083,7 +1083,7 @@ function Add-MonitorEdidRows {
     }
 
     if ($widthCm -gt 0 -or $heightCm -gt 0) {
-        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Size' -Value ("{0} x {1} cm" -f $widthCm, $heightCm) -Color 'White'))
+        $Rows.Add((New-HardwareIdentityRow -Key 'Panel Size' -Value ("{0} x {1} cm" -f $widthCm, $heightCm) -Color 'White'))
     }
 
     if ($manufactureYear -gt 1990) {
@@ -1092,7 +1092,7 @@ function Add-MonitorEdidRows {
         } else {
             [string]$manufactureYear
         }
-        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Made' -Value $madeText -Color 'Dim'))
+        $Rows.Add((New-HardwareIdentityRow -Key 'Made' -Value $madeText -Color 'Dim'))
     }
 
     $timing = Get-NotePropertyValue -Object $edid -Name 'PreferredTiming'
@@ -1101,26 +1101,12 @@ function Add-MonitorEdidRows {
         if ($null -ne $timing.RefreshRateHz) {
             $timingText = "$timingText @ $($timing.RefreshRateHz)Hz"
         }
-        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Timing' -Value $timingText -Color 'White'))
-    }
-
-    $serialText = if (-not [string]::IsNullOrWhiteSpace($serialDescriptor)) {
-        $serialDescriptor
-    } elseif ($serialNumber -gt 0) {
-        [string]$serialNumber
-    } else {
-        ''
-    }
-    if (-not [string]::IsNullOrWhiteSpace($serialText)) {
-        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Serial' -Value $serialText -Color 'Dim'))
+        $Rows.Add((New-HardwareIdentityRow -Key 'Native Timing' -Value $timingText -Color 'White'))
     }
 
     $checksumText = if ($checksumValid) { 'OK' } else { 'Invalid' }
     $checksumColor = if ($checksumValid) { 'OK' } else { 'Warn' }
     $Rows.Add((New-HardwareIdentityRow -Key 'EDID Checksum' -Value $checksumText -Color $checksumColor))
-    if (-not [string]::IsNullOrWhiteSpace($source)) {
-        $Rows.Add((New-HardwareIdentityRow -Key 'EDID Source' -Value $source -Color 'White'))
-    }
 
     return $true
 }
@@ -1168,11 +1154,9 @@ function Add-MonitorWmiAndInfRows {
         $hasInf = $true
         if (-not $infData.IsGeneric) {
             $Rows.Add((New-HardwareIdentityRow -Key 'INF Name' -Value $infData.ModelName -Color 'Info'))
-            $Rows.Add((New-HardwareIdentityRow -Key 'INF Source' -Value $infData.Source -Color 'White'))
         }
         else {
             $Rows.Add((New-HardwareIdentityRow -Key 'INF Name' -Value "$($infData.ModelName) (Generic)" -Color 'Dim'))
-            $Rows.Add((New-HardwareIdentityRow -Key 'INF Source' -Value $infData.Source -Color 'Dim'))
         }
     }
 
@@ -1188,36 +1172,29 @@ function Add-MonitorWmiAndInfRows {
         $videoOutputTech = Get-NotePropertyValue -Object $wmi -Name 'VideoOutputTechnology'
         $timing = Get-NotePropertyValue -Object $wmi -Name 'PreferredTiming'
 
-        if (-not [string]::IsNullOrWhiteSpace($friendlyName)) {
+        $nameAlreadyShown = @($Rows | Where-Object { $_.Key -match 'Name$' -and $_.Value -eq $friendlyName }).Count -gt 0
+        if (-not [string]::IsNullOrWhiteSpace($friendlyName) -and -not $nameAlreadyShown) {
             $Rows.Add((New-HardwareIdentityRow -Key 'WMI Name' -Value $friendlyName -Color 'OK'))
-        }
-
-        $wmiIdParts = @(
-            $manufacturerId
-            $productCode
-        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        if (@($wmiIdParts).Count -gt 0) {
-            $Rows.Add((New-HardwareIdentityRow -Key 'WMI ID' -Value ($wmiIdParts -join ' ') -Color 'Info'))
         }
 
         if ($null -ne $videoOutputTech) {
             $portName = Get-VideoOutputTechnologyName -Technology $videoOutputTech
-            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Port' -Value $portName -Color 'White'))
+            $Rows.Add((New-HardwareIdentityRow -Key 'Connection' -Value $portName -Color 'White'))
         }
 
-        if ($null -ne $widthCm -and $null -ne $heightCm -and ($widthCm -gt 0 -or $heightCm -gt 0)) {
-            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Size' -Value ("{0} x {1} cm" -f $widthCm, $heightCm) -Color 'White'))
+        $hasPanelSize = @($Rows | Where-Object { $_.Key -eq 'Panel Size' }).Count -gt 0
+        if (-not $hasPanelSize -and $null -ne $widthCm -and $null -ne $heightCm -and ($widthCm -gt 0 -or $heightCm -gt 0)) {
+            $Rows.Add((New-HardwareIdentityRow -Key 'Panel Size' -Value ("{0} x {1} cm" -f $widthCm, $heightCm) -Color 'White'))
         }
 
-        if ($null -ne $timing -and $timing.Width -gt 0 -and $timing.Height -gt 0) {
+        $hasNativeTiming = @($Rows | Where-Object { $_.Key -eq 'Native Timing' }).Count -gt 0
+        if (-not $hasNativeTiming -and $null -ne $timing -and $timing.Width -gt 0 -and $timing.Height -gt 0) {
             $timingText = "{0}x{1}" -f $timing.Width, $timing.Height
             if ($null -ne $timing.RefreshRateHz) {
                 $timingText = "$timingText @ $($timing.RefreshRateHz)Hz"
             }
-            $Rows.Add((New-HardwareIdentityRow -Key 'WMI Timing' -Value $timingText -Color 'White'))
+            $Rows.Add((New-HardwareIdentityRow -Key 'Native Timing' -Value $timingText -Color 'White'))
         }
-
-        $Rows.Add((New-HardwareIdentityRow -Key 'WMI Source' -Value $wmi.Source -Color 'White'))
     }
 
     return ($hasInf -or $hasWmi)
@@ -1355,18 +1332,18 @@ function Get-HardwareResolutionDetailRows {
             } else {
                 $vendorId
             }
-            if (-not [string]::IsNullOrWhiteSpace($displayVendor)) {
+            if (-not ($hasEdid -or $hasWmiOrInf) -and -not [string]::IsNullOrWhiteSpace($displayVendor)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Display Vendor' -Value $displayVendor -Color 'White'))
             }
-            if (-not [string]::IsNullOrWhiteSpace($productId)) {
+            if (-not ($hasEdid -or $hasWmiOrInf) -and -not [string]::IsNullOrWhiteSpace($productId)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'EDID Product' -Value $productId -Color 'Info'))
             }
             $coverageText = if ($hasEdid -or $hasWmiOrInf) {
-                'EDID/WMI/INF local monitor evidence parsed; exact retail model may still need offline/OEM evidence'
+                'Registry EDID + WMI + INF'
             } else {
                 'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/WMI/OEM evidence'
             }
-            $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value $coverageText -Color 'Dim'))
+            $rows.Add((New-HardwareIdentityRow -Key 'Evidence' -Value $coverageText -Color 'Dim'))
             $searchParts = @(
                 $(if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) { "DISPLAY\$vendorId$productId" })
                 $displayVendor
@@ -1374,7 +1351,7 @@ function Get-HardwareResolutionDetailRows {
                 $productId
                 'monitor'
             ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-            if (@($searchParts).Count -gt 0) {
+            if (-not ($hasEdid -or $hasWmiOrInf) -and @($searchParts).Count -gt 0) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Search Hint' -Value (($searchParts | Select-Object -Unique) -join ' ') -Color 'Info'))
             }
         }
@@ -1893,7 +1870,8 @@ function Add-WrappedPathLine {
 function Get-HardwareIdBreakdownLines {
     param(
         [string]$HardwareId,
-        [int]$Width
+        [int]$Width,
+        [object]$Evidence = $null
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -2122,7 +2100,15 @@ function Get-HardwareIdBreakdownLines {
         elseif ($res.Bus -eq 'DISPLAY') {
             $vendorId = $res.Fields.VendorId
             $productId = $res.Fields.ProductId
-            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown display vendor' }
+            $importantProperties = Get-NotePropertyValue -Object $Evidence -Name 'ImportantProperties'
+            $localManufacturer = [string](Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer')
+            $vendorName = if ($res.Lookup.VendorName) {
+                Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName
+            } elseif (-not [string]::IsNullOrWhiteSpace($localManufacturer)) {
+                "$localManufacturer (Windows)"
+            } else {
+                'display vendor code'
+            }
 
             if (-not [string]::IsNullOrWhiteSpace($vendorId)) {
                 $vendorLine = "{0,-15} = {1}" -f $vendorId, (Format-UiValue -Text $vendorName -MaxLength $valueWidth)
@@ -2765,7 +2751,7 @@ function Get-DetailDisplayLines {
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
                 $lines.Add((New-KeyValueLine -Key 'HardwareId' -Value $firstHardwareId -Width $Width))
-                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width $Width)) {
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width $Width -Evidence $cachedEvidence)) {
                     $lines.Add($breakdownLine)
                 }
             }
@@ -2779,7 +2765,7 @@ function Get-DetailDisplayLines {
             if ($compatibleIds) {
                 $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
                 $lines.Add((New-KeyValueLine -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width))
-                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width $Width)) {
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width $Width -Evidence $cachedEvidence)) {
                     $lines.Add($breakdownLine)
                 }
             }
@@ -3210,7 +3196,7 @@ function Render-FrameLegacy {
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
                 Write-Host "  $($_C.Dim)HardwareId   :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstHardwareId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
-                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width (Get-UiWidth))) {
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width (Get-UiWidth) -Evidence $cachedEvidence)) {
                     Write-Host "$breakdownLine$($_C.EraseLn)"
                 }
             }
@@ -3224,7 +3210,7 @@ function Render-FrameLegacy {
             if ($compatibleIds) {
                 $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
                 Write-Host "  $($_C.Dim)CompatibleId :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstCompatibleId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
-                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width (Get-UiWidth))) {
+                foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width (Get-UiWidth) -Evidence $cachedEvidence)) {
                     Write-Host $breakdownLine
                 }
             }
