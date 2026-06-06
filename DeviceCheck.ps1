@@ -350,7 +350,7 @@ function Get-MachineSummary {
 $script:MachineEvidence = Get-MachineEvidence
 $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
 try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
-$script:SystemScanMessage = "System: $(Get-MachineSummary -MachineEvidence $script:MachineEvidence)"
+$script:SystemScanMessage = "Welcome to DeviceCheck Manager. Navigate the tree to inspect device properties."
 $script:HardwareIdResolverState = 'NotLoaded'
 $script:HardwareIdResolverError = ''
 $script:HardwareIdDatabaseCache = $null
@@ -367,6 +367,11 @@ $script:MonitorEdidResolverError = ''
 $script:MonitorEdidIdentityCache = @{}
 $script:MonitorWmiEvidenceCache = @{}
 $script:MonitorInfEvidenceCache = @{}
+$script:EvidenceCacheMemory = @{}
+$script:AnsiOscRegex = [regex]::new([string]([char]27) + '\][^\a]*(\a|' + [string]([char]27) + '\\)', 'Compiled')
+$script:AnsiCsiRegex = [regex]::new([string]([char]27) + '\[[0-9;?]*[A-Za-z]', 'Compiled')
+$script:VisibleRowsDirty = $true
+$script:RequestForceClear = $true
 
 function Test-HardwareIdCacheReady {
     param(
@@ -1724,13 +1729,30 @@ function New-AgentToolCacheRoot {
 function Read-CachedDeviceEvidence {
     param([string]$InstanceId)
 
+    # In-memory cache: avoid disk I/O + JSON parse on every render frame
+    if ($script:EvidenceCacheMemory.ContainsKey($InstanceId)) {
+        return $script:EvidenceCacheMemory[$InstanceId]
+    }
+
     $cachePath = Get-DeviceEvidenceCachePath -InstanceId $InstanceId
     if (-not (Test-Path -LiteralPath $cachePath)) { return $null }
 
     try {
-        return (Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json)
+        $parsed = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+        $script:EvidenceCacheMemory[$InstanceId] = $parsed
+        return $parsed
     } catch {
         return $null
+    }
+}
+
+function Invalidate-EvidenceCache {
+    param([string]$InstanceId)
+
+    if (-not [string]::IsNullOrWhiteSpace($InstanceId)) {
+        $script:EvidenceCacheMemory.Remove($InstanceId)
+    } else {
+        $script:EvidenceCacheMemory.Clear()
     }
 }
 
@@ -1750,8 +1772,8 @@ function Remove-AnsiSequence {
     param([AllowEmptyString()][string]$Text)
 
     if ([string]::IsNullOrEmpty($Text)) { return '' }
-    $withoutOsc = [regex]::Replace($Text, "$([char]27)\][^\a]*(\a|$([char]27)\\)", '')
-    return [regex]::Replace($withoutOsc, "$([char]27)\[[0-9;?]*[A-Za-z]", '')
+    $withoutOsc = $script:AnsiOscRegex.Replace($Text, '')
+    return $script:AnsiCsiRegex.Replace($withoutOsc, '')
 }
 
 function Get-PrintableLength {
@@ -2425,6 +2447,7 @@ function Invoke-SystemScan {
     $script:MachineEvidence = Get-MachineEvidence
     $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
     try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
+    Invalidate-EvidenceCache  # clear all in-memory evidence on rescan
 
     $script:categories = Get-DeviceCategories -Quiet:$Quiet
     $deviceCount = 0
@@ -2434,7 +2457,7 @@ function Invoke-SystemScan {
 
     $elapsedMs = [int]((Get-Date) - $scanStarted).TotalMilliseconds
     $summary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount @($script:categories).Count -ElapsedMs $elapsedMs
-    $script:SystemScanMessage = "System scan complete: $summary | $(Get-Date -Format 'HH:mm:ss')"
+    $script:SystemScanMessage = "System scan complete | $(Get-Date -Format 'HH:mm:ss')"
 }
 
 # Helper to generate visible rows list
@@ -2531,6 +2554,7 @@ function Set-AllCategoriesExpanded {
     foreach ($category in $script:categories) {
         $category.IsExpanded = $Expanded
     }
+    $script:VisibleRowsDirty = $true
 }
 
 function Expand-SelectedNode {
@@ -2541,6 +2565,7 @@ function Expand-SelectedNode {
         Set-AllCategoriesExpanded -Expanded $true
     } elseif ($Row.Type -eq 'Category') {
         $Row.Ref.IsExpanded = $true
+        $script:VisibleRowsDirty = $true
     }
 }
 
@@ -2552,6 +2577,7 @@ function Collapse-SelectedNode {
         Set-AllCategoriesExpanded -Expanded $false
     } elseif ($Row.Type -eq 'Category') {
         $Row.Ref.IsExpanded = $false
+        $script:VisibleRowsDirty = $true
     } elseif ($Row.Type -eq 'Device') {
         $parentCatName = $Row.Class
         $parentIndex = -1
@@ -2564,6 +2590,7 @@ function Collapse-SelectedNode {
         if ($parentIndex -ne -1) {
             $script:selectedIndex = $parentIndex
             $script:visibleRows[$parentIndex].Ref.IsExpanded = $false
+            $script:VisibleRowsDirty = $true
         }
     }
 }
@@ -2929,12 +2956,13 @@ function Get-DetailDisplayLines {
 function Invoke-ModelSelector {
     [Console]::CursorVisible = $false
     $cursor = 0
+    $modelSelectorFirstRender = $true
     try {
         while ($true) {
             Lock-ViewportToWindow
 
             try {
-                $maxVisible = [Math]::Max(3, $Host.UI.RawUI.WindowSize.Height - 8)
+                $maxVisible = [Math]::Max(3, $Host.UI.RawUI.WindowSize.Height - 14)
             }
             catch {
                 $maxVisible = 10
@@ -2944,7 +2972,14 @@ function Invoke-ModelSelector {
             $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:AvailableModels.Count - 1)
 
             Begin-SyncRender
-            try { Clear-Host } catch {}
+            try {
+                if ($modelSelectorFirstRender) {
+                    Clear-Host
+                    $modelSelectorFirstRender = $false
+                } else {
+                    [Console]::Write("$($_E)[H")
+                }
+            } catch {}
 
             Write-UiBanner -Title 'Model Selector' -Subtitle 'Space to toggle selection. Enter/Esc to confirm and return.'
             Write-UiSection -Title 'Available AI Models for Scan' -Icon ''
@@ -3026,7 +3061,10 @@ function Invoke-ModelSelector {
                     Save-ModelSelection
                     return
                 }
-                'ResizeEvent' { continue }
+                'ResizeEvent' {
+                    $modelSelectorFirstRender = $true
+                    continue
+                }
                 default {
                     if ($key.KeyChar -eq ' ') {
                         $script:AvailableModels[$cursor].Selected = -not $script:AvailableModels[$cursor].Selected
@@ -3335,6 +3373,11 @@ function Render-FrameLegacy {
 }
 
 function Render-Frame {
+    param([switch]$ForceClear)
+
+    $shouldClear = $ForceClear -or $script:RequestForceClear
+    $script:RequestForceClear = $false
+
     $uiWidth = Get-UiWidth
     try { $windowHeight = $Host.UI.RawUI.WindowSize.Height } catch { $windowHeight = 32 }
 
@@ -3342,18 +3385,17 @@ function Render-Frame {
     $batchStatus = Get-EvidenceBatchStatusText
     $footerHeight = 1
     $headerReserve = if ([string]::IsNullOrWhiteSpace($batchStatus)) { 7 } else { 8 }
-    $availableRows = [Math]::Max(8, $windowHeight - $headerReserve - $footerHeight)
 
     if ($useDualPane) {
         $dividerWidth = 3
         $availablePaneWidth = [Math]::Max(80, $uiWidth - $dividerWidth)
         $leftWidth = [int][Math]::Floor($availablePaneWidth / 2)
         $rightWidth = $availablePaneWidth - $leftWidth
-        $maxVisible = $availableRows
+        $maxVisible = [Math]::Max(4, $windowHeight - $headerReserve - $footerHeight - 4)
     } else {
         $leftWidth = $uiWidth
         $rightWidth = $uiWidth
-        $maxVisible = [Math]::Max(4, $windowHeight - 22)
+        $maxVisible = [Math]::Max(4, $windowHeight - $headerReserve - $footerHeight - 17)
     }
 
     $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $script:visibleRows.Count - $maxVisible)))
@@ -3361,9 +3403,26 @@ function Render-Frame {
     $selectedRow = if ($script:visibleRows.Count -gt 0) { $script:visibleRows[$selectedIndex] } else { $null }
 
     Begin-SyncRender
-    try { Clear-Host } catch {}
+    try {
+        if ($shouldClear) {
+            Clear-Host
+        } else {
+            [Console]::Write("$($_E)[H")
+        }
+    } catch {}
 
-    Write-UiBanner -Title 'DeviceCheck Manager' -Subtitle 'R rescans devices. E scans evidence; root/all requires E twice. S adds web/AI.'
+    $deviceCount = 0
+    if ($null -ne $script:categories) {
+        foreach ($category in $script:categories) {
+            $deviceCount += @($category.Devices).Count
+        }
+    }
+    $categoryCount = if ($null -ne $script:categories) { @($script:categories).Count } else { 0 }
+    $headerTime = Get-Date -Format 'HH:mm:ss'
+    $headerSummary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount $categoryCount
+    $subtitleText = "$headerSummary | $headerTime"
+
+    Write-UiBanner -Title 'DeviceCheck Manager' -Subtitle $subtitleText
     $statusWidth = [Math]::Max(10, $uiWidth - 2)
     $compactStatus = Get-CompactSystemStatus -StatusText $script:SystemScanMessage
     Write-Host "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
@@ -3525,7 +3584,7 @@ function Render-Frame {
 function Invoke-SystemScanWithFeedback {
     param([switch]$Quiet)
 
-    $script:SystemScanMessage = "System scan running: reading $(Get-MachineDisplayName -MachineEvidence $script:MachineEvidence) and present PnP device tree... | $(Get-Date -Format 'HH:mm:ss')"
+    $script:SystemScanMessage = "System scan running... | $(Get-Date -Format 'HH:mm:ss')"
     if ($script:visibleRows -and $script:visibleRows.Count -gt 0) {
         Render-Frame
     }
@@ -3535,7 +3594,10 @@ function Invoke-SystemScanWithFeedback {
     $script:DetailScrollOffset = 0
     $script:DetailCursorIndex = 0
     $script:ActivePane = 'Tree'
+    $script:VisibleRowsDirty = $true
     $script:visibleRows = Update-VisibleRows
+    $script:VisibleRowsDirty = $false
+    $script:RequestForceClear = $true
 }
 
 function Get-SelectedTreeRow {
@@ -4268,6 +4330,8 @@ function Update-SearchFromPipelineOutput {
 
         if ($Data.Status -eq 'Done' -and -not [string]::IsNullOrWhiteSpace([string]$Data.Path)) {
             $Search.Device.EvidenceCached = $true
+            Invalidate-EvidenceCache -InstanceId $Search.Device.InstanceId
+            $script:VisibleRowsDirty = $true
             if ([bool](Get-NotePropertyValue -Object $Search -Name 'EvidenceOnly') -and
                 [string]::IsNullOrWhiteSpace([string](Get-NotePropertyValue -Object $Search -Name 'EvidenceBatchId'))) {
                 $deviceName = [string](Get-NotePropertyValue -Object $Search.Device -Name 'FriendlyName')
@@ -4324,6 +4388,7 @@ function Update-ActiveSearches {
                 if ($search.WebState -eq 'Searching') { $search.WebState = 'Done' }
                 if ($search.LocalState -eq 'Searching') { $search.LocalState = 'Done' }
                 if ($search.EvidenceState -eq 'Searching') { $search.EvidenceState = 'Done' }
+                $script:VisibleRowsDirty = $true
                 try { $search.PsWeb.Dispose() } catch {}
                 $search.PsWeb = $null
                 $search.AsyncWeb = $null
@@ -4719,6 +4784,7 @@ function Update-ActiveSearches {
         $completedSearch = $script:ActiveSearches[$id]
         if ($completedSearch.EvidenceState -eq 'Done' -and $completedSearch.EvidencePath) {
             $completedSearch.Device.EvidenceCached = $true
+            Invalidate-EvidenceCache -InstanceId $id
         }
         $completedBatchId = Get-NotePropertyValue -Object $completedSearch -Name 'EvidenceBatchId'
         if ($null -ne $script:EvidenceBatchState -and $completedBatchId -eq $script:EvidenceBatchState.BatchId) {
@@ -4728,6 +4794,7 @@ function Update-ActiveSearches {
             }
         }
         $script:ActiveSearches.Remove($id)
+        $script:VisibleRowsDirty = $true
     }
 
     Start-PendingEvidenceBatchScans
@@ -4772,7 +4839,10 @@ function Read-ConsoleKey {
             # Update active/pending background searches and redraw
             if ($script:ActiveSearches.Count -gt 0 -or $script:EvidenceBatchQueue.Count -gt 0) {
                 Update-ActiveSearches
-                $script:visibleRows = Update-VisibleRows
+                if ($script:VisibleRowsDirty) {
+                    $script:visibleRows = Update-VisibleRows
+                    $script:VisibleRowsDirty = $false
+                }
                 if ($script:visibleRows.Count -gt 0) {
                     $script:selectedIndex = [Math]::Max(0, [Math]::Min($script:selectedIndex, $script:visibleRows.Count - 1))
                 } else {
@@ -4879,8 +4949,11 @@ try {
     while ($running) {
         Lock-ViewportToWindow
 
-        # Calculate current visible rows
-        $script:visibleRows = Update-VisibleRows
+        # Calculate current visible rows (only when dirty)
+        if ($script:VisibleRowsDirty) {
+            $script:visibleRows = Update-VisibleRows
+            $script:VisibleRowsDirty = $false
+        }
 
         # Clamp selected index to selectable types (Root / Category / Device / Result)
         if ($visibleRows.Count -eq 0) {
@@ -4901,6 +4974,7 @@ try {
             Start-Sleep -Milliseconds 50
             continue
         }
+
         if ($key.Key -ne 'E' -and $key.KeyChar -ne 'e') {
             Reset-AllEvidenceScanConfirmation
         }
@@ -5029,6 +5103,7 @@ try {
             'M' {
                 Reset-AllEvidenceScanConfirmation
                 Invoke-ModelSelector
+                $script:RequestForceClear = $true
             }
             'Escape' {
                 $running = $false
@@ -5037,6 +5112,7 @@ try {
                 $running = $false
             }
             'ResizeEvent' {
+                $script:RequestForceClear = $true
                 continue
             }
             'IgnoredInputBurst' {

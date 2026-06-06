@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added persistent machine summary (system information, dynamic device/category counts, and time) inside the header banner subtitle in `DeviceCheck.ps1`'s TUI.
+
+### Changed
+- Removed redundant keybinding help strings (`R rescans devices. E scans evidence...`) from the header banner subtitle in `DeviceCheck.ps1` since those shortcuts are already displayed in the navigation footer.
+- Updated `Write-UiBanner` in `PS_UI_Blueprint.psm1` to safely truncate long titles or subtitles using the BMP-safe ellipsis character `[char]0x2026` and pad them correctly, preventing negative padding string multiplication crashes on narrow windows.
+- Cleaned up TUI status message logic in `DeviceCheck.ps1` to prevent duplicate system summary printing: initialized the status line with a clean welcome message, and simplified system scan status messages during scan operations.
+
+### Performance
+- **In-memory evidence cache:** `Read-CachedDeviceEvidence` now caches parsed JSON objects in `$script:EvidenceCacheMemory`, eliminating disk I/O and `ConvertFrom-Json` on every render frame. Cache is invalidated on evidence completion and system rescan.
+- **Compiled ANSI regex:** `Remove-AnsiSequence` now uses pre-compiled `[regex]` objects (`$script:AnsiOscRegex`, `$script:AnsiCsiRegex`) instead of recompiling patterns on every call (~120+ calls per render frame in dual-pane mode).
+- **Dirty flag for VisibleRows:** Tree rows are only rebuilt when `$script:VisibleRowsDirty` is true (set by expand/collapse, search completion, system scan, resize). Skips unnecessary rebuilds during idle polling and static navigation.
+- **Cursor-home repositioning rendering:** Replaced standard `Clear-Host` calls with cursor-home (`[Console]::Write("$($_E)[H")`) positioning and selective ANSI Erase line/screen directives. This drastically reduces the overhead of `Write-Host` and completely eliminates blinking/flicker in both standard rendering and `Invoke-ModelSelector` dialog loops.
+
+### Fixed
+- Fixed key-loss and skipping bugs during rapid arrow navigation by completely removing the experimental arrow-key batching mechanism, relying instead on the new highly-optimized cursor-positioning redraw routine to achieve butter-smooth scroll behavior.
+- Added a state-driven `$script:RequestForceClear` flag to perform a full `Clear-Host` only on startup, window resizing (`ResizeEvent`), or when returning from modal menus (e.g. `Invoke-ModelSelector`), preventing screen artifacts while keeping regular renders instantaneous.
+- Fixed a layout line-overflow bug in non-maximized console windows (pwsh 5/7) where total printed lines exceeded `WindowSize.Height`, causing the console buffer to scroll and display duplicate/layered headers and footers. The number of visible rows (`$maxVisible`) is now strictly clamped based on dynamic header height, dividers, details pane size, and footer safety margins.
+
+### Added
 - Added WMI monitor evidence layer in `internal\MonitorEdidResolver.psm1` (`Get-MonitorWmiEvidence`) and integrated it into `DeviceCheck.ps1` (`Get-MonitorWmiIdentityForResolution` and `Add-MonitorWmiAndInfRows`), decoding user-friendly monitor name, manufacturer/product IDs, physical panel sizes, preferred active timing descriptors, and connection technology ports (HDMI/DisplayPort etc. mapped from WDM D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY enum) directly from `root\wmi` classes.
 - Added monitor INF driver evidence support in `internal\MonitorEdidResolver.psm1` (`Get-MonitorInfEvidence`) and integrated it into `DeviceCheck.ps1` (`Get-MonitorInfIdentityForResolution` and `Add-MonitorWmiAndInfRows`), searching the active driver INF and matching `oem*.inf` files under `C:\Windows\INF` for local monitor names without treating INF strings alone as authenticated retail-model proof.
 - Added optional live-monitor assertions in `internal\Test-MonitorEdidResolver.ps1 -IncludeLiveMonitor` to test WMI and INF monitor evidence retrieval against actual present hardware devices while keeping the default test deterministic.

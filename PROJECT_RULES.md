@@ -56,6 +56,13 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-06
+Problem: Rapid arrow navigation in the TUI skipped devices and felt laggy, and non-arrow keys could be swallowed/ignored. Also, non-maximized console windows suffered from double/layered banners and footers.
+Root cause: Experimental arrow-key batching drained inputs from the console queue, which consumed non-arrow keys and skipped selection nodes. The standard `Clear-Host` on every frame caused visual blinking and redraw overhead. If the number of lines written in a frame exceeded the console window height, it scrolled the screen buffer, resulting in duplicate headers/footers when cursor positioning home was called.
+Guardrail/rule: Do not use input batching to mask slow render frame times. Replace `Clear-Host` with cursor repositioning (`[Console]::Write("$($_E)[H")`) and trailing line erases for fast redraws. Gate full clears behind `$script:RequestForceClear`. Strictly calculate and constrain the visible row counts (`$maxVisible`) to ensure the total line output never exceeds `WindowSize.Height - 1`, preventing scrollback buffer overflow.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation succeeded; verified correct key handling, zero-flicker rendering, and strict height boundary constraints in both standard TUI loop and `Invoke-ModelSelector` dialog loop.
+
 Date: 2026-06-04
 Problem: ChatGPT/Gemini deep-research PDFs defined a broad local evidence database architecture, but the repo needed a practical laptop-ready implementation plan and the research files had to be preserved in Git.
 Root cause: The research output was PDF-only and too broad to execute directly; without a repo-local plan, future laptop work could jump straight into ad hoc mappings or parser work without schemas, provenance, or harness guardrails.

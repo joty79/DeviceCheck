@@ -124,14 +124,30 @@ function Write-UiBanner {
 
     $width = Get-UiWidth
     $border = [string]::new([char]0x2550, ($width - 2))
-    $titlePad = [Math]::Max(0, $width - 2 - $Title.Length)
-    $subtitlePad = [Math]::Max(0, $width - 2 - $Subtitle.Length)
+    $maxTextWidth = $width - 3
+
+    # Format Title
+    $displayTitle = $Title
+    if ($displayTitle.Length -gt $maxTextWidth) {
+        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+    }
+    $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
+
+    # Format Subtitle
+    $displaySubtitle = $Subtitle
+    $subtitlePad = 0
+    if ($Subtitle) {
+        if ($displaySubtitle.Length -gt $maxTextWidth) {
+            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+        }
+        $subtitlePad = [Math]::Max(0, $maxTextWidth - $displaySubtitle.Length)
+    }
 
     Write-Host ''
     Write-Host "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)"
-    Write-Host "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $Title$($_C.Reset)$(' ' * ($titlePad - 1))$($_C.H1)$([char]0x2551)$($_C.Reset)"
+    Write-Host "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
     if ($Subtitle) {
-        Write-Host "$($_C.H1)$([char]0x2551)$($_C.Dim) $Subtitle$($_C.Reset)$(' ' * ($subtitlePad - 1))$($_C.H1)$([char]0x2551)$($_C.Reset)"
+        Write-Host "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)"
     }
     Write-Host "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)"
     Write-Host ''
