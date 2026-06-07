@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added `internal\Invoke-SdioDriverAudit.ps1`, an audit adapter that parses SDIO matcher logs or launches SDIO with install disabled, extracts indexed driver candidates, labels exact hardware ID vs compatible-ID fallback matches, and can write per-device SDIO reports into the DeviceCheck cache for the selected-details pane.
+- Added cached `SDIO Matches` rendering to selected-device details, showing candidate status labels, match kind, version/date, INF, driver pack, the installed device ID, and the candidate INF hardware ID without running SDIO from the TUI render loop.
+- Added `-UpdateAllDeviceCheckCaches` to the SDIO audit adapter so one SDIO log can populate cached match details for every present local device that SDIO matched.
 - Added higher-resolution Agent instrumentation: Gemini response durations, tool cache hit/miss events, live tool start/complete events with duration and result size, rendered-browser helper timing breakdowns, and latest Agent activity in the TUI status line. Long Agent gaps now identify whether the wait is model latency, cache miss, Chrome startup, page settling, search/result loading, scrolling, or extraction.
 - Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
 

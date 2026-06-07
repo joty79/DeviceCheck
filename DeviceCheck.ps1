@@ -612,6 +612,7 @@ $script:MonitorEdidIdentityCache = @{}
 $script:MonitorWmiEvidenceCache = @{}
 $script:MonitorInfEvidenceCache = @{}
 $script:EvidenceCacheMemory = @{}
+$script:SdioAuditCacheMemory = @{}
 $script:AnsiOscRegex = [regex]::new([string]([char]27) + '\][^\a]*(\a|' + [string]([char]27) + '\\)', 'Compiled')
 $script:AnsiCsiRegex = [regex]::new([string]([char]27) + '\[[0-9;?]*[A-Za-z]', 'Compiled')
 $script:VisibleRowsDirty = $true
@@ -1947,6 +1948,116 @@ function Add-InstalledDriverDetailLines {
     }
 }
 
+function Get-SdioCandidateColor {
+    param($Candidate)
+
+    $labels = @(Get-NotePropertyValue -Object $Candidate -Name 'StatusLabels')
+    if ($labels -contains 'BETTER' -or $labels -contains 'NEW') { return $_C.OK }
+    if ($labels -contains 'WORSE' -or $labels -contains 'INVALID') { return $_C.Warn }
+    if ($labels -contains 'CURRENT' -or $labels -contains 'SAME') { return $_C.Info }
+    return $_C.White
+}
+
+function Add-SdioDriverMatchDetailLines {
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.List[string]]$Lines,
+        [string]$InstanceId,
+        [int]$Width,
+        [int]$MaxCandidates = 3
+    )
+
+    $audit = Read-CachedSdioAudit -InstanceId $InstanceId
+    if ($null -eq $audit) {
+        return
+    }
+
+    $devices = @(Get-NotePropertyValue -Object $audit -Name 'Devices')
+    if ($devices.Count -eq 0) {
+        return
+    }
+
+    $device = $devices | Where-Object { [int](Get-NotePropertyValue -Object $_ -Name 'CandidateCount') -gt 0 } | Select-Object -First 1
+    if ($null -eq $device) {
+        $device = $devices | Select-Object -First 1
+    }
+
+    $candidates = @(Get-NotePropertyValue -Object $device -Name 'Candidates')
+    if ($candidates.Count -eq 0) {
+        return
+    }
+
+    $Lines.Add((New-SectionLine -Title 'SDIO Matches' -Width $Width))
+
+    $generatedAt = [string](Get-NotePropertyValue -Object $audit -Name 'GeneratedAt')
+    if (-not [string]::IsNullOrWhiteSpace($generatedAt)) {
+        Add-KeyValueLines -Lines $Lines -Key 'Audit' -Value $generatedAt -Width $Width -ValueColor $_C.Dim
+    }
+
+    $candidateCount = [int](Get-NotePropertyValue -Object $device -Name 'CandidateCount')
+    if ($candidateCount -gt 0) {
+        Add-KeyValueLines -Lines $Lines -Key 'Candidates' -Value "$candidateCount indexed matches" -Width $Width -ValueColor $_C.Info
+    }
+
+    $installed = Get-NotePropertyValue -Object $device -Name 'Installed'
+    $installedHardwareId = [string](Get-NotePropertyValue -Object $installed -Name 'HardwareId')
+    if (-not [string]::IsNullOrWhiteSpace($installedHardwareId)) {
+        Add-KeyValueLines -Lines $Lines -Key 'Installed ID' -Value $installedHardwareId -Width $Width -ValueColor $_C.Info
+    }
+
+    $warnings = @(Get-NotePropertyValue -Object $audit -Name 'Warning')
+    if ($warnings.Count -gt 0) {
+        Add-KeyValueLines -Lines $Lines -Key 'Caution' -Value ([string]$warnings[0]) -Width $Width -ValueColor $_C.Warn
+    }
+
+    $index = 1
+    foreach ($candidate in @($candidates | Select-Object -First $MaxCandidates)) {
+        $labels = @(Get-NotePropertyValue -Object $candidate -Name 'StatusLabels') | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+        $statusText = if ($labels.Count -gt 0) { $labels -join '+' } else { [string](Get-NotePropertyValue -Object $candidate -Name 'Status') }
+        $matchKind = [string](Get-NotePropertyValue -Object $candidate -Name 'MatchKind')
+        if ([string]::IsNullOrWhiteSpace($matchKind)) { $matchKind = 'Unknown' }
+        $candidateColor = Get-SdioCandidateColor -Candidate $candidate
+
+        Add-KeyValueLines -Lines $Lines -Key "#$index" -Value "$matchKind / $statusText" -Width $Width -ValueColor $candidateColor
+
+        $version = [string](Get-NotePropertyValue -Object $candidate -Name 'Version')
+        $date = [string](Get-NotePropertyValue -Object $candidate -Name 'Date')
+        $versionText = (@($version, $date) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' / '
+        if (-not [string]::IsNullOrWhiteSpace($versionText)) {
+            Add-KeyValueLines -Lines $Lines -Key 'Version' -Value $versionText -Width $Width -ValueColor $_C.OK
+        }
+
+        $description = [string](Get-NotePropertyValue -Object $candidate -Name 'Description')
+        if (-not [string]::IsNullOrWhiteSpace($description)) {
+            Add-KeyValueLines -Lines $Lines -Key 'Name' -Value $description -Width $Width
+        }
+
+        $hardwareId = [string](Get-NotePropertyValue -Object $candidate -Name 'HardwareId')
+        if (-not [string]::IsNullOrWhiteSpace($hardwareId)) {
+            Add-KeyValueLines -Lines $Lines -Key 'INF HWID' -Value $hardwareId -Width $Width -ValueColor $_C.Info
+        }
+
+        $infFile = [string](Get-NotePropertyValue -Object $candidate -Name 'InfFile')
+        if (-not [string]::IsNullOrWhiteSpace($infFile)) {
+            Add-KeyValueLines -Lines $Lines -Key 'INF' -Value $infFile -Width $Width -ValueColor $_C.Dim
+        }
+
+        $packName = [string](Get-NotePropertyValue -Object $candidate -Name 'PackName')
+        if (-not [string]::IsNullOrWhiteSpace($packName)) {
+            Add-KeyValueLines -Lines $Lines -Key 'Pack' -Value (Split-Path -Path $packName -Leaf) -Width $Width -ValueColor $_C.Dim
+        }
+
+        $index++
+    }
+}
+
+function Get-SdioAuditCachePath {
+    param([string]$InstanceId)
+
+    $deviceHash = New-DeviceCheckHash -Text $InstanceId
+    return (Join-Path -Path $script:MachineCacheRoot -ChildPath "sdio-audit\$deviceHash.json")
+}
+
 function Get-DeviceEvidenceCachePath {
     param([string]$InstanceId)
 
@@ -1993,13 +2104,35 @@ function Read-CachedDeviceEvidence {
     }
 }
 
+function Read-CachedSdioAudit {
+    param([string]$InstanceId)
+
+    if ([string]::IsNullOrWhiteSpace($InstanceId)) { return $null }
+    if ($script:SdioAuditCacheMemory.ContainsKey($InstanceId)) {
+        return $script:SdioAuditCacheMemory[$InstanceId]
+    }
+
+    $cachePath = Get-SdioAuditCachePath -InstanceId $InstanceId
+    if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { return $null }
+
+    try {
+        $parsed = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+        $script:SdioAuditCacheMemory[$InstanceId] = $parsed
+        return $parsed
+    } catch {
+        return $null
+    }
+}
+
 function Invalidate-EvidenceCache {
     param([string]$InstanceId)
 
     if (-not [string]::IsNullOrWhiteSpace($InstanceId)) {
         $script:EvidenceCacheMemory.Remove($InstanceId)
+        $script:SdioAuditCacheMemory.Remove($InstanceId)
     } else {
         $script:EvidenceCacheMemory.Clear()
+        $script:SdioAuditCacheMemory.Clear()
     }
 }
 
@@ -4009,6 +4142,7 @@ function Get-DetailDisplayLines {
             }
 
             Add-InstalledDriverDetailLines -Lines $lines -Evidence $cachedEvidence -Width $Width
+            Add-SdioDriverMatchDetailLines -Lines $lines -InstanceId $SelectedRow.Ref.InstanceId -Width $Width
 
             $snapshotPath = Get-NotePropertyValue -Object $cachedEvidence -Name 'SnapshotPath'
             if (-not [string]::IsNullOrWhiteSpace([string]$snapshotPath)) {
@@ -4471,6 +4605,12 @@ function Render-FrameLegacy {
             Add-InstalledDriverDetailLines -Lines $installedDriverLines -Evidence $cachedEvidence -Width (Get-UiWidth)
             foreach ($installedDriverLine in $installedDriverLines) {
                 Write-Host "$installedDriverLine$($_C.EraseLn)"
+            }
+
+            $sdioDriverLines = [System.Collections.Generic.List[string]]::new()
+            Add-SdioDriverMatchDetailLines -Lines $sdioDriverLines -InstanceId $selectedRow.Ref.InstanceId -Width (Get-UiWidth)
+            foreach ($sdioDriverLine in $sdioDriverLines) {
+                Write-Host "$sdioDriverLine$($_C.EraseLn)"
             }
 
             $cachePath = Get-DeviceEvidenceCachePath -InstanceId $selectedRow.Ref.InstanceId

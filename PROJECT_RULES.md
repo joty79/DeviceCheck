@@ -56,6 +56,20 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-08
+Problem: DeviceCheck needed to compare known-good installed drivers with SDIO's indexed candidates without copying SDIO source logic or treating fallback matches as exact driver proof.
+Root cause: SDIO ranks candidates from its own INF indexes and can propose same-version drivers through compatible IDs even when the installed driver matched a more specific hardware ID such as `SUBSYS+REV`. The first NEOS Realtek 5GbE sample showed SDIO candidates with status `CURRENT+WORSE` because the SDIO INF rows matched `PCI\VEN_10EC&DEV_8126&REV_01` / `PCI\VEN_10EC&DEV_8126`, not the installed exact `PCI\VEN_10EC&DEV_8126&SUBSYS_7E511462&REV_01`.
+Guardrail/rule: Treat SDIO as an external audit oracle. Parse SDIO matcher logs and store candidate facts, status bits, INF path, pack path, version/date, and match kind, but do not promote SDIO candidates into install recommendations. DeviceCheck must label exact hardware ID, matching-device ID, hardware-ID, and compatible-ID fallback matches separately.
+Files affected: `internal\Invoke-SdioDriverAudit.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and `internal\Invoke-SdioDriverAudit.ps1`; passive SDIO parse against the NEOS log `D:\Temp\Windows\UserTemp\DeviceCheck-SDIO-20260608-010409\logs\log.txt` matched the Realtek 5GbE device, wrote DeviceCheck cache JSON, and confirmed first SDIO candidate as `CompatibleId / WORSE+CURRENT`, version `10.79.50.1003`, HWID `PCI\VEN_10EC&DEV_8126&REV_01`; all-device cache population from the same log wrote 49 per-device SDIO cache files; `git diff --check`; no-index whitespace check for new `internal\Invoke-SdioDriverAudit.ps1`.
+
+Date: 2026-06-08
+Problem: During SDIO audit exploration, ad hoc PowerShell diagnostics repeatedly hit parser errors when complex inline expressions were piped directly.
+Root cause: Combining `foreach` output, hashtable/object construction, inline `if/else`, and a trailing pipeline in one command made it easy for PowerShell to parse an empty pipe element or malformed expression.
+Guardrail/rule: For diagnostic object pipelines, assign `foreach` output to a named `$rows` variable first, avoid inline multi-statement `if/else` inside hashtable values unless the expression is safely parenthesized, and pipe `$rows` afterward. Prefer small diagnostic scripts over compressed one-liners when inspecting logs or registry/device data.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Captured after real parser failures in SDIO log/device audit diagnostics.
+
 Date: 2026-06-07
 Problem: Agent answers rendered as all-white plain text, so Markdown structure, links, inline hardware IDs, source sections, and warnings were hard to scan in the selected-details pane.
 Root cause: The TUI intentionally called `Convert-MarkdownResultToPlain` before wrapping the Agent answer, stripping Markdown markers and then coloring every answer line white. PowerShell's built-in `Show-Markdown` / `ConvertFrom-Markdown -AsVT100EncodedString` can render Markdown, but its output is a full terminal-oriented VT100 string and can violate DeviceCheck's pane width/height control.
