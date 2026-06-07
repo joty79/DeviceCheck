@@ -678,3 +678,10 @@ Root cause: The evidence collection was executed synchronously on the main threa
 Guardrail/rule: Run the remote snapshot collection asynchronously using `[PowerShell]::Create()` and `BeginInvoke()`. In the main thread loop, poll for completion, read keys, and animate the progress bar (marquee plus spinner) every 100ms. Handle window `ResizeEvent` dynamically and allow user cancellation at any time by pressing `ESC` (which calls `$ps.Stop()`).
 Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Checked syntax with `Get-Command -Syntax -File DeviceCheck.ps1` successfully.
+
+Date: 2026-06-07
+Problem: The requested three-row footer rendered as one shortcut segment per row, producing a tall broken vertical list.
+Root cause: The footer rows were built as nested arrays and passed through a typed `object[][]` helper, letting PowerShell flatten/enumerate the row structure differently than intended.
+Guardrail/rule: For fixed TUI footer/header rows, prefer explicit row variables and explicit render calls over nested-array helper abstractions. If nested row collections are truly needed, validate the rendered row count with a smoke test before treating the layout as fixed.
+Files affected: `DeviceCheck.ps1`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; narrow renderer line-budget smoke for terminal heights 16/20/24/25/30/40 with and without batch status; `git diff --check`.

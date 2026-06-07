@@ -4381,19 +4381,23 @@ function Render-FrameLegacy {
     $segments = @(
         New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text "$([char]0x2190)$([char]0x2192)" -Color $_C.White
+        New-UiShortcutSegment -Text ' pane   ' -Color $_C.Dim
         New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'R' -Color $_C.Info
-        New-UiShortcutSegment -Text ' = system scan   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'E' -Color $_C.OK
-        New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'Ctrl+L' -Color $_C.Gold
+        New-UiShortcutSegment -Text ' = connect   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'M' -Color $_C.White
         New-UiShortcutSegment -Text ' = models   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'A' -Color $_C.Info
         New-UiShortcutSegment -Text ' = agent   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'S' -Color $_C.Gold
         New-UiShortcutSegment -Text ' = web/AI   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'Q / Esc' -Color $_C.Fail
+        New-UiShortcutSegment -Text 'R' -Color $_C.Info
+        New-UiShortcutSegment -Text ' = refresh   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'E' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = evidence   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'Esc' -Color $_C.Fail
         New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
     )
     Write-UiShortcutSegments -Segments $segments
@@ -4513,7 +4517,11 @@ function Render-Frame {
 
     $useDualPane = ($uiWidth -ge 136)
     $batchStatus = Get-EvidenceBatchStatusText
+    if ($frameHeightBudget -lt 16) {
+        $batchStatus = ''
+    }
     $batchRows = if ([string]::IsNullOrWhiteSpace($batchStatus)) { 0 } else { 1 }
+    $footerRows = 3
     $narrowDetailMaxLines = 0
 
     if ($useDualPane) {
@@ -4521,7 +4529,7 @@ function Render-Frame {
         $availablePaneWidth = [Math]::Max(80, $uiWidth - $dividerWidth)
         $leftWidth = [int][Math]::Floor($availablePaneWidth / 2)
         $rightWidth = $availablePaneWidth - $leftWidth
-        $maxVisible = [Math]::Max(0, $frameHeightBudget - 11 - $batchRows)
+        $maxVisible = [Math]::Max(0, $frameHeightBudget - 10 - $batchRows - $footerRows)
     } else {
         $leftWidth = $uiWidth
         $rightWidth = $uiWidth
@@ -4533,7 +4541,7 @@ function Render-Frame {
         $narrowDetailMaxLines = [Math]::Max(0, $narrowDetailMaxLines)
 
         # Narrow/short terminals must not write past the viewport or cursor-home redraws corrupt the header.
-        $fixedNarrowRows = 14 + $batchRows
+        $fixedNarrowRows = 12 + $footerRows + $batchRows
         $maxVisible = [Math]::Max(0, $frameHeightBudget - $fixedNarrowRows - $narrowDetailMaxLines)
     }
 
@@ -4703,29 +4711,35 @@ function Render-Frame {
         }
     }
 
-    $segments = @(
+    $footerRow1 = @(
         New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
         New-UiShortcutSegment -Text "$([char]0x2190)$([char]0x2192)" -Color $_C.White
         New-UiShortcutSegment -Text ' pane   ' -Color $_C.Dim
         New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'R' -Color $_C.Info
-        New-UiShortcutSegment -Text ' = scan/refresh   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'Ctrl+L' -Color $_C.Gold
-        New-UiShortcutSegment -Text ' = connect   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'E' -Color $_C.OK
-        New-UiShortcutSegment -Text ' = evidence/root 2x   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text ' = connect' -Color $_C.Dim
+    )
+    $footerRow2 = @(
         New-UiShortcutSegment -Text 'M' -Color $_C.White
         New-UiShortcutSegment -Text ' = models   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'A' -Color $_C.Info
         New-UiShortcutSegment -Text ' = agent   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'S' -Color $_C.Gold
-        New-UiShortcutSegment -Text ' = web/AI   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text 'Q / Esc' -Color $_C.Fail
+        New-UiShortcutSegment -Text ' = web/AI' -Color $_C.Dim
+    )
+    $footerRow3 = @(
+        New-UiShortcutSegment -Text 'R' -Color $_C.Info
+        New-UiShortcutSegment -Text ' = refresh   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'E' -Color $_C.OK
+        New-UiShortcutSegment -Text ' = evidence   ' -Color $_C.Dim
+        New-UiShortcutSegment -Text 'Esc' -Color $_C.Fail
         New-UiShortcutSegment -Text ' = exit' -Color $_C.Dim
     )
-    Add-FrameShortcutSegments -Frame $frame -Segments $segments -Width $uiWidth
+    Add-FrameShortcutSegments -Frame $frame -Segments $footerRow1 -Width $uiWidth
+    Add-FrameShortcutSegments -Frame $frame -Segments $footerRow2 -Width $uiWidth
+    Add-FrameShortcutSegments -Frame $frame -Segments $footerRow3 -Width $uiWidth
     $null = $frame.Append("$($_E)[J")
     $null = $frame.Append("$($_E)[?2026l")
 

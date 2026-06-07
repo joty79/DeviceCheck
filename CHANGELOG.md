@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
 
 ### Fixed
+- Split the main TUI footer into three stable shortcut rows and removed `Q` from the visible exit hint, while leaving `Q` as a hidden/backward-compatible exit key.
 - Compacted the header machine summary without removing any underlying evidence: omitted generic system manufacturer/model text, removed the live clock, shortened Windows captions (`Win10 Pro`), shortened common CPU names (`Ryzen 7 9700X`, `i7-6700K`), stripped trailing MSI board code parentheses, and changed counts to `dev` / `cat`.
 - Wrapped long selected-details key/value values as real frame rows instead of truncating with `...`, so fields such as `InstanceId`, `HardwareId`, driver keys, and local identity rows stay readable during live terminal stretching/shrinking.
 - Widened the selected-details key column by one character on roomy panes so labels such as `Storage Vendor` display fully without wrapping or breaking row alignment.
