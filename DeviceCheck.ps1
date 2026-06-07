@@ -2678,14 +2678,118 @@ function Wrap-PlainText {
     return $lines
 }
 
-function Convert-MarkdownResultToPlain {
+function Convert-MarkdownResultToDisplayText {
     param([AllowEmptyString()][string]$Text)
 
     if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
-    $plain = $Text -replace '\*\*', ''
-    $plain = $plain -replace '(?m)^\s{0,3}#{1,6}\s*', ''
-    $plain = [regex]::Replace($plain, '\[([^\]]+)\]\((https?://[^)]+)\)', '$1 - $2')
+    $plain = [regex]::Replace($Text, '\[([^\]]+)\]\((https?://[^)]+)\)', '$1 - $2')
+    $plain = $plain -replace '\*\*', ''
     return $plain.Trim()
+}
+
+function Convert-MarkdownInlineToAnsi {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [string]$BaseColor = $null
+    )
+
+    if (-not $BaseColor) { $BaseColor = $_C.White }
+    if ([string]::IsNullOrEmpty($Text)) { return '' }
+
+    $ansiText = [string]$Text
+    $ansiText = [regex]::Replace($ansiText, '`([^`]+)`', {
+        param($match)
+        return "$($_C.Info)$($match.Groups[1].Value)$BaseColor"
+    })
+    $ansiText = [regex]::Replace($ansiText, '(https?://[^\s\]\)\}>"]+)', {
+        param($match)
+        $url = $match.Groups[1].Value.TrimEnd('.', ',', ';', ':')
+        $suffix = $match.Groups[1].Value.Substring($url.Length)
+        $label = New-TerminalHyperlink -Label $url -Url $url
+        return "$($_C.Info)$label$BaseColor$suffix"
+    })
+
+    return $ansiText
+}
+
+function Add-WrappedMarkdownParagraphLines {
+    param(
+        [Parameter(Mandatory)]$Lines,
+        [AllowEmptyString()][string]$Text,
+        [int]$Width,
+        [int]$MaxLines,
+        [string]$Color = $null,
+        [string]$FirstPrefix = '  ',
+        [string]$RestPrefix = '  '
+    )
+
+    $remaining = [Math]::Max(0, $MaxLines)
+    if ($remaining -le 0 -or [string]::IsNullOrWhiteSpace($Text)) { return 0 }
+    if (-not $Color) { $Color = $_C.White }
+
+    $firstPrefixPlain = Remove-AnsiSequence -Text $FirstPrefix
+    $restPrefixPlain = Remove-AnsiSequence -Text $RestPrefix
+    $bodyWidth = [Math]::Max(8, $Width - [Math]::Max($firstPrefixPlain.Length, $restPrefixPlain.Length))
+    $wrapped = @(Wrap-PlainText -Text $Text -Width $bodyWidth -MaxLines $remaining)
+    $written = 0
+
+    for ($i = 0; $i -lt $wrapped.Count -and $written -lt $remaining; $i++) {
+        $prefix = if ($i -eq 0) { $FirstPrefix } else { $RestPrefix }
+        $prefixPlainLength = (Remove-AnsiSequence -Text $prefix).Length
+        $lineWidth = [Math]::Max(1, $Width - $prefixPlainLength)
+        $lineText = Convert-MarkdownInlineToAnsi -Text (Format-PlainToWidth -Text $wrapped[$i] -Width $lineWidth) -BaseColor $Color
+        $Lines.Add("$prefix$Color$lineText$($_C.Reset)")
+        $written++
+    }
+
+    return $written
+}
+
+function Add-MarkdownDetailTextLines {
+    param(
+        [Parameter(Mandatory)]$Lines,
+        [AllowEmptyString()][string]$Text,
+        [int]$Width,
+        [int]$MaxLines
+    )
+
+    $remaining = [Math]::Max(0, $MaxLines)
+    if ($remaining -le 0 -or [string]::IsNullOrWhiteSpace($Text)) { return }
+
+    $normalized = $Text -replace "`r", ''
+    foreach ($rawLine in ($normalized -split "`n")) {
+        if ($remaining -le 0) { break }
+        $line = $rawLine.TrimEnd()
+
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            $Lines.Add('')
+            $remaining--
+            continue
+        }
+
+        if ($line -match '^\s{0,3}#{1,6}\s+(.+)$') {
+            $heading = Convert-MarkdownResultToDisplayText -Text $Matches[1]
+            $remaining -= Add-WrappedMarkdownParagraphLines -Lines $Lines -Text $heading -Width $Width -MaxLines $remaining -Color "$($_C.Bold)$($_C.H1)" -FirstPrefix '  ' -RestPrefix '  '
+            continue
+        }
+
+        if ($line -match '^\s{0,3}(\d+)\.\s+(.+)$') {
+            $number = $Matches[1]
+            $body = Convert-MarkdownResultToDisplayText -Text $Matches[2]
+            $remaining -= Add-WrappedMarkdownParagraphLines -Lines $Lines -Text $body -Width $Width -MaxLines $remaining -Color "$($_C.Bold)$($_C.White)" -FirstPrefix "  $($_C.Gold)$number.$($_C.Reset) " -RestPrefix '     '
+            continue
+        }
+
+        if ($line -match '^\s{0,3}[*+-]\s+(.+)$') {
+            $body = Convert-MarkdownResultToDisplayText -Text $Matches[1]
+            $remaining -= Add-WrappedMarkdownParagraphLines -Lines $Lines -Text $body -Width $Width -MaxLines $remaining -Color $_C.White -FirstPrefix "  $($_C.OK)*$($_C.Reset) " -RestPrefix '    '
+            continue
+        }
+
+        $display = Convert-MarkdownResultToDisplayText -Text $line
+        $color = if ($display -match ':\s*$') { "$($_C.Bold)$($_C.H1)" } elseif ($display -match 'https?://') { $_C.Info } else { $_C.White }
+        $remaining -= Add-WrappedMarkdownParagraphLines -Lines $Lines -Text $display -Width $Width -MaxLines $remaining -Color $color -FirstPrefix '  ' -RestPrefix '  '
+    }
 }
 
 function Get-UrlsFromText {
@@ -3956,9 +4060,8 @@ function Get-DetailDisplayLines {
             }
 
             if (-not [string]::IsNullOrWhiteSpace($detailText)) {
-                $plainDetail = Convert-MarkdownResultToPlain -Text $detailText
                 $lines.Add((New-SectionLine -Title 'Answer' -Width $Width))
-                Add-WrappedDetailTextLines -Lines $lines -Text $plainDetail -Width $Width -MaxLines ([Math]::Max(2, $MaxLines - $lines.Count - 5))
+                Add-MarkdownDetailTextLines -Lines $lines -Text $detailText -Width $Width -MaxLines ([Math]::Max(2, $MaxLines - $lines.Count - 5))
 
                 $urls = @(Get-UrlsFromText -Text $detailText)
                 if ($urls.Count -gt 0 -and $lines.Count -lt ($MaxLines - 2)) {
@@ -4893,11 +4996,6 @@ function Invoke-SelectedWebScan {
 
     Reset-AllEvidenceScanConfirmation
 
-    if (Test-RemoteSnapshotTargetActive) {
-        Set-SystemStatusMessage -Message "Web/AI lookups are local-target only in this first remote slice. Press R to refresh $($script:TargetComputerName)."
-        return
-    }
-
     $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
     if ($null -eq $currentRow) {
         $lookupLabel = if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' }
@@ -4969,6 +5067,24 @@ function Start-DeviceLookup {
         return
     }
 
+    $preloadedEvidence = $null
+    if (Test-RemoteSnapshotTargetActive) {
+        try {
+            $preloadedEvidence = New-SnapshotDeviceEvidence -Snapshot $script:TargetSnapshot -Device $Dev
+        } catch {
+            $deviceName = Get-DeviceLookupDisplayName -Device $Dev
+            Set-SystemStatusMessage -Message "Remote snapshot evidence unavailable for ${deviceName}: $($_.Exception.Message)"
+            $Dev.SearchStatus = 'Error'
+            $Dev.SearchKind = if ($UseAgent) { 'Agent' } else { $null }
+            $Dev.SearchDetail = $_.Exception.Message
+            $Dev.SearchTracePath = $null
+            $Dev.SearchCheckpointPath = $null
+            $Dev.SearchResults = @("[Remote Snapshot] (Evidence unavailable)")
+            $script:VisibleRowsDirty = $true
+            return
+        }
+    }
+
     $openRouterKey = $env:OPENROUTER_API_KEY
     if ([string]::IsNullOrWhiteSpace($openRouterKey)) {
         try { $openRouterKey = (Get-ItemProperty -Path 'HKCU:\Environment' -ErrorAction SilentlyContinue).OPENROUTER_API_KEY } catch {}
@@ -5026,12 +5142,13 @@ function Start-DeviceLookup {
     $Dev.SearchResults = $newResults
     if ([string]::IsNullOrWhiteSpace($EvidenceBatchId)) {
         $deviceName = Get-DeviceLookupDisplayName -Device $Dev
+        $sourceText = if ($null -ne $preloadedEvidence) { 'remote snapshot' } else { 'local evidence' }
         if ($UseAgent) {
-            Set-SystemStatusMessage -Message "Agent queued: $deviceName | $agentModel"
+            Set-SystemStatusMessage -Message "Agent queued: $deviceName | $agentModel | $sourceText"
         } elseif ($EvidenceOnly) {
-            Set-SystemStatusMessage -Message "Evidence refresh queued: $deviceName"
+            Set-SystemStatusMessage -Message "Evidence refresh queued: $deviceName | $sourceText"
         } else {
-            Set-SystemStatusMessage -Message "Web/AI lookup queued: $deviceName"
+            Set-SystemStatusMessage -Message "Web/AI lookup queued: $deviceName | $sourceText"
         }
     }
     $script:VisibleRowsDirty = $true
@@ -5039,7 +5156,7 @@ function Start-DeviceLookup {
     # Start background runspace for Web and Local Search
     $psWeb = [PowerShell]::Create()
     $null = $psWeb.AddScript({
-        param($DeviceBasics, $MachineEvidence, [string]$MachineCacheRoot, [bool]$EvidenceOnly, [bool]$ForceEvidenceRefresh)
+        param($DeviceBasics, $MachineEvidence, [string]$MachineCacheRoot, [bool]$EvidenceOnly, [bool]$ForceEvidenceRefresh, $PreloadedEvidence)
         $ProgressPreference = 'SilentlyContinue'
         try {
             $InstanceId = $DeviceBasics.InstanceId
@@ -5309,7 +5426,23 @@ function Start-DeviceLookup {
                 return $results
             }
 
-            Write-Output (Get-DeviceEvidence -DeviceBasics $DeviceBasics -MachineEvidence $MachineEvidence -MachineCacheRoot $MachineCacheRoot -ForceEvidenceRefresh $ForceEvidenceRefresh)
+            if ($null -ne $PreloadedEvidence) {
+                $snapshotPath = $PreloadedEvidence.SnapshotPath
+                $resultText = if ([string]::IsNullOrWhiteSpace([string]$snapshotPath)) {
+                    "[Evidence Snapshot] Loaded remote snapshot evidence."
+                } else {
+                    "[Evidence Snapshot] Loaded remote snapshot evidence: $snapshotPath"
+                }
+                Write-Output ([PSCustomObject]@{
+                    Source   = 'Evidence'
+                    Status   = 'Done'
+                    Result   = $resultText
+                    Path     = $snapshotPath
+                    Evidence = $PreloadedEvidence
+                })
+            } else {
+                Write-Output (Get-DeviceEvidence -DeviceBasics $DeviceBasics -MachineEvidence $MachineEvidence -MachineCacheRoot $MachineCacheRoot -ForceEvidenceRefresh $ForceEvidenceRefresh)
+            }
 
             if ($EvidenceOnly) {
                 return $null
@@ -5350,6 +5483,7 @@ function Start-DeviceLookup {
     $null = $psWeb.AddArgument($script:MachineCacheRoot)
     $null = $psWeb.AddArgument([bool]$EvidenceOnly)
     $null = $psWeb.AddArgument([bool]$ForceEvidenceRefresh)
+    $null = $psWeb.AddArgument($preloadedEvidence)
 
     $outputWeb = [System.Management.Automation.PSDataCollection[PSObject]]::new()
     $asyncWeb = $psWeb.BeginInvoke($outputWeb)
@@ -5369,11 +5503,13 @@ function Start-DeviceLookup {
         EvidenceState      = $evidenceState
         EvidenceOnly       = [bool]$EvidenceOnly
         EvidenceBatchId    = $EvidenceBatchId
+        EvidenceSource     = if ($null -ne $preloadedEvidence) { 'remote snapshot' } else { 'local evidence' }
         UseAgent           = [bool]$UseAgent
         AgentModelName     = $agentModel
         ApiKey             = $apiKey
         AgentLogs          = [System.Collections.Generic.List[string]]::new()
         AgentState         = if ($UseAgent) { 'Waiting' } else { 'None' }
+        AgentCurrentActivity = $null
         AgentPs            = $null
         AgentAsync         = $null
         AgentInput         = $null
@@ -5865,7 +6001,11 @@ function Update-ActiveSearches {
                 $search.AgentOutputIndex++
                 if ($null -ne $data) {
                     if ($data.Type -eq 'Log') {
-                        $search.AgentLogs.Add($data.Message)
+                        $logMessage = [string]$data.Message
+                        $search.AgentLogs.Add($logMessage)
+                        if (-not [string]::IsNullOrWhiteSpace($logMessage)) {
+                            $search.AgentCurrentActivity = (($logMessage -replace '[\r\n\t]+', ' ') -replace '\s{2,}', ' ').Trim()
+                        }
                     } elseif ($data.Type -eq 'Result') {
                         $search.AgentState = 'Done'
                         $search.AgentVal = $data.Message
@@ -5988,18 +6128,25 @@ function Update-ActiveSearches {
             }
             if ([string]::IsNullOrWhiteSpace([string](Get-NotePropertyValue -Object $search -Name 'EvidenceBatchId'))) {
                 $deviceName = Get-DeviceLookupDisplayName -Device $search.Device
+                $sourceText = [string](Get-NotePropertyValue -Object $search -Name 'EvidenceSource')
+                if ([string]::IsNullOrWhiteSpace($sourceText)) { $sourceText = 'local evidence' }
+                $activityText = [string](Get-NotePropertyValue -Object $search -Name 'AgentCurrentActivity')
+                if (-not [string]::IsNullOrWhiteSpace($activityText) -and $activityText.Length -gt 110) {
+                    $activityText = $activityText.Substring(0, 107) + '...'
+                }
+                $activitySuffix = if ([string]::IsNullOrWhiteSpace($activityText)) { '' } else { " | $activityText" }
                 if ($search.AgentState -eq 'Waiting') {
-                    Set-SystemStatusMessage -Message "Agent preparing evidence: $deviceName | $mName | ${elapsed}s"
+                    Set-SystemStatusMessage -Message "Agent preparing evidence: $deviceName | $mName | $sourceText | ${elapsed}s$activitySuffix"
                 } elseif ($search.AgentState -eq 'Searching') {
-                    Set-SystemStatusMessage -Message "Agent running: $deviceName | $mName | ${elapsed}s"
+                    Set-SystemStatusMessage -Message "Agent running: $deviceName | $mName | $sourceText | ${elapsed}s$activitySuffix"
                 } elseif ($search.AgentState -eq 'Done') {
-                    Set-SystemStatusMessage -Message "Agent complete: $deviceName | $mName | ${elapsed}s"
+                    Set-SystemStatusMessage -Message "Agent complete: $deviceName | $mName | $sourceText | ${elapsed}s"
                 } elseif ($search.AgentState -eq 'Error') {
-                    Set-SystemStatusMessage -Message "Agent failed: $deviceName | $mName | $($search.AgentVal)"
+                    Set-SystemStatusMessage -Message "Agent failed: $deviceName | $mName | $sourceText | $($search.AgentVal)"
                 } elseif ($search.AgentState -eq 'PausedRateLimit') {
-                    Set-SystemStatusMessage -Message "Agent paused by rate limit: $deviceName | $mName"
+                    Set-SystemStatusMessage -Message "Agent paused by rate limit: $deviceName | $mName | $sourceText"
                 } elseif ($search.AgentState -eq 'PausedBudget') {
-                    Set-SystemStatusMessage -Message "Agent paused by step budget: $deviceName | $mName"
+                    Set-SystemStatusMessage -Message "Agent paused by step budget: $deviceName | $mName | $sourceText"
                 }
             }
         } else {

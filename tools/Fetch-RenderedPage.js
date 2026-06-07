@@ -148,6 +148,15 @@ async function connectCdp(wsUrl) {
 
 async function main() {
   const deadline = Date.now() + timeoutMs;
+  const runStartedAt = Date.now();
+  const timings = [];
+  const markTiming = (name, startedAt) => {
+    timings.push({
+      name,
+      durationMs: Date.now() - startedAt,
+      elapsedMs: Date.now() - runStartedAt,
+    });
+  };
   const chrome = findChrome();
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devicecheck-chrome-'));
   const args = [
@@ -166,16 +175,21 @@ async function main() {
   let cdp = null;
 
   try {
+    let stageStartedAt = Date.now();
     const port = await waitForDevToolsPort(profileDir, deadline);
     const target = await waitForPageTarget(port, deadline);
     cdp = await connectCdp(target.webSocketDebuggerUrl);
+    markTiming('chrome-cdp-connect', stageStartedAt);
     const { send } = cdp;
 
+    stageStartedAt = Date.now();
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Page.navigate', { url: targetUrl });
     await sleep(6000);
+    markTiming('initial-page-wait', stageStartedAt);
 
+    stageStartedAt = Date.now();
     await send('Runtime.evaluate', {
       expression: `(() => {
         const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
@@ -186,8 +200,10 @@ async function main() {
       returnByValue: true,
     }).catch(() => {});
     await sleep(1500);
+    markTiming('consent-check', stageStartedAt);
 
     if (targetText) {
+      stageStartedAt = Date.now();
       await send('Runtime.evaluate', {
         expression: `(() => {
           const rawNeedles = ${JSON.stringify(targetText)}.split('|').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -211,9 +227,11 @@ async function main() {
         returnByValue: true,
       }).catch(() => {});
       await sleep(4000);
+      markTiming('target-click-wait', stageStartedAt);
     }
 
     if (inputText) {
+      stageStartedAt = Date.now();
       await send('Runtime.evaluate', {
         expression: `(() => {
           const value = ${JSON.stringify(inputText)};
@@ -254,8 +272,10 @@ async function main() {
         returnByValue: true,
       }).catch(() => {});
       await sleep(7000);
+      markTiming('input-submit-wait', stageStartedAt);
     }
 
+    stageStartedAt = Date.now();
     for (let i = 0; i < 4; i++) {
       await send('Runtime.evaluate', {
         expression: 'window.scrollTo(0, document.body.scrollHeight);',
@@ -268,6 +288,7 @@ async function main() {
       returnByValue: true,
     }).catch(() => {});
     await sleep(1000);
+    markTiming('scroll-settle', stageStartedAt);
 
     const expression = `(() => {
       const text = (document.body && document.body.innerText || '').replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();
@@ -289,13 +310,19 @@ async function main() {
       };
     })()`;
 
+    stageStartedAt = Date.now();
     const evaluated = await send('Runtime.evaluate', {
       expression,
       returnByValue: true,
       awaitPromise: true,
     });
+    markTiming('extract-page', stageStartedAt);
 
-    console.log(JSON.stringify(evaluated.result.value, null, 2));
+    const value = evaluated.result.value || {};
+    value.timings = timings;
+    value.totalDurationMs = Date.now() - runStartedAt;
+    value.timeoutMs = timeoutMs;
+    console.log(JSON.stringify(value, null, 2));
   } finally {
     try {
       if (cdp && cdp.ws) cdp.ws.close();

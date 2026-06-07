@@ -31,6 +31,7 @@ if ([string]::IsNullOrWhiteSpace($ApiKey)) {
     return
 }
 $uri = "https://generativelanguage.googleapis.com/v1beta/models/$($resolvedModelName):generateContent?key=$ApiKey"
+$script:AgentDeferredEvents = [System.Collections.Generic.List[object]]::new()
 
 function Get-WebExceptionBody {
     param(
@@ -160,6 +161,69 @@ function Write-AgentEvent {
     Write-Output ([PSCustomObject]@{ Type = $Type; Message = $Message })
 }
 
+function Add-AgentDeferredEvent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Type,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [AllowNull()]$Data
+    )
+
+    if ($null -eq (Get-Variable -Name AgentDeferredEvents -Scope Script -ErrorAction SilentlyContinue)) {
+        $script:AgentDeferredEvents = [System.Collections.Generic.List[object]]::new()
+    }
+
+    $script:AgentDeferredEvents.Add([pscustomobject]@{
+        Type    = $Type
+        Message = $Message
+        Data    = $Data
+    })
+}
+
+function Flush-AgentDeferredEvents {
+    if ($null -eq (Get-Variable -Name AgentDeferredEvents -Scope Script -ErrorAction SilentlyContinue)) { return }
+    if ($null -eq $script:AgentDeferredEvents -or $script:AgentDeferredEvents.Count -eq 0) { return }
+
+    $events = @($script:AgentDeferredEvents)
+    $script:AgentDeferredEvents.Clear()
+
+    foreach ($event in $events) {
+        Write-AgentEvent -Type $event.Type -Message $event.Message -Data $event.Data
+    }
+}
+
+function Write-AgentToolTimingSummary {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [AllowEmptyString()][string]$Text
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+
+    try {
+        $parsed = $Text | ConvertFrom-Json -ErrorAction Stop
+        $timings = @(Get-NotePropertyValue -Object $parsed -Name 'timings')
+        if ($timings.Count -eq 0) { return }
+
+        $summary = @(
+            foreach ($timing in $timings) {
+                $name = [string](Get-NotePropertyValue -Object $timing -Name 'name')
+                $duration = Get-NotePropertyValue -Object $timing -Name 'durationMs'
+                if (-not [string]::IsNullOrWhiteSpace($name) -and $null -ne $duration) {
+                    "$name=${duration}ms"
+                }
+            }
+        ) -join '; '
+        if ([string]::IsNullOrWhiteSpace($summary)) { return }
+
+        $totalDuration = Get-NotePropertyValue -Object $parsed -Name 'totalDurationMs'
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Timing] $ToolName total=${totalDuration}ms | $summary" -Data @{
+            Tool            = $ToolName
+            TotalDurationMs = $totalDuration
+            Timings         = $timings
+        }
+    } catch {}
+}
+
 function New-AgentHash {
     param([AllowEmptyString()][string]$Text)
 
@@ -247,10 +311,37 @@ function Invoke-CachedTool {
 
     $cached = Get-CachedToolResult -ToolName $ToolName -ArgsObject $ArgsObject -MaxAgeHours $MaxAgeHours
     if ($null -ne $cached) {
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Cache Hit] $ToolName reused result from $($cached.CapturedAt.ToString('u'))" -Data @{
+            Tool        = $ToolName
+            CachePath   = $cached.Path
+            CapturedAt  = $cached.CapturedAt.ToString('o')
+            MaxAgeHours = $MaxAgeHours
+        }
         return "[Cached $ToolName result from $($cached.CapturedAt.ToString('u'))]`n$($cached.Result)"
     }
 
-    $result = Convert-AgentValueToText -Value (& $Action)
+    Add-AgentDeferredEvent -Type 'Log' -Message "[Cache Miss] $ToolName running live action" -Data @{
+        Tool        = $ToolName
+        MaxAgeHours = $MaxAgeHours
+    }
+    $toolTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $result = Convert-AgentValueToText -Value (& $Action)
+        $toolTimer.Stop()
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Complete] $ToolName live action finished in $($toolTimer.ElapsedMilliseconds)ms" -Data @{
+            Tool       = $ToolName
+            DurationMs = $toolTimer.ElapsedMilliseconds
+            ResultSize = if ($null -eq $result) { 0 } else { [string]$result.Length }
+        }
+    } catch {
+        $toolTimer.Stop()
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Error] $ToolName failed after $($toolTimer.ElapsedMilliseconds)ms: $($_.Exception.Message)" -Data @{
+            Tool       = $ToolName
+            DurationMs = $toolTimer.ElapsedMilliseconds
+            Error      = $_.Exception.Message
+        }
+        throw
+    }
     Set-CachedToolResult -ToolName $ToolName -ArgsObject $ArgsObject -Result $result
     return $result
 }
@@ -628,7 +719,7 @@ function SearchGoogleRendered {
     $searchQuery = $query
     if ($query -notmatch 'FriendlyName\s*:' -or $query -notmatch 'HardwareId\s*:') {
         $searchQuery = $script:devicePropertiesBlock
-        Write-AgentEvent -Type 'Log' -Message "[Google] Overriding model search query with full Device Properties Block for accurate AI Overview model resolution." -Data @{ OriginalQuery = $query; OverriddenQuery = $searchQuery }
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Google] Overriding model search query with full Device Properties Block for accurate AI Overview model resolution." -Data @{ OriginalQuery = $query; OverriddenQuery = $searchQuery }
     }
 
     $toolArgs = [pscustomobject]@{ query = $searchQuery; policy = 'GoogleRenderedDiscoveryV1' }
@@ -636,11 +727,16 @@ function SearchGoogleRendered {
     $cached = Get-CachedToolResult -ToolName 'SearchGoogleRendered' -ArgsObject $toolArgs -MaxAgeHours 6
     if ($null -ne $cached) {
         if (Test-GoogleRenderedResultUseful -Text $cached.Result) {
+            Add-AgentDeferredEvent -Type 'Log' -Message "[Cache Hit] SearchGoogleRendered reused useful browser result from $($cached.CapturedAt.ToString('u'))" -Data @{
+                Tool       = 'SearchGoogleRendered'
+                CachePath  = $cached.Path
+                CapturedAt = $cached.CapturedAt.ToString('o')
+            }
             return "[Cached SearchGoogleRendered result from $($cached.CapturedAt.ToString('u'))]`n$($cached.Result)"
         }
 
         try { Remove-Item -LiteralPath $cached.Path -Force -ErrorAction SilentlyContinue } catch {}
-        Write-AgentEvent -Type 'Log' -Message "[Google] Ignored empty cached SearchGoogleRendered result and will retry with browser." -Data @{ CachePath = $cached.Path }
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Google] Ignored empty cached SearchGoogleRendered result and will retry with browser." -Data @{ CachePath = $cached.Path }
     }
 
     $script:AgentGoogleSearchCalls++
@@ -655,9 +751,25 @@ function SearchGoogleRendered {
             return "Google rendered search failed: helper not found at $helper"
         }
 
+        $browserTimeoutMs = 70000
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Start] SearchGoogleRendered browser query=$(Format-AgentLogValue -Value $searchQuery -MaxLength 160) timeout=${browserTimeoutMs}ms" -Data @{
+            Tool      = 'SearchGoogleRendered'
+            Query     = $searchQuery
+            Helper    = $helper
+            TimeoutMs = $browserTimeoutMs
+        }
+        $browserTimer = [System.Diagnostics.Stopwatch]::StartNew()
         $output = & $node.Source @($helper, $searchQuery, '70000') 2>&1
+        $browserTimer.Stop()
         $exitCode = $LASTEXITCODE
         $text = ($output | Out-String).Trim()
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Complete] SearchGoogleRendered browser finished in $($browserTimer.ElapsedMilliseconds)ms exit=$exitCode size=$($text.Length)" -Data @{
+            Tool       = 'SearchGoogleRendered'
+            DurationMs = $browserTimer.ElapsedMilliseconds
+            ExitCode   = $exitCode
+            TextLength = $text.Length
+        }
+        Write-AgentToolTimingSummary -ToolName 'SearchGoogleRendered' -Text $text
         if ($exitCode -ne 0) {
             return "Google rendered search failed with exit code ${exitCode}: $text"
         }
@@ -668,7 +780,7 @@ function SearchGoogleRendered {
         if (Test-GoogleRenderedResultUseful -Text $text) {
             Set-CachedToolResult -ToolName 'SearchGoogleRendered' -ArgsObject $toolArgs -Result $text
         } else {
-            Write-AgentEvent -Type 'Log' -Message "[Google] Browser returned an empty Google result; not caching it." -Data @{ Query = $searchQuery }
+            Add-AgentDeferredEvent -Type 'Log' -Message "[Google] Browser returned an empty Google result; not caching it." -Data @{ Query = $searchQuery }
         }
         return $text
     } catch {
@@ -787,11 +899,30 @@ function FetchRenderedUrlText {
         if (-not [string]::IsNullOrWhiteSpace($inputText)) {
             $arguments += $inputText
         }
-        $arguments += '70000'
+        $browserTimeoutMs = 70000
+        $arguments += [string]$browserTimeoutMs
 
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Start] FetchRenderedUrlText browser url=$(Format-AgentLogValue -Value $url -MaxLength 160) timeout=${browserTimeoutMs}ms" -Data @{
+            Tool       = 'FetchRenderedUrlText'
+            Url        = $url
+            TargetText = $targetText
+            InputText  = $inputText
+            Helper     = $helper
+            TimeoutMs  = $browserTimeoutMs
+        }
+        $browserTimer = [System.Diagnostics.Stopwatch]::StartNew()
         $output = & $node.Source @arguments 2>&1
+        $browserTimer.Stop()
         $exitCode = $LASTEXITCODE
         $text = ($output | Out-String).Trim()
+        Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Complete] FetchRenderedUrlText browser finished in $($browserTimer.ElapsedMilliseconds)ms exit=$exitCode size=$($text.Length)" -Data @{
+            Tool       = 'FetchRenderedUrlText'
+            DurationMs = $browserTimer.ElapsedMilliseconds
+            ExitCode   = $exitCode
+            TextLength = $text.Length
+            Url        = $url
+        }
+        Write-AgentToolTimingSummary -ToolName 'FetchRenderedUrlText' -Text $text
         if ($exitCode -ne 0) {
             return "Rendered browser fetch failed with exit code ${exitCode}: $text"
         }
@@ -1134,9 +1265,17 @@ Save-AgentCheckpoint -State 'Running' -Step 0 -Messages $messages -Memory $memor
             tools = $toolsList.ToArray()
         } | ConvertTo-Json -Depth 10
         
+        $geminiTimer = [System.Diagnostics.Stopwatch]::StartNew()
         try {
             $response = Invoke-RestMethod -Uri $uri -Method Post -ContentType "application/json" -Body $body -TimeoutSec 30
+            $geminiTimer.Stop()
+            Write-AgentEvent -Type 'Log' -Message "[Gemini] Step ${iterations}: response received in $($geminiTimer.ElapsedMilliseconds)ms" -Data @{
+                Step       = $iterations
+                DurationMs = $geminiTimer.ElapsedMilliseconds
+                Model      = $resolvedModelName
+            }
         } catch {
+            $geminiTimer.Stop()
             $apiErrorBody = Get-WebExceptionBody -ErrorRecord $_
             $statusCode = Get-WebExceptionStatusCode -ErrorRecord $_
             $retryAfterSeconds = Get-WebExceptionRetryAfterSeconds -ErrorRecord $_
@@ -1147,11 +1286,11 @@ Save-AgentCheckpoint -State 'Running' -Step 0 -Messages $messages -Memory $memor
             if ($statusCode -eq 429 -or $apiError -match '(?i)429|rate limit|quota') {
                 $reason = "Rate limit hit while asking Gemini at step $iterations. Checkpoint saved; resume later without repeating completed tool results."
                 Save-AgentCheckpoint -State 'PausedRateLimit' -Step $iterations -Messages $messages -Memory $memory -Reason $reason -RetryAfterSeconds $retryAfterSeconds
-                Write-AgentEvent -Type 'PausedRateLimit' -Message $reason -Data @{ Step = $iterations; ApiError = $apiErrorBody; RetryAfterSeconds = $retryAfterSeconds; CheckpointPath = $CheckpointPath }
+                Write-AgentEvent -Type 'PausedRateLimit' -Message $reason -Data @{ Step = $iterations; ApiError = $apiErrorBody; RetryAfterSeconds = $retryAfterSeconds; CheckpointPath = $CheckpointPath; DurationMs = $geminiTimer.ElapsedMilliseconds }
                 return
             }
             Save-AgentCheckpoint -State 'Error' -Step $iterations -Messages $messages -Memory $memory -Reason $apiError -RetryAfterSeconds $null
-            Write-AgentEvent -Type 'Error' -Message $apiError -Data @{ Step = $iterations; ApiError = $apiErrorBody }
+            Write-AgentEvent -Type 'Error' -Message $apiError -Data @{ Step = $iterations; ApiError = $apiErrorBody; DurationMs = $geminiTimer.ElapsedMilliseconds }
             return
         }
         
@@ -1219,19 +1358,30 @@ Save-AgentCheckpoint -State 'Running' -Step 0 -Messages $messages -Memory $memor
     
             # Execute tool locally
             $toolResult = $null
-            switch ($funcName) {
-                "SearchWeb" { $toolResult = SearchWeb -query (Get-NotePropertyValue -Object $args -Name 'query') }
-                "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query (Get-NotePropertyValue -Object $args -Name 'query') }
-                "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query (Get-NotePropertyValue -Object $args -Name 'query') }
-                "FetchUrlText" { $toolResult = FetchUrlText -url (Get-NotePropertyValue -Object $args -Name 'url') }
-                "FetchRenderedUrlText" {
-                    $urlParam = Get-NotePropertyValue -Object $args -Name 'url'
-                    $targetTextParam = Get-NotePropertyValue -Object $args -Name 'targetText'
-                    $inputTextParam = Get-NotePropertyValue -Object $args -Name 'inputText'
-                    $toolResult = FetchRenderedUrlText -url $urlParam -targetText $targetTextParam -inputText $inputTextParam
+            try {
+                switch ($funcName) {
+                    "SearchWeb" { $toolResult = SearchWeb -query (Get-NotePropertyValue -Object $args -Name 'query') }
+                    "SearchGoogleCustom" { $toolResult = SearchGoogleCustom -query (Get-NotePropertyValue -Object $args -Name 'query') }
+                    "SearchGoogleRendered" { $toolResult = SearchGoogleRendered -query (Get-NotePropertyValue -Object $args -Name 'query') }
+                    "FetchUrlText" { $toolResult = FetchUrlText -url (Get-NotePropertyValue -Object $args -Name 'url') }
+                    "FetchRenderedUrlText" {
+                        $urlParam = Get-NotePropertyValue -Object $args -Name 'url'
+                        $targetTextParam = Get-NotePropertyValue -Object $args -Name 'targetText'
+                        $inputTextParam = Get-NotePropertyValue -Object $args -Name 'inputText'
+                        $toolResult = FetchRenderedUrlText -url $urlParam -targetText $targetTextParam -inputText $inputTextParam
+                    }
+                    "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId (Get-NotePropertyValue -Object $args -Name 'hardwareId') }
+                    default { $toolResult = "Error: Unknown function '$funcName'" }
                 }
-                "SearchUpdateCatalog" { $toolResult = SearchUpdateCatalog -hardwareId (Get-NotePropertyValue -Object $args -Name 'hardwareId') }
-                default { $toolResult = "Error: Unknown function '$funcName'" }
+            } catch {
+                $toolResult = "Error: Tool '$funcName' failed unexpectedly: $($_.Exception.Message)"
+                Add-AgentDeferredEvent -Type 'Log' -Message "[Tool Error] $funcName failed unexpectedly: $($_.Exception.Message)" -Data @{
+                    Step  = $iterations
+                    Tool  = $funcName
+                    Error = $_.Exception.Message
+                }
+            } finally {
+                Flush-AgentDeferredEvents
             }
             Write-AgentEvent -Type 'Log' -Message "[Tool Result] $funcName -> $(Format-AgentLogValue -Value $toolResult)" -Data @{
                 Step = $iterations

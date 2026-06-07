@@ -8,9 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added higher-resolution Agent instrumentation: Gemini response durations, tool cache hit/miss events, live tool start/complete events with duration and result size, rendered-browser helper timing breakdowns, and latest Agent activity in the TUI status line. Long Agent gaps now identify whether the wait is model latency, cache miss, Chrome startup, page settling, search/result loading, scrolling, or extraction.
 - Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
 
 ### Fixed
+- Rendered Agent Markdown answers with a controlled TUI-safe formatter instead of stripping Markdown into all-white plain text. Agent results now style headings, numbered source sections, bullets, inline code, and URLs while still respecting the selected-details pane width/height budget.
+- Fixed a StrictMode crash in the new Agent deferred logging path. The deferred event queue is now initialized before tool calls and guarded with `Get-Variable`, so cache-hit logging no longer terminates the Agent with "unexpectedly without returning result".
+- Prevented Agent tool-internal log events from being captured as part of tool return values. Cache hit/miss, browser start/complete, and browser timing logs are now deferred and flushed after the tool call, so `[Tool Result]` contains only the actual tool result instead of nested `{ Type = Log }` objects.
+- Added a `.gitattributes` rule for JavaScript files so rendered-browser helper edits stay LF-normalized and Git stops warning that `tools\*.js` will be rewritten to CRLF.
+- Enabled `A` / `S` lookups while viewing a remote snapshot. DeviceCheck now runs the web/AI or Agent workflow locally while feeding it the selected remote device's snapshot evidence, instead of blocking with the misleading "local-target only; press R" message after the snapshot was already refreshed.
 - Made the top status/message line report selected-device Agent/Web lookup actions immediately. Pressing `A` now shows queued/running/complete/failed states, missing `GOOGLE_API_KEY` / `GEMINI_API_KEY` is shown as a visible blocked Agent status, and invalid selections show a clear "select a device" message instead of appearing to do nothing.
 - Added an automatic ASCII glyph fallback for non-UTF-8 console sessions, with `DEVICECHECK_ASCII_UI=1` / `POWERSHELL_TUI_ASCII=1` as manual overrides. DeviceCheck no longer depends on global Windows UTF-8 locale or Nerd Font availability for arrows, tree branches, pane dividers, boxed headers, and footer shortcuts.
 - Split the main TUI footer into three stable shortcut rows and removed `Q` from the visible exit hint, while leaving `Q` as a hidden/backward-compatible exit key.

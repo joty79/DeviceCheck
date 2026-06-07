@@ -151,6 +151,15 @@ async function waitForBodyText(send, deadline) {
 
 async function main() {
   const deadline = Date.now() + timeoutMs;
+  const runStartedAt = Date.now();
+  const timings = [];
+  const markTiming = (name, startedAt) => {
+    timings.push({
+      name,
+      durationMs: Date.now() - startedAt,
+      elapsedMs: Date.now() - runStartedAt,
+    });
+  };
   const chrome = findChrome();
   
   const isPersistent = !process.env.DEVICECHECK_TEMP_PROFILE;
@@ -194,18 +203,23 @@ async function main() {
   let cdp = null;
 
   try {
+    let stageStartedAt = Date.now();
     const port = await waitForDevToolsPort(profileDir, deadline);
     const target = await waitForPageTarget(port, deadline);
     cdp = await connectCdp(target.webSocketDebuggerUrl);
+    markTiming('chrome-cdp-connect', stageStartedAt);
     const { send } = cdp;
 
+    stageStartedAt = Date.now();
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Page.navigate', { url: startUrl });
     await sleep(2500);
     await waitForBodyText(send, Math.min(deadline, Date.now() + 25000));
+    markTiming('google-home-load', stageStartedAt);
 
     // Handle Google Consent popup if visible
+    stageStartedAt = Date.now();
     await send('Runtime.evaluate', {
       expression: `(() => {
         const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
@@ -217,6 +231,7 @@ async function main() {
     }).catch(() => {});
     await sleep(2000);
     await waitForBodyText(send, Math.min(deadline, Date.now() + 15000));
+    markTiming('consent-check', stageStartedAt);
 
     // Emulate typing the search query like a real user (simulate typing first few characters and then pasting for long queries)
     const typeAndSearchExpression = `(async () => {
@@ -286,6 +301,7 @@ async function main() {
       return false;
      })()`;
 
+    stageStartedAt = Date.now();
     const typeResult = await send('Runtime.evaluate', {
       expression: typeAndSearchExpression,
       returnByValue: true,
@@ -296,17 +312,22 @@ async function main() {
     if (typeResult && typeResult.exceptionDetails) {
       console.error("Browser JS Exception: " + JSON.stringify(typeResult.exceptionDetails));
     }
+    markTiming('type-and-submit', stageStartedAt);
     
     // Wait for search results page to load
+    stageStartedAt = Date.now();
     await sleep(3500);
     await waitForBodyText(send, Math.min(deadline, Date.now() + 20000));
+    markTiming('results-load', stageStartedAt);
 
+    stageStartedAt = Date.now();
     for (let i = 0; i < 2; i++) {
       await send('Runtime.evaluate', { expression: 'window.scrollBy(0, 650);', returnByValue: true }).catch(() => {});
       await sleep(1200);
     }
     await send('Runtime.evaluate', { expression: 'window.scrollTo(0, 0);', returnByValue: true }).catch(() => {});
     await sleep(800);
+    markTiming('scroll-settle', stageStartedAt);
 
     const expression = `(() => {
       const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
@@ -363,13 +384,18 @@ async function main() {
       };
     })()`;
 
+    stageStartedAt = Date.now();
     const evaluated = await send('Runtime.evaluate', {
       expression,
       returnByValue: true,
       awaitPromise: true,
     });
+    markTiming('extract-results', stageStartedAt);
 
     const value = evaluated.result.value || {};
+    value.timings = timings;
+    value.totalDurationMs = Date.now() - runStartedAt;
+    value.timeoutMs = timeoutMs;
     if (value.blockedByGoogle) {
       console.log(JSON.stringify(value, null, 2));
       return;

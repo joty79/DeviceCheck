@@ -8,6 +8,7 @@
 *.md text eol=lf
 *.csv text eol=lf
 *.ids text eol=lf
+*.js text eol=lf
 *.json text eol=lf
 *.conf text eol=lf
 *.yml text eol=lf
