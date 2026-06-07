@@ -76,6 +76,63 @@ $script:LastWindowHeight = 0
 $script:RequestForceClear = $true
 $script:TuiBenchmarkLog = [System.Collections.Generic.List[string]]::new()
 
+function Test-UiEnvFlag {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    return (-not [string]::IsNullOrWhiteSpace($value) -and $value -notin @('0', 'false', 'False', 'FALSE', 'off', 'Off', 'OFF', 'no', 'No', 'NO'))
+}
+
+function Test-UiAsciiGlyphMode {
+    if (Test-UiEnvFlag -Name 'POWERSHELL_TUI_ASCII') { return $true }
+    if (Test-UiEnvFlag -Name 'DEVICECHECK_ASCII_UI') { return $true }
+    if (Test-UiEnvFlag -Name 'POWERSHELL_TUI_UNICODE') { return $false }
+
+    try {
+        return ([Console]::OutputEncoding.CodePage -ne 65001)
+    }
+    catch {
+        return $false
+    }
+}
+
+$script:UseAsciiUiGlyphs = Test-UiAsciiGlyphMode
+$script:UiGlyphs = @{
+    Diamond        = @{ Unicode = [string][char]0x25C6; Ascii = '*' }
+    Expanded       = @{ Unicode = [string][char]0x25BC; Ascii = 'v' }
+    Collapsed      = @{ Unicode = [string][char]0x25B6; Ascii = '>' }
+    Up             = @{ Unicode = [string][char]0x2191; Ascii = '^' }
+    Down           = @{ Unicode = [string][char]0x2193; Ascii = 'v' }
+    Left           = @{ Unicode = [string][char]0x2190; Ascii = '<' }
+    Right          = @{ Unicode = [string][char]0x2192; Ascii = '>' }
+    SelectionArrow = @{ Unicode = [string][char]0x276F; Ascii = '>' }
+    HLine          = @{ Unicode = [string][char]0x2500; Ascii = '-' }
+    VLine          = @{ Unicode = [string][char]0x2502; Ascii = '|' }
+    BoxH           = @{ Unicode = [string][char]0x2550; Ascii = '=' }
+    BoxV           = @{ Unicode = [string][char]0x2551; Ascii = '|' }
+    BoxTopLeft     = @{ Unicode = [string][char]0x2554; Ascii = '+' }
+    BoxTopRight    = @{ Unicode = [string][char]0x2557; Ascii = '+' }
+    BoxBottomLeft  = @{ Unicode = [string][char]0x255A; Ascii = '+' }
+    BoxBottomRight = @{ Unicode = [string][char]0x255D; Ascii = '+' }
+    Branch         = @{ Unicode = "$([char]0x251C)$([char]0x2500)$([char]0x2500) "; Ascii = '|-- ' }
+    BranchLast     = @{ Unicode = "$([char]0x2514)$([char]0x2500)$([char]0x2500) "; Ascii = '`-- ' }
+    Ellipsis       = @{ Unicode = [string][char]0x2026; Ascii = '...' }
+}
+
+function Get-UiGlyph {
+    param([Parameter(Mandatory)][string]$Name)
+
+    if (-not $script:UiGlyphs.ContainsKey($Name)) {
+        return ''
+    }
+
+    if ($script:UseAsciiUiGlyphs) {
+        return [string]$script:UiGlyphs[$Name].Ascii
+    }
+
+    return [string]$script:UiGlyphs[$Name].Unicode
+}
+
 function Begin-SyncRender {
     [Console]::Write("$_E[?2026h")
 }
@@ -195,12 +252,13 @@ function Add-UiFrameBanner {
         [int]$Width = (Get-UiWidth)
     )
 
-    $border = [string]::new([char]0x2550, [Math]::Max(0, $Width - 2))
+    $border = (Get-UiGlyph -Name BoxH) * [Math]::Max(0, $Width - 2)
     $maxTextWidth = [Math]::Max(1, $Width - 3)
 
     $displayTitle = if ($null -eq $Title) { '' } else { $Title }
     if ($displayTitle.Length -gt $maxTextWidth) {
-        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+        $ellipsis = Get-UiGlyph -Name Ellipsis
+        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - $ellipsis.Length)) + $ellipsis
     }
     $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
 
@@ -208,18 +266,19 @@ function Add-UiFrameBanner {
     $subtitlePad = 0
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
         if ($displaySubtitle.Length -gt $maxTextWidth) {
-            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+            $ellipsis = Get-UiGlyph -Name Ellipsis
+            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - $ellipsis.Length)) + $ellipsis
         }
         $subtitlePad = [Math]::Max(0, $maxTextWidth - $displaySubtitle.Length)
     }
 
     Add-UiFrameLine -Frame $Frame
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)$($_C.EraseLn)"
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxTopLeft)$border$(Get-UiGlyph -Name BoxTopRight)$($_C.Reset)$($_C.EraseLn)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
-        Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Reset)$($_C.EraseLn)"
     }
-    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)$($_C.EraseLn)"
+    Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxBottomLeft)$border$(Get-UiGlyph -Name BoxBottomRight)$($_C.Reset)$($_C.EraseLn)"
     Add-UiFrameLine -Frame $Frame
 }
 
@@ -227,13 +286,13 @@ function Add-UiFrameSection {
     param(
         [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
         [string]$Title,
-        [string]$Icon = [string][char]0x25C6,
+        [string]$Icon = (Get-UiGlyph -Name Diamond),
         [int]$Width = (Get-UiWidth)
     )
 
     $prefix = if ($Icon) { " $Icon $Title " } else { " $Title " }
     $remaining = [Math]::Max(0, $Width - $prefix.Length - 1)
-    $line = [string]::new([char]0x2500, $remaining)
+    $line = (Get-UiGlyph -Name HLine) * $remaining
 
     Add-UiFrameLine -Frame $Frame
     Add-UiFrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)$($_C.EraseLn)"
@@ -312,13 +371,13 @@ function Write-UiBanner {
 function Write-UiSection {
     param(
         [string]$Title,
-        [string]$Icon = [string][char]0x25C6
+        [string]$Icon = (Get-UiGlyph -Name Diamond)
     )
 
     $width = Get-UiWidth
     $prefix = if ($Icon) { " $Icon $Title " } else { " $Title " }
     $remaining = [Math]::Max(0, $width - $prefix.Length - 1)
-    $line = [string]::new([char]0x2500, $remaining)
+    $line = (Get-UiGlyph -Name HLine) * $remaining
 
     Write-Host ''
     Write-Host "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
@@ -360,7 +419,7 @@ function Write-UiNavFooter {
     )
 
     $segments = @(
-        New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+        New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
         New-UiShortcutSegment -Text ' = select   ' -Color $_C.Dim
@@ -398,7 +457,7 @@ function Add-UiFrameNavFooter {
     )
 
     $segments = @(
-        New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+        New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
         New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
         New-UiShortcutSegment -Text ' = select   ' -Color $_C.Dim
@@ -447,8 +506,8 @@ function Show-SearchInputBox {
     $displayQuery = if ($Query.Length -gt $inputWidth) { $Query.Substring($Query.Length - $inputWidth) } else { $Query }
     $inputText = "$prompt$displayQuery"
     $queryPadding = [Math]::Max(0, $inputWidth - $inputText.Length)
-    $topBorder = [string]::new([char]0x2550, $titlePad)
-    $bottomBorder = [string]::new([char]0x2550, $innerWidth)
+    $topBorder = (Get-UiGlyph -Name BoxH) * $titlePad
+    $bottomBorder = (Get-UiGlyph -Name BoxH) * $innerWidth
 
     try {
         $inputRow = $Host.UI.RawUI.CursorPosition.Y + 1
@@ -457,9 +516,9 @@ function Show-SearchInputBox {
         $inputRow = 0
     }
 
-    Write-Host "$indent$($_C.Warn)$([char]0x2554)$title$topBorder$([char]0x2557)$($_C.Reset)$($_C.EraseLn)"
-    Write-Host "$indent$($_C.Warn)$([char]0x2551)$($_C.White)$inputText$(' ' * $queryPadding)$($_C.Warn) $([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
-    Write-Host "$indent$($_C.Warn)$([char]0x255A)$bottomBorder$([char]0x255D)$($_C.Reset)$($_C.EraseLn)"
+    Write-Host "$indent$($_C.Warn)$(Get-UiGlyph -Name BoxTopLeft)$title$topBorder$(Get-UiGlyph -Name BoxTopRight)$($_C.Reset)$($_C.EraseLn)"
+    Write-Host "$indent$($_C.Warn)$(Get-UiGlyph -Name BoxV)$($_C.White)$inputText$(' ' * $queryPadding)$($_C.Warn) $(Get-UiGlyph -Name BoxV)$($_C.Reset)$($_C.EraseLn)"
+    Write-Host "$indent$($_C.Warn)$(Get-UiGlyph -Name BoxBottomLeft)$bottomBorder$(Get-UiGlyph -Name BoxBottomRight)$($_C.Reset)$($_C.EraseLn)"
     Write-Host "$($_C.Dim)  Matches: $($_C.OK)$MatchCount$($_C.Reset)$($_C.EraseLn)"
 
     [pscustomobject]@{
@@ -562,12 +621,12 @@ function Invoke-ArrowMenu {
                 Write-UiSection -Title $Title -Icon ''
                 Write-Host ''
 
-                $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$([char]0x2191) $viewTop more above$($_C.Reset)" } else { '' }
+                $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $viewTop more above$($_C.Reset)" } else { '' }
                 Write-Host "$aboveMessage$($_C.EraseLn)"
 
                 for ($index = $viewTop; $index -le $viewBot; $index++) {
                     if ($index -eq $cursor) {
-                        Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
+                        Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
                     }
                     else {
                         Write-Host "    $($_C.Dim)$($Items[$index])$($_C.Reset)$($_C.EraseLn)"
@@ -575,7 +634,7 @@ function Invoke-ArrowMenu {
                 }
 
                 $below = $Items.Count - 1 - $viewBot
-                $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$([char]0x2193) $below more below$($_C.Reset)" } else { '' }
+                $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $below more below$($_C.Reset)" } else { '' }
                 Write-Host "$belowMessage$($_C.EraseLn)"
                 Write-Host "$($_C.EraseLn)"
                 Write-UiNavFooter -Mode Cancel
@@ -587,12 +646,12 @@ function Invoke-ArrowMenu {
                 Add-UiFrameSection -Frame $frame -Title $Title -Icon ''
                 Add-UiFrameLine -Frame $frame
 
-                $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$([char]0x2191) $viewTop more above$($_C.Reset)" } else { '' }
+                $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $viewTop more above$($_C.Reset)" } else { '' }
                 Add-UiFrameLine -Frame $frame -Text "$aboveMessage$($_C.EraseLn)"
 
                 for ($index = $viewTop; $index -le $viewBot; $index++) {
                     if ($index -eq $cursor) {
-                        Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($Items[$index]) $($_C.Reset)$($_C.EraseLn)"
                     }
                     else {
                         Add-UiFrameLine -Frame $frame -Text "    $($_C.Dim)$($Items[$index])$($_C.Reset)$($_C.EraseLn)"
@@ -600,7 +659,7 @@ function Invoke-ArrowMenu {
                 }
 
                 $below = $Items.Count - 1 - $viewBot
-                $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$([char]0x2193) $below more below$($_C.Reset)" } else { '' }
+                $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $below more below$($_C.Reset)" } else { '' }
                 Add-UiFrameLine -Frame $frame -Text "$belowMessage$($_C.EraseLn)"
                 Add-UiFrameLine -Frame $frame -Text "$($_C.EraseLn)"
                 Add-UiFrameNavFooter -Frame $frame -Mode Cancel
@@ -646,7 +705,7 @@ function Show-InteractiveMenu {
 
             for ($index = 0; $index -lt $Options.Count; $index++) {
                 if ($index -eq $selectedIndex) {
-                    Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $($Options[$index]) $($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($Options[$index]) $($_C.Reset)$($_C.EraseLn)"
                 }
                 else {
                     Add-UiFrameLine -Frame $frame -Text "    $($_C.White)$($Options[$index])$($_C.Reset)$($_C.EraseLn)"

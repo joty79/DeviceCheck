@@ -2041,6 +2041,45 @@ function Get-NotePropertyValue {
     return $property.Value
 }
 
+function Get-DeviceLookupDisplayName {
+    param($Device)
+
+    $friendlyName = [string](Get-NotePropertyValue -Object $Device -Name 'FriendlyName')
+    if (-not [string]::IsNullOrWhiteSpace($friendlyName)) { return $friendlyName }
+
+    $instanceId = [string](Get-NotePropertyValue -Object $Device -Name 'InstanceId')
+    if (-not [string]::IsNullOrWhiteSpace($instanceId)) { return $instanceId }
+
+    return 'selected device'
+}
+
+function Set-SystemStatusMessage {
+    param(
+        [AllowEmptyString()][string]$Message,
+        [switch]$NoTimestamp
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        $script:SystemScanMessage = ''
+        return
+    }
+
+    $Message = ($Message -replace '[\r\n\t]+', ' ') -replace '\s{2,}', ' '
+    $Message = $Message.Trim()
+    $suffix = if ($NoTimestamp) { '' } else { " | $(Get-Date -Format 'HH:mm:ss')" }
+    $script:SystemScanMessage = "$Message$suffix"
+}
+
+function Get-SystemStatusColor {
+    param([AllowEmptyString()][string]$StatusText)
+
+    if ([string]::IsNullOrWhiteSpace($StatusText)) { return $_C.Dim }
+    if ($StatusText -match '(?i)\b(failed|failure|error|missing|blocked|denied|forbidden|unavailable|terminated unexpectedly)\b') { return $_C.Fail }
+    if ($StatusText -match '(?i)\b(cancelled|ignored|confirmation|local-target only|already includes|available only|paused)\b') { return $_C.Warn }
+    if ($StatusText -match '(?i)\b(running|collecting|queued|refresh|connected|complete|updated|done)\b') { return $_C.OK }
+    return $_C.Dim
+}
+
 function Format-PlainToWidth {
     param(
         [AllowEmptyString()][string]$Text,
@@ -2086,7 +2125,7 @@ function New-SectionLine {
     )
 
     $prefix = " $Title "
-    $line = [string]::new([char]0x2500, [Math]::Max(0, $Width - $prefix.Length))
+    $line = (Get-UiGlyph -Name HLine) * [Math]::Max(0, $Width - $prefix.Length)
     return "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)"
 }
 
@@ -3526,9 +3565,13 @@ function Update-VisibleRows {
                         })
                     }
                     elseif ($d.SearchStatus -eq 'Error') {
+                        $statusName = 'Search failed'
+                        if ($d.SearchResults -and $d.SearchResults.Count -gt 0) {
+                            $statusName = [string]$d.SearchResults[0]
+                        }
                         $rows.Add([PSCustomObject]@{
                             Type         = 'Status'
-                            Name         = 'Search failed'
+                            Name         = $statusName
                             ParentIsLast = $isLast
                             ParentDevice = $d
                         })
@@ -3626,17 +3669,17 @@ function Get-TreeDisplayLine {
     $ansiText = ''
 
     if ($Row.Type -eq 'Root') {
-        $icon = if ($Row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 }
+        $icon = if ($Row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
         $plainText = " $icon  $($Row.Name)"
         $ansiText = "$($_C.White)$plainText$($_C.Reset)"
     }
     elseif ($Row.Type -eq 'Category') {
-        $icon = if ($Row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 }
+        $icon = if ($Row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
         $plainText = "   $icon  $($Row.Name)"
         $ansiText = "$($_C.White)$plainText$($_C.Reset)"
     }
     elseif ($Row.Type -eq 'Device') {
-        $branch = if ($Row.IsLast) { "└── " } else { "├── " }
+        $branch = if ($Row.IsLast) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
         $warning = if ($Row.IsProblem) { "[!] " } else { "" }
         $plainText = "       $branch$warning$($Row.Name) [$($Row.Class)]"
         if ($Row.IsProblem) {
@@ -3646,19 +3689,20 @@ function Get-TreeDisplayLine {
         }
     }
     elseif ($Row.Type -eq 'Status') {
-        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       │    " }
-        $plainText = "$parentPrefix└── [$($Row.Name)]"
-        $ansiText = "$($_C.Dim)$parentPrefix└── $($_C.Reset)$($_C.Warn)[$($Row.Name)]$($_C.Reset)"
+        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
+        $branchLast = Get-UiGlyph -Name BranchLast
+        $plainText = "$parentPrefix$branchLast[$($Row.Name)]"
+        $ansiText = "$($_C.Dim)$parentPrefix$branchLast$($_C.Reset)$($_C.Warn)[$($Row.Name)]$($_C.Reset)"
     }
     elseif ($Row.Type -eq 'Result') {
-        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       │    " }
+        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
         $text = [string]$Row.Name
         $isSubResult = $text.StartsWith('  ')
         if ($isSubResult) {
             $text = $text.Substring(2)
-            $branch = if ($Row.IsLastResult) { "    └── " } else { "│   └── " }
+            $branch = if ($Row.IsLastResult) { "    $(Get-UiGlyph -Name BranchLast)" } else { "$(Get-UiGlyph -Name VLine)   $(Get-UiGlyph -Name BranchLast)" }
         } else {
-            $branch = if ($Row.IsLastResult) { "└── " } else { "├── " }
+            $branch = if ($Row.IsLastResult) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
         }
 
         $plainText = "$parentPrefix$branch$text"
@@ -4015,7 +4059,7 @@ function Invoke-ModelSelector {
             Write-UiSection -Title 'Available AI Models for Scan' -Icon ''
             Write-Host ''
 
-            $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$([char]0x2191) $viewTop more above$($_C.Reset)" } else { '' }
+            $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $viewTop more above$($_C.Reset)" } else { '' }
             Write-Host "$aboveMessage$($_C.EraseLn)"
 
             for ($index = $viewTop; $index -le $viewBot; $index++) {
@@ -4038,7 +4082,7 @@ function Invoke-ModelSelector {
 
                 if ($index -eq $cursor) {
                     # Strip ANSI for selection bar
-                    Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $([char]0x276F) $(Remove-AnsiSequence -Text $displayText) $($_C.Reset)$($_C.EraseLn)"
+                    Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $(Remove-AnsiSequence -Text $displayText) $($_C.Reset)$($_C.EraseLn)"
                 }
                 else {
                     Write-Host "    $displayText$($_C.EraseLn)"
@@ -4046,13 +4090,13 @@ function Invoke-ModelSelector {
             }
 
             $below = $script:AvailableModels.Count - 1 - $viewBot
-            $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$([char]0x2193) $below more below$($_C.Reset)" } else { '' }
+            $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $below more below$($_C.Reset)" } else { '' }
             Write-Host "$belowMessage$($_C.EraseLn)"
             Write-Host "$($_C.EraseLn)"
 
             # Nav footer
             $segments = @(
-                New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+                New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
                 New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'Space' -Color $_C.OK
                 New-UiShortcutSegment -Text ' = toggle   ' -Color $_C.Dim
@@ -4125,13 +4169,14 @@ function Render-FrameLegacy {
 
     # Header
     Write-UiBanner -Title "DeviceCheck Manager" -Subtitle "R rescans the present PnP device tree. E scans evidence; root/all requires E twice. S adds web/AI."
-    Write-Host "  $($_C.Dim)$($script:SystemScanMessage)$($_C.Reset)$($_C.EraseLn)"
+    $statusColor = Get-SystemStatusColor -StatusText $script:SystemScanMessage
+    Write-Host "  $statusColor$($script:SystemScanMessage)$($_C.Reset)$($_C.EraseLn)"
     Write-UiSection -Title "Device Connection Tree"
     Write-Host ''
 
     # Scrolling indicators above
     $aboveCount = $viewTop
-    $aboveMessage = if ($aboveCount -gt 0) { "  $($_C.Dim)$([char]0x2191) $aboveCount more above$($_C.Reset)" } else { '' }
+    $aboveMessage = if ($aboveCount -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $aboveCount more above$($_C.Reset)" } else { '' }
     Write-Host "$aboveMessage$($_C.EraseLn)"
 
     # Render visible rows
@@ -4140,7 +4185,7 @@ function Render-FrameLegacy {
         $isSelected = ($index -eq $selectedIndex)
 
         if ($row.Type -eq 'Root') {
-            $icon = if ($row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 }
+            $icon = if ($row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
             $displayText = " $icon  $($row.Name)"
 
             if ($isSelected) {
@@ -4150,7 +4195,7 @@ function Render-FrameLegacy {
             }
         }
         elseif ($row.Type -eq 'Category') {
-            $icon = if ($row.IsExpanded) { [char]0x25BC } else { [char]0x25B6 } # Down or Right arrow
+            $icon = if ($row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
             $displayText = "   $icon  $($row.Name)"
 
             if ($isSelected) {
@@ -4160,7 +4205,7 @@ function Render-FrameLegacy {
             }
         }
         elseif ($row.Type -eq 'Device') {
-            $branch = if ($row.IsLast) { "└── " } else { "├── " }
+            $branch = if ($row.IsLast) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
             $warningIcon = if ($row.IsProblem) { "$($_C.Warn)[!]$($_C.Reset) " } else { "" }
             $displayText = "       $branch$warningIcon$($row.Name) [$($row.Class)]"
 
@@ -4173,20 +4218,20 @@ function Render-FrameLegacy {
             }
         }
         elseif ($row.Type -eq 'Status') {
-            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       │    " }
-            Write-Host "$($_C.Dim)$parentPrefix└── $($_C.Reset)$($_C.Warn)[$($row.Name)]$($_C.Reset)$($_C.EraseLn)"
+            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
+            Write-Host "$($_C.Dim)$parentPrefix$(Get-UiGlyph -Name BranchLast)$($_C.Reset)$($_C.Warn)[$($row.Name)]$($_C.Reset)$($_C.EraseLn)"
         }
         elseif ($row.Type -eq 'Result') {
-            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       │    " }
+            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
 
             $text = $row.Name
             $isSubResult = $text.StartsWith("  ")
 
             if ($isSubResult) {
                 $text = $text.Substring(2)
-                $branch = if ($row.IsLastResult) { "    └── " } else { "│   └── " }
+                $branch = if ($row.IsLastResult) { "    $(Get-UiGlyph -Name BranchLast)" } else { "$(Get-UiGlyph -Name VLine)   $(Get-UiGlyph -Name BranchLast)" }
             } else {
-                $branch = if ($row.IsLastResult) { "└── " } else { "├── " }
+                $branch = if ($row.IsLastResult) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
             }
 
             # Truncate result text to console width dynamically
@@ -4237,7 +4282,7 @@ function Render-FrameLegacy {
 
     # Scrolling indicators below
     $belowCount = $script:visibleRows.Count - 1 - $viewBot
-    $belowMessage = if ($belowCount -gt 0) { "  $($_C.Dim)$([char]0x2193) $belowCount more below$($_C.Reset)" } else { '' }
+    $belowMessage = if ($belowCount -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $belowCount more below$($_C.Reset)" } else { '' }
     Write-Host "$belowMessage$($_C.EraseLn)"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4379,9 +4424,9 @@ function Render-FrameLegacy {
 
     # Footer
     $segments = @(
-        New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+        New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text "$([char]0x2190)$([char]0x2192)" -Color $_C.White
+        New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Left)$(Get-UiGlyph -Name Right)" -Color $_C.White
         New-UiShortcutSegment -Text ' pane   ' -Color $_C.Dim
         New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
@@ -4436,12 +4481,13 @@ function Add-FrameBanner {
         [int]$Width
     )
 
-    $border = [string]::new([char]0x2550, [Math]::Max(0, $Width - 2))
+    $border = (Get-UiGlyph -Name BoxH) * [Math]::Max(0, $Width - 2)
     $maxTextWidth = [Math]::Max(1, $Width - 3)
 
     $displayTitle = if ($null -eq $Title) { '' } else { $Title }
     if ($displayTitle.Length -gt $maxTextWidth) {
-        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+        $ellipsis = Get-UiGlyph -Name Ellipsis
+        $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - $ellipsis.Length)) + $ellipsis
     }
     $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
 
@@ -4449,18 +4495,19 @@ function Add-FrameBanner {
     $subtitlePad = 0
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
         if ($displaySubtitle.Length -gt $maxTextWidth) {
-            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - 1)) + [char]0x2026
+            $ellipsis = Get-UiGlyph -Name Ellipsis
+            $displaySubtitle = $displaySubtitle.Substring(0, [Math]::Max(1, $maxTextWidth - $ellipsis.Length)) + $ellipsis
         }
         $subtitlePad = [Math]::Max(0, $maxTextWidth - $displaySubtitle.Length)
     }
 
     Add-FrameLine -Frame $Frame
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2554)$border$([char]0x2557)$($_C.Reset)$($_C.EraseLn)"
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxTopLeft)$border$(Get-UiGlyph -Name BoxTopRight)$($_C.Reset)$($_C.EraseLn)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Bold)$($_C.White) $displayTitle$($_C.Reset)$(' ' * $titlePad)$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
-        Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x2551)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$([char]0x2551)$($_C.Reset)$($_C.EraseLn)"
+        Add-FrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Dim) $displaySubtitle$($_C.Reset)$(' ' * $subtitlePad)$($_C.H1)$(Get-UiGlyph -Name BoxV)$($_C.Reset)$($_C.EraseLn)"
     }
-    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$([char]0x255A)$border$([char]0x255D)$($_C.Reset)$($_C.EraseLn)"
+    Add-FrameLine -Frame $Frame -Text "$($_C.H1)$(Get-UiGlyph -Name BoxBottomLeft)$border$(Get-UiGlyph -Name BoxBottomRight)$($_C.Reset)$($_C.EraseLn)"
     Add-FrameLine -Frame $Frame
 }
 
@@ -4469,12 +4516,12 @@ function Add-FrameSection {
         [Parameter(Mandatory)][System.Text.StringBuilder]$Frame,
         [string]$Title,
         [int]$Width,
-        [string]$Icon = [string][char]0x25C6
+        [string]$Icon = (Get-UiGlyph -Name Diamond)
     )
 
     $prefix = if ($Icon) { " $Icon $Title " } else { " $Title " }
     $remaining = [Math]::Max(0, $Width - $prefix.Length - 1)
-    $line = [string]::new([char]0x2500, $remaining)
+    $line = (Get-UiGlyph -Name HLine) * $remaining
 
     Add-FrameLine -Frame $Frame
     Add-FrameLine -Frame $Frame -Text "$($_C.H1)$prefix$($_C.Dim)$line$($_C.Reset)$($_C.EraseLn)"
@@ -4578,7 +4625,8 @@ function Render-Frame {
     if (-not [string]::IsNullOrWhiteSpace($targetStatus)) {
         $compactStatus = "$targetStatus | $compactStatus"
     }
-    Add-FrameLine -Frame $frame -Text "  $($_C.Dim)$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
+    $statusColor = Get-SystemStatusColor -StatusText $script:SystemScanMessage
+    Add-FrameLine -Frame $frame -Text "  $statusColor$(Format-UiValue -Text $compactStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
     if (-not [string]::IsNullOrWhiteSpace($batchStatus)) {
         Add-FrameLine -Frame $frame -Text "  $($_C.Warn)$(Format-UiValue -Text $batchStatus -MaxLength $statusWidth)$($_C.Reset)$($_C.EraseLn)"
     }
@@ -4586,21 +4634,21 @@ function Render-Frame {
     if ($useDualPane) {
         $leftTitleColor = if ($script:ActivePane -eq 'Tree') { $_C.H1 } else { $_C.Dim }
         $rightTitleColor = if ($script:ActivePane -eq 'Detail') { $_C.H1 } else { $_C.Dim }
-        $leftIndicator = if ($script:ActivePane -eq 'Tree') { "$([char]0x25C6) " } else { '  ' }
-        $rightIndicator = if ($script:ActivePane -eq 'Detail') { "$([char]0x25C6) " } else { '  ' }
+        $leftIndicator = if ($script:ActivePane -eq 'Tree') { "$(Get-UiGlyph -Name Diamond) " } else { '  ' }
+        $rightIndicator = if ($script:ActivePane -eq 'Detail') { "$(Get-UiGlyph -Name Diamond) " } else { '  ' }
         $leftTitleText = "${leftIndicator}Device Connection Tree"
         $rightTitleText = "${rightIndicator}Selected Details"
         $leftPrefix = " $leftTitleText "
-        $leftLine = [string]::new([char]0x2500, [Math]::Max(0, $leftWidth - $leftPrefix.Length))
+        $leftLine = (Get-UiGlyph -Name HLine) * [Math]::Max(0, $leftWidth - $leftPrefix.Length)
         $leftTitle = "$leftTitleColor$leftPrefix$($_C.Dim)$leftLine$($_C.Reset)"
         $rightPrefix = " $rightTitleText "
-        $rightLine = [string]::new([char]0x2500, [Math]::Max(0, $rightWidth - $rightPrefix.Length))
+        $rightLine = (Get-UiGlyph -Name HLine) * [Math]::Max(0, $rightWidth - $rightPrefix.Length)
         $rightTitle = "$rightTitleColor$rightPrefix$($_C.Dim)$rightLine$($_C.Reset)"
-        Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
+        Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftTitle -Width $leftWidth)$($_C.Dim) $(Get-UiGlyph -Name VLine) $($_C.Reset)$(Format-AnsiToWidth -Text $rightTitle -Width $rightWidth)$($_C.EraseLn)"
 
         $treeLines = [System.Collections.Generic.List[string]]::new()
         $aboveCount = $viewTop
-        $aboveMessage = if ($aboveCount -gt 0) { "$([char]0x2191) $aboveCount more above" } else { '' }
+        $aboveMessage = if ($aboveCount -gt 0) { "$(Get-UiGlyph -Name Up) $aboveCount more above" } else { '' }
         $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)")
 
         for ($index = $viewTop; $index -le $viewBot; $index++) {
@@ -4609,7 +4657,7 @@ function Render-Frame {
         }
 
         $belowCount = $script:visibleRows.Count - 1 - $viewBot
-        $belowMessage = if ($belowCount -gt 0) { "$([char]0x2193) $belowCount more below" } else { '' }
+        $belowMessage = if ($belowCount -gt 0) { "$(Get-UiGlyph -Name Down) $belowCount more below" } else { '' }
         $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)")
 
         # Generate all detail lines (generous MaxLines for scrolling)
@@ -4668,14 +4716,14 @@ function Render-Frame {
             # Only show if the cursor is not on the first visible line
             $cursorInSlice = $script:DetailCursorIndex - $script:DetailScrollOffset
             if ($cursorInSlice -ne 0) {
-                $detailSlice[0] = "$($_C.Dim)$(Format-PlainToWidth -Text "$([char]0x2191) $($script:DetailScrollOffset) more above" -Width $rightWidth)$($_C.Reset)"
+                $detailSlice[0] = "$($_C.Dim)$(Format-PlainToWidth -Text "$(Get-UiGlyph -Name Up) $($script:DetailScrollOffset) more above" -Width $rightWidth)$($_C.Reset)"
             }
         }
         if ($script:DetailScrollOffset -lt $maxDetailScroll -and $detailSlice.Count -gt 1) {
             $cursorInSlice = $script:DetailCursorIndex - $script:DetailScrollOffset
             if ($cursorInSlice -ne ($detailSlice.Count - 1)) {
                 $belowDetailCount = $detailContentCount - $script:DetailScrollOffset - $detailViewSize
-                $detailSlice[$detailSlice.Count - 1] = "$($_C.Dim)$(Format-PlainToWidth -Text "$([char]0x2193) $belowDetailCount more below" -Width $rightWidth)$($_C.Reset)"
+                $detailSlice[$detailSlice.Count - 1] = "$($_C.Dim)$(Format-PlainToWidth -Text "$(Get-UiGlyph -Name Down) $belowDetailCount more below" -Width $rightWidth)$($_C.Reset)"
             }
         }
 
@@ -4683,14 +4731,14 @@ function Render-Frame {
         for ($i = 0; $i -lt $lineCount; $i++) {
             $leftLine = if ($i -lt $treeLines.Count) { $treeLines[$i] } else { '' }
             $rightLine = if ($i -lt $detailSlice.Count) { $detailSlice[$i] } else { '' }
-            Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) $([char]0x2502) $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
+            Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) $(Get-UiGlyph -Name VLine) $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
         }
     } else {
         Add-FrameSection -Frame $frame -Title 'Device Connection Tree' -Width $uiWidth
         Add-FrameLine -Frame $frame
 
         $aboveCount = $viewTop
-        $aboveMessage = if ($aboveCount -gt 0) { "  $([char]0x2191) $aboveCount more above" } else { '' }
+        $aboveMessage = if ($aboveCount -gt 0) { "  $(Get-UiGlyph -Name Up) $aboveCount more above" } else { '' }
         Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
         for ($index = $viewTop; $index -le $viewBot; $index++) {
@@ -4699,7 +4747,7 @@ function Render-Frame {
         }
 
         $belowCount = $script:visibleRows.Count - 1 - $viewBot
-        $belowMessage = if ($belowCount -gt 0) { "  $([char]0x2193) $belowCount more below" } else { '' }
+        $belowMessage = if ($belowCount -gt 0) { "  $(Get-UiGlyph -Name Down) $belowCount more below" } else { '' }
         Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
         if ($narrowDetailMaxLines -gt 0 -and $null -ne $selectedRow) {
@@ -4712,9 +4760,9 @@ function Render-Frame {
     }
 
     $footerRow1 = @(
-        New-UiShortcutSegment -Text "$([char]0x2191)$([char]0x2193)" -Color $_C.White
+        New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
         New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
-        New-UiShortcutSegment -Text "$([char]0x2190)$([char]0x2192)" -Color $_C.White
+        New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Left)$(Get-UiGlyph -Name Right)" -Color $_C.White
         New-UiShortcutSegment -Text ' pane   ' -Color $_C.Dim
         New-UiShortcutSegment -Text '+ / -' -Color $_C.OK
         New-UiShortcutSegment -Text ' = expand/collapse   ' -Color $_C.Dim
@@ -4846,17 +4894,24 @@ function Invoke-SelectedWebScan {
     Reset-AllEvidenceScanConfirmation
 
     if (Test-RemoteSnapshotTargetActive) {
-        $script:SystemScanMessage = "Web/AI lookups are local-target only in this first remote slice. Press R to refresh $($script:TargetComputerName). | $(Get-Date -Format 'HH:mm:ss')"
+        Set-SystemStatusMessage -Message "Web/AI lookups are local-target only in this first remote slice. Press R to refresh $($script:TargetComputerName)."
         return
     }
 
     $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
-    if ($null -eq $currentRow) { return }
+    if ($null -eq $currentRow) {
+        $lookupLabel = if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' }
+        Set-SystemStatusMessage -Message "$lookupLabel needs a selected device row."
+        return
+    }
 
     if ($currentRow.Type -eq 'Device') {
         Start-DeviceLookup -Dev $currentRow.Ref -UseAgent:$UseAgent -ForceEvidenceRefresh
     } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
         Start-DeviceLookup -Dev $currentRow.ParentDevice -UseAgent:$UseAgent -ForceEvidenceRefresh
+    } else {
+        $lookupLabel = if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' }
+        Set-SystemStatusMessage -Message "$lookupLabel needs a device row. Select a device or an existing lookup result."
     }
 }
 
@@ -4874,7 +4929,10 @@ function Start-DeviceLookup {
 
     # If already searching, toggle to cancel/stop it
     if ($script:ActiveSearches.Contains($instanceId)) {
+        $deviceName = Get-DeviceLookupDisplayName -Device $Dev
         Stop-DeviceLookup -InstanceId $instanceId
+        Set-SystemStatusMessage -Message "Lookup cancelled: $deviceName"
+        $script:VisibleRowsDirty = $true
         return
     }
 
@@ -4898,13 +4956,16 @@ function Start-DeviceLookup {
     }
 
     if ($UseAgent -and [string]::IsNullOrWhiteSpace($apiKey)) {
-        $message = "Google/Gemini API key is missing (set GEMINI_API_KEY environment variable)."
-        $Dev.SearchStatus = 'Done'
+        $deviceName = Get-DeviceLookupDisplayName -Device $Dev
+        $message = "Agent blocked: Google/Gemini API key missing. Set GOOGLE_API_KEY or GEMINI_API_KEY, then restart PowerShell."
+        Set-SystemStatusMessage -Message "$message | $deviceName"
+        $Dev.SearchStatus = 'Error'
         $Dev.SearchKind = 'Agent'
         $Dev.SearchDetail = $message
         $Dev.SearchTracePath = $null
         $Dev.SearchCheckpointPath = $null
-        $Dev.SearchResults = @("[Agent: $agentModel] (Failed)")
+        $Dev.SearchResults = @("[Agent: $agentModel] (Blocked: missing API key)")
+        $script:VisibleRowsDirty = $true
         return
     }
 
@@ -4963,6 +5024,17 @@ function Start-DeviceLookup {
         if ($webState -eq 'Searching') { $newResults.Add("[Web Snippet] (Searching...)") }
     }
     $Dev.SearchResults = $newResults
+    if ([string]::IsNullOrWhiteSpace($EvidenceBatchId)) {
+        $deviceName = Get-DeviceLookupDisplayName -Device $Dev
+        if ($UseAgent) {
+            Set-SystemStatusMessage -Message "Agent queued: $deviceName | $agentModel"
+        } elseif ($EvidenceOnly) {
+            Set-SystemStatusMessage -Message "Evidence refresh queued: $deviceName"
+        } else {
+            Set-SystemStatusMessage -Message "Web/AI lookup queued: $deviceName"
+        }
+    }
+    $script:VisibleRowsDirty = $true
 
     # Start background runspace for Web and Local Search
     $psWeb = [PowerShell]::Create()
@@ -5913,6 +5985,22 @@ function Update-ActiveSearches {
             } elseif ($search.AgentState -eq 'PausedBudget') {
                 $newResults.Add("[Agent: $mName] (Paused: Budget)")
                 $search.Device.SearchDetail = $search.AgentVal
+            }
+            if ([string]::IsNullOrWhiteSpace([string](Get-NotePropertyValue -Object $search -Name 'EvidenceBatchId'))) {
+                $deviceName = Get-DeviceLookupDisplayName -Device $search.Device
+                if ($search.AgentState -eq 'Waiting') {
+                    Set-SystemStatusMessage -Message "Agent preparing evidence: $deviceName | $mName | ${elapsed}s"
+                } elseif ($search.AgentState -eq 'Searching') {
+                    Set-SystemStatusMessage -Message "Agent running: $deviceName | $mName | ${elapsed}s"
+                } elseif ($search.AgentState -eq 'Done') {
+                    Set-SystemStatusMessage -Message "Agent complete: $deviceName | $mName | ${elapsed}s"
+                } elseif ($search.AgentState -eq 'Error') {
+                    Set-SystemStatusMessage -Message "Agent failed: $deviceName | $mName | $($search.AgentVal)"
+                } elseif ($search.AgentState -eq 'PausedRateLimit') {
+                    Set-SystemStatusMessage -Message "Agent paused by rate limit: $deviceName | $mName"
+                } elseif ($search.AgentState -eq 'PausedBudget') {
+                    Set-SystemStatusMessage -Message "Agent paused by step budget: $deviceName | $mName"
+                }
             }
         } else {
             foreach ($run in $search.ModelRuns) {

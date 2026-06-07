@@ -57,6 +57,13 @@ Quick lookup:
 ### Decision Log
 
 Date: 2026-06-07
+Problem: Pressing `A` on a selected device could appear to do nothing when Agent prerequisites were missing, especially when `GOOGLE_API_KEY` / `GEMINI_API_KEY` was not configured on another PC.
+Root cause: The missing-key branch updated only the selected device search rows and details state, but did not update the top status/message line. The Agent/Web hotkey path also returned silently for unsupported selections.
+Guardrail/rule: Any TUI hotkey that starts, blocks, cancels, or refuses a background action must update the visible status/message line immediately. Missing API keys and invalid selections are user-visible states, not silent no-ops.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; static lookup of new status-message branches; `git diff --check`.
+
+Date: 2026-06-07
 Problem: The header subtitle repeated low-value or overly long system information such as generic system manufacturer/model strings, full Windows captions, full CPU marketing strings, live clock text, and long device/category words.
 Root cause: `Get-MachineSummary` reused evidence-style raw fields for the header instead of a presentation-only compact summary.
 Guardrail/rule: Header text is presentation-only. Keep full machine/system/board/CPU/OS data in evidence and details, but compact the header to stable high-signal fields: computer name, useful board product, compact CPU, compact OS, and `dev` / `cat` counts. Avoid guessing subjective motherboard names beyond safe boilerplate trims.
@@ -685,3 +692,10 @@ Root cause: The footer rows were built as nested arrays and passed through a typ
 Guardrail/rule: For fixed TUI footer/header rows, prefer explicit row variables and explicit render calls over nested-array helper abstractions. If nested row collections are truly needed, validate the rendered row count with a smoke test before treating the layout as fixed.
 Files affected: `DeviceCheck.ps1`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; narrow renderer line-budget smoke for terminal heights 16/20/24/25/30/40 with and without batch status; `git diff --check`.
+
+Date: 2026-06-07
+Problem: PALIOS showed TUI arrows/triangles/diamonds as `?` or wrong characters even though Windows Terminal, PowerShell 7, and the font looked similar to NEOS.
+Root cause: PALIOS had Windows UTF-8 worldwide language support disabled, so Windows used `ACP=1252`, `OEMCP=437`, and PowerShell inherited `[Console]::OutputEncoding=ibm437` / `chcp 437`. NEOS used `ACP/OEMCP/MACCP=65001`, so the same glyphs rendered correctly there.
+Guardrail/rule: Do not require global OS locale changes or font installs for DeviceCheck to be usable. Use a reusable glyph map and automatically switch to ASCII UI glyphs when the console output codepage is not UTF-8; keep manual overrides through `DEVICECHECK_ASCII_UI=1`, `POWERSHELL_TUI_ASCII=1`, and `POWERSHELL_TUI_UNICODE=1`. Keep reusable encoding/glyph diagnostics in `.agent-shared`, not in DeviceCheck.
+Files affected: `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; ASCII fallback frame smoke with `DEVICECHECK_ASCII_UI=1` confirmed no non-ASCII glyphs in a sample banner/section/footer frame; narrow renderer line-budget smoke for terminal heights 16/20/24/25/30/40 with and without batch status; `git diff --check`.
