@@ -369,6 +369,82 @@ function Get-MachineDisplayName {
     return $name.ToUpperInvariant()
 }
 
+function Test-GenericHeaderValue {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $true }
+    $normalized = ($Text -replace '\s+', ' ').Trim()
+    return ($normalized -in @(
+            'System manufacturer',
+            'System Product Name',
+            'To Be Filled By O.E.M.',
+            'To Be Filled By OEM',
+            'Default string',
+            'Default System',
+            'Not Applicable',
+            'None'
+        ))
+}
+
+function Format-HeaderBoardProduct {
+    param(
+        [AllowEmptyString()][string]$Product,
+        [AllowEmptyString()][string]$SystemModel
+    )
+
+    if (Test-GenericHeaderValue -Text $Product) { return '' }
+
+    $board = ($Product -replace '\s+', ' ').Trim()
+    if ([string]::IsNullOrWhiteSpace($board)) { return '' }
+
+    if (-not [string]::IsNullOrWhiteSpace($SystemModel)) {
+        $model = [regex]::Escape(($SystemModel -replace '\s+', ' ').Trim())
+        if (-not [string]::IsNullOrWhiteSpace($model)) {
+            $board = ($board -replace "\s*\($model\)\s*$", '').Trim()
+        }
+    }
+
+    $board = ($board -replace '\s*\((MS-[^)]+)\)\s*$', '').Trim()
+    if ([string]::IsNullOrWhiteSpace($board)) { return '' }
+    return "Board $board"
+}
+
+function Format-HeaderCpuName {
+    param([AllowEmptyString()][string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+    $cpu = ($Name -replace '\(R\)|\(TM\)|\(C\)', '' -replace '\s+', ' ').Trim()
+
+    if ($cpu -match '(?i)\bRyzen\s+(?:\d|[A-Z])\s+\d{4,5}[A-Z0-9]*\b') {
+        return $Matches[0]
+    }
+    if ($cpu -match '(?i)\bUltra\s+\d\s+\d{3,4}[A-Z0-9]*\b') {
+        return $Matches[0]
+    }
+    if ($cpu -match '(?i)\bi[3579][- ]\d{4,5}[A-Z0-9]*\b') {
+        return ($Matches[0] -replace ' ', '-')
+    }
+
+    $cpu = $cpu -replace '(?i)\b(Intel|AMD)\b', ''
+    $cpu = $cpu -replace '(?i)\b\d+\s*-\s*Core\b', ''
+    $cpu = $cpu -replace '(?i)\bCPU\b.*$', ''
+    $cpu = $cpu -replace '(?i)\bProcessor\b', ''
+    $cpu = ($cpu -replace '\s+', ' ').Trim()
+    return $cpu
+}
+
+function Format-HeaderOsName {
+    param([AllowEmptyString()][string]$Caption)
+
+    if ([string]::IsNullOrWhiteSpace($Caption)) { return '' }
+    $os = ($Caption -replace '\s+', ' ').Trim()
+    $os = $os -replace '^(?i)Microsoft\s+', ''
+    if ($os -match '^(?i)Windows\s+(\d+)\s+(.+)$') {
+        return "Win$($Matches[1]) $($Matches[2])"
+    }
+    return $os
+}
+
 function Get-MachineSummary {
     param(
         $MachineEvidence,
@@ -381,23 +457,20 @@ function Get-MachineSummary {
     $systemName = Get-MachineDisplayName -MachineEvidence $MachineEvidence
     $parts.Add($systemName)
 
-    $systemMakerModel = (@(
-            $MachineEvidence.ComputerSystem.Manufacturer
-            $MachineEvidence.ComputerSystem.Model
-        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' '
-    if (-not [string]::IsNullOrWhiteSpace($systemMakerModel)) { $parts.Add($systemMakerModel) }
-
-    if (-not [string]::IsNullOrWhiteSpace($MachineEvidence.BaseBoard.Product)) {
-        $parts.Add("Board $($MachineEvidence.BaseBoard.Product)")
+    $boardText = Format-HeaderBoardProduct -Product $MachineEvidence.BaseBoard.Product -SystemModel $MachineEvidence.ComputerSystem.Model
+    if (-not [string]::IsNullOrWhiteSpace($boardText)) {
+        $parts.Add($boardText)
     }
-    if (-not [string]::IsNullOrWhiteSpace($MachineEvidence.Processor.Name)) {
-        $parts.Add($MachineEvidence.Processor.Name.Trim())
+    $cpuText = Format-HeaderCpuName -Name $MachineEvidence.Processor.Name
+    if (-not [string]::IsNullOrWhiteSpace($cpuText)) {
+        $parts.Add($cpuText)
     }
-    if (-not [string]::IsNullOrWhiteSpace($MachineEvidence.OperatingSystem.Caption)) {
-        $parts.Add($MachineEvidence.OperatingSystem.Caption)
+    $osText = Format-HeaderOsName -Caption $MachineEvidence.OperatingSystem.Caption
+    if (-not [string]::IsNullOrWhiteSpace($osText)) {
+        $parts.Add($osText)
     }
     if ($DeviceCount -gt 0 -or $CategoryCount -gt 0) {
-        $parts.Add("$DeviceCount devices / $CategoryCount categories")
+        $parts.Add("$DeviceCount dev / $CategoryCount cat")
     }
     if ($null -ne $ElapsedMs) {
         $parts.Add("${ElapsedMs}ms")
@@ -1843,34 +1916,34 @@ function Add-InstalledDriverDetailLines {
     $Lines.Add((New-SectionLine -Title 'Installed Driver' -Width $Width))
 
     if (-not [string]::IsNullOrWhiteSpace($driver.Provider)) {
-        $Lines.Add((New-KeyValueLine -Key 'Provider' -Value $driver.Provider -Width $Width))
+        Add-KeyValueLines -Lines $Lines -Key 'Provider' -Value $driver.Provider -Width $Width
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.Version)) {
-        $Lines.Add((New-KeyValueLine -Key 'Version' -Value $driver.Version -Width $Width -ValueColor $_C.OK))
+        Add-KeyValueLines -Lines $Lines -Key 'Version' -Value $driver.Version -Width $Width -ValueColor $_C.OK
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.Date)) {
-        $Lines.Add((New-KeyValueLine -Key 'Date' -Value $driver.Date -Width $Width))
+        Add-KeyValueLines -Lines $Lines -Key 'Date' -Value $driver.Date -Width $Width
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.InfName)) {
-        $Lines.Add((New-KeyValueLine -Key 'INF' -Value $driver.InfName -Width $Width -ValueColor $_C.Info))
+        Add-KeyValueLines -Lines $Lines -Key 'INF' -Value $driver.InfName -Width $Width -ValueColor $_C.Info
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.InfSection)) {
-        $Lines.Add((New-KeyValueLine -Key 'INF Section' -Value $driver.InfSection -Width $Width -ValueColor $_C.Info))
+        Add-KeyValueLines -Lines $Lines -Key 'INF Section' -Value $driver.InfSection -Width $Width -ValueColor $_C.Info
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.Service)) {
-        $Lines.Add((New-KeyValueLine -Key 'Service' -Value $driver.Service -Width $Width))
+        Add-KeyValueLines -Lines $Lines -Key 'Service' -Value $driver.Service -Width $Width
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.DriverKey)) {
-        $Lines.Add((New-KeyValueLine -Key 'Driver Key' -Value $driver.DriverKey -Width $Width -ValueColor $_C.Dim))
+        Add-KeyValueLines -Lines $Lines -Key 'Driver Key' -Value $driver.DriverKey -Width $Width -ValueColor $_C.Dim
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.DeviceName)) {
-        $Lines.Add((New-KeyValueLine -Key 'Driver Name' -Value $driver.DeviceName -Width $Width))
+        Add-KeyValueLines -Lines $Lines -Key 'Driver Name' -Value $driver.DeviceName -Width $Width
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.Manufacturer) -and $driver.Manufacturer -ne $driver.Provider) {
-        $Lines.Add((New-KeyValueLine -Key 'Maker' -Value $driver.Manufacturer -Width $Width))
+        Add-KeyValueLines -Lines $Lines -Key 'Maker' -Value $driver.Manufacturer -Width $Width
     }
     if (-not [string]::IsNullOrWhiteSpace($driver.SignedDriverError)) {
-        $Lines.Add((New-KeyValueLine -Key 'Driver CIM' -Value $driver.SignedDriverError -Width $Width -ValueColor $_C.Warn))
+        Add-KeyValueLines -Lines $Lines -Key 'Driver CIM' -Value $driver.SignedDriverError -Width $Width -ValueColor $_C.Warn
     }
 }
 
@@ -2026,10 +2099,91 @@ function New-KeyValueLine {
     )
 
     if (-not $ValueColor) { $ValueColor = $_C.White }
-    $keyText = Format-PlainToWidth -Text $Key -Width 13
-    $valueWidth = [Math]::Max(8, $Width - 17)
+    $keyWidth = if ($Width -ge 56) { 14 } else { 13 }
+    $keyText = Format-PlainToWidth -Text $Key -Width $keyWidth
+    $valueWidth = [Math]::Max(8, $Width - ($keyWidth + 4))
     $valueText = Format-UiValue -Text $Value -MaxLength $valueWidth
     return " $($_C.Dim)$keyText :$($_C.Reset) $ValueColor$valueText$($_C.Reset)"
+}
+
+function Get-KeyValueLayout {
+    param([int]$Width)
+
+    $keyWidth = if ($Width -ge 56) { 14 } else { 13 }
+    $valueWidth = [Math]::Max(8, $Width - ($keyWidth + 4))
+    [pscustomobject]@{
+        KeyWidth           = $keyWidth
+        ValueWidth         = $valueWidth
+        ContinuationIndent = (' ' * ($keyWidth + 4))
+    }
+}
+
+function Split-DetailValueText {
+    param(
+        [AllowEmptyString()][string]$Text,
+        [int]$Width
+    )
+
+    $Width = [Math]::Max(8, $Width)
+    $cleanText = Remove-AnsiSequence -Text $Text
+    if ([string]::IsNullOrEmpty($cleanText)) { return @('') }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($paragraph in (($cleanText -replace "`r", '') -split "`n")) {
+        if ([string]::IsNullOrWhiteSpace($paragraph)) {
+            $lines.Add('')
+            continue
+        }
+
+        $current = ''
+        foreach ($word in ($paragraph -split '\s+')) {
+            if ([string]::IsNullOrWhiteSpace($word)) { continue }
+
+            while ($word.Length -gt $Width) {
+                if (-not [string]::IsNullOrWhiteSpace($current)) {
+                    $lines.Add($current)
+                    $current = ''
+                }
+                $lines.Add($word.Substring(0, $Width))
+                $word = $word.Substring($Width)
+            }
+
+            $candidate = if ($current) { "$current $word" } else { $word }
+            if ($candidate.Length -gt $Width) {
+                if ($current) { $lines.Add($current) }
+                $current = $word
+            } else {
+                $current = $candidate
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($current)) {
+            $lines.Add($current)
+        }
+    }
+
+    if ($lines.Count -eq 0) { return @('') }
+    return @($lines)
+}
+
+function Add-KeyValueLines {
+    param(
+        [System.Collections.Generic.List[string]]$Lines,
+        [string]$Key,
+        [AllowEmptyString()][string]$Value,
+        [int]$Width,
+        [string]$ValueColor = $null
+    )
+
+    if (-not $ValueColor) { $ValueColor = $_C.White }
+    $layout = Get-KeyValueLayout -Width $Width
+    $keyText = Format-PlainToWidth -Text $Key -Width $layout.KeyWidth
+    $valueLines = @(Split-DetailValueText -Text $Value -Width $layout.ValueWidth)
+    $Lines.Add(" $($_C.Dim)$keyText :$($_C.Reset) $ValueColor$($valueLines[0])$($_C.Reset)")
+
+    for ($i = 1; $i -lt $valueLines.Count; $i++) {
+        $Lines.Add("$($layout.ContinuationIndent)$ValueColor$($valueLines[$i])$($_C.Reset)")
+    }
 }
 
 function Add-WrappedPathLine {
@@ -2042,13 +2196,15 @@ function Add-WrappedPathLine {
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
-        $keyText = Format-PlainToWidth -Text $Key -Width 13
+        $layout = Get-KeyValueLayout -Width $Width
+        $keyText = Format-PlainToWidth -Text $Key -Width $layout.KeyWidth
         $Lines.Add(" $($_C.Dim)$keyText :$($_C.Reset) -")
         return
     }
 
-    $keyText = Format-PlainToWidth -Text $Key -Width 13
-    $valueWidth = [Math]::Max(8, $Width - 17)
+    $layout = Get-KeyValueLayout -Width $Width
+    $keyText = Format-PlainToWidth -Text $Key -Width $layout.KeyWidth
+    $valueWidth = $layout.ValueWidth
 
     # Wrap the path into pieces of $valueWidth length
     $wrapped = [System.Collections.Generic.List[string]]::new()
@@ -2068,7 +2224,7 @@ function Add-WrappedPathLine {
 
     # Subsequent lines are indented by 15 spaces (13 key + 2 padding/separator)
     for ($i = 1; $i -lt $wrapped.Count; $i++) {
-        $indent = ' ' * 15
+        $indent = $layout.ContinuationIndent
         $clickableChunk = New-TerminalHyperlink -Label $wrapped[$i] -Url $fileUrl
         $Lines.Add("$indent$($_C.White)$clickableChunk$($_C.Reset)")
     }
@@ -3553,7 +3709,7 @@ function Add-AgentTraceLines {
         default { $_C.Info }
     }
     $stateText = if ($ActiveSearch.AgentState) { $ActiveSearch.AgentState } else { 'Unknown' }
-    $lines.Add((New-KeyValueLine -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor))
+    Add-KeyValueLines -Lines $lines -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor
     if (-not [string]::IsNullOrWhiteSpace($ActiveSearch.AgentTracePath)) {
         Add-WrappedPathLine -Lines $lines -Key 'Log' -Path $ActiveSearch.AgentTracePath -Width $Width
     }
@@ -3603,16 +3759,16 @@ function Get-DetailDisplayLines {
         $machine = $SelectedRow.Ref
         $lines.Add((New-SectionLine -Title 'Computer Info' -Width $Width))
         $targetColor = if (Test-RemoteSnapshotTargetActive) { $_C.Info } else { $_C.OK }
-        $lines.Add((New-KeyValueLine -Key 'Target' -Value (Get-TargetStatusText) -Width $Width -ValueColor $targetColor))
+        Add-KeyValueLines -Lines $lines -Key 'Target' -Value (Get-TargetStatusText) -Width $Width -ValueColor $targetColor
         if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
             Add-WrappedPathLine -Lines $lines -Key 'Snapshot' -Path $script:TargetSnapshotPath -Width $Width
         }
-        $lines.Add((New-KeyValueLine -Key 'System Name' -Value (Get-MachineDisplayName -MachineEvidence $machine) -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'OS' -Value "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'System' -Value "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'BaseBoard' -Value "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'Processor' -Value $machine.Processor.Name -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'BIOS' -Value "$($machine.BIOS.Manufacturer) $($machine.BIOS.SMBIOSBIOSVersion)" -Width $Width))
+        Add-KeyValueLines -Lines $lines -Key 'System Name' -Value (Get-MachineDisplayName -MachineEvidence $machine) -Width $Width
+        Add-KeyValueLines -Lines $lines -Key 'OS' -Value "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -Width $Width
+        Add-KeyValueLines -Lines $lines -Key 'System' -Value "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -Width $Width
+        Add-KeyValueLines -Lines $lines -Key 'BaseBoard' -Value "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -Width $Width
+        Add-KeyValueLines -Lines $lines -Key 'Processor' -Value $machine.Processor.Name -Width $Width
+        Add-KeyValueLines -Lines $lines -Key 'BIOS' -Value "$($machine.BIOS.Manufacturer) $($machine.BIOS.SMBIOSBIOSVersion)" -Width $Width
 
         $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
         if ($allDevices.Count -gt 0) {
@@ -3638,25 +3794,25 @@ function Get-DetailDisplayLines {
                 "$cachedEvidenceCount cached"
             }
             $evidenceColor = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
-            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor))
+            Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor
         }
     }
     elseif ($SelectedRow.Type -eq 'Device') {
         $lines.Add((New-SectionLine -Title 'Device Properties' -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'FriendlyName' -Value $SelectedRow.Ref.FriendlyName -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'InstanceId' -Value $SelectedRow.Ref.InstanceId -Width $Width))
+        Add-KeyValueLines -Lines $lines -Key 'FriendlyName' -Value $SelectedRow.Ref.FriendlyName -Width $Width
+        Add-KeyValueLines -Lines $lines -Key 'InstanceId' -Value $SelectedRow.Ref.InstanceId -Width $Width
 
         $errCode = [int]$SelectedRow.Ref.ConfigManagerErrorCode
         $errDesc = Get-DeviceProblemDescription -ErrorCode $errCode
         $statusColor = if ($errCode -eq 0) { $_C.OK } else { $_C.Fail }
         $statusValue = if ($errCode -eq 0) { "OK ($errDesc)" } else { "Error (Code ${errCode}: $errDesc)" }
-        $lines.Add((New-KeyValueLine -Key 'Status' -Value $statusValue -Width $Width -ValueColor $statusColor))
+        Add-KeyValueLines -Lines $lines -Key 'Status' -Value $statusValue -Width $Width -ValueColor $statusColor
 
         $activeSearch = if ($script:ActiveSearches.Contains($SelectedRow.Ref.InstanceId)) { $script:ActiveSearches[$SelectedRow.Ref.InstanceId] } else { $null }
         if ($null -ne $activeSearch -and $activeSearch.EvidenceState -eq 'Searching') {
-            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value 'Collecting local evidence...' -Width $Width -ValueColor $_C.Warn))
+            Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value 'Collecting local evidence...' -Width $Width -ValueColor $_C.Warn
         } elseif ($null -ne $activeSearch -and $activeSearch.EvidenceState -eq 'Error') {
-            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value "Error: $($activeSearch.EvidenceVal)" -Width $Width -ValueColor $_C.Fail))
+            Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value "Error: $($activeSearch.EvidenceVal)" -Width $Width -ValueColor $_C.Fail
         }
 
         $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $SelectedRow.Ref.InstanceId
@@ -3664,14 +3820,14 @@ function Get-DetailDisplayLines {
             $capturedAt = Get-NotePropertyValue -Object $cachedEvidence -Name 'CapturedAt'
             $capturedText = if ($capturedAt) { $capturedAt } else { 'unknown time' }
             if ($null -eq $activeSearch -or $activeSearch.EvidenceState -ne 'Searching') {
-                $lines.Add((New-KeyValueLine -Key 'Evidence' -Value "Cached ($capturedText)" -Width $Width -ValueColor $_C.OK))
+                Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value "Cached ($capturedText)" -Width $Width -ValueColor $_C.OK
             }
 
             $importantProperties = Get-NotePropertyValue -Object $cachedEvidence -Name 'ImportantProperties'
             $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
             if ($hardwareIds) {
                 $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
-                $lines.Add((New-KeyValueLine -Key 'HardwareId' -Value $firstHardwareId -Width $Width))
+                Add-KeyValueLines -Lines $lines -Key 'HardwareId' -Value $firstHardwareId -Width $Width
                 foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width $Width -Evidence $cachedEvidence)) {
                     $lines.Add($breakdownLine)
                 }
@@ -3679,13 +3835,13 @@ function Get-DetailDisplayLines {
 
             $manufacturer = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer'
             if ($manufacturer) {
-                $lines.Add((New-KeyValueLine -Key 'Manufacturer' -Value $manufacturer -Width $Width))
+                Add-KeyValueLines -Lines $lines -Key 'Manufacturer' -Value $manufacturer -Width $Width
             }
 
             $compatibleIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_CompatibleIds'
             if ($compatibleIds) {
                 $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
-                $lines.Add((New-KeyValueLine -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width))
+                Add-KeyValueLines -Lines $lines -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width
                 foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width $Width -Evidence $cachedEvidence)) {
                     $lines.Add($breakdownLine)
                 }
@@ -3697,11 +3853,11 @@ function Get-DetailDisplayLines {
                 foreach ($row in $localIdentityRows) {
                     $rowColorName = [string](Get-NotePropertyValue -Object $row -Name 'Color')
                     $rowColor = if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White }
-                    $lines.Add((New-KeyValueLine -Key ([string]$row.Key) -Value ([string]$row.Value) -Width $Width -ValueColor $rowColor))
+                    Add-KeyValueLines -Lines $lines -Key ([string]$row.Key) -Value ([string]$row.Value) -Width $Width -ValueColor $rowColor
                 }
             }
             elseif ($script:HardwareIdResolverState -eq 'Unavailable' -and -not [string]::IsNullOrWhiteSpace($script:HardwareIdResolverError)) {
-                $lines.Add((New-KeyValueLine -Key 'Local ID' -Value 'Unavailable; run internal\Update-HardwareIdDatabases.ps1' -Width $Width -ValueColor $_C.Dim))
+                Add-KeyValueLines -Lines $lines -Key 'Local ID' -Value 'Unavailable; run internal\Update-HardwareIdDatabases.ps1' -Width $Width -ValueColor $_C.Dim
             }
 
             Add-InstalledDriverDetailLines -Lines $lines -Evidence $cachedEvidence -Width $Width
@@ -3714,7 +3870,7 @@ function Get-DetailDisplayLines {
                 Add-WrappedPathLine -Lines $lines -Key 'Cache' -Path $cachePath -Width $Width
             }
         } elseif ($null -eq $activeSearch) {
-            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value 'Not scanned yet. Press E for local evidence or S for search.' -Width $Width -ValueColor $_C.Warn))
+            Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value 'Not scanned yet. Press E for local evidence or S for search.' -Width $Width -ValueColor $_C.Warn
         }
 
         Add-AgentTraceLines -Lines $lines -ActiveSearch $activeSearch -Width $Width -MaxLogLines 10
@@ -3729,7 +3885,7 @@ function Get-DetailDisplayLines {
             $stateText = ([string]$SelectedRow.Name -replace '^\[Agent:\s*[^\]]+\]\s*', '').Trim()
             if (-not [string]::IsNullOrWhiteSpace($stateText)) {
                 $stateColor = if ($stateText -match 'Failed|Error|Cancelled') { $_C.Fail } elseif ($stateText -match 'Done') { $_C.OK } else { $_C.Warn }
-                $lines.Add((New-KeyValueLine -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor))
+                Add-KeyValueLines -Lines $lines -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor
             }
 
             $tracePath = if ($null -ne $resultSearch -and -not [string]::IsNullOrWhiteSpace($resultSearch.AgentTracePath)) {
@@ -3790,10 +3946,10 @@ function Get-DetailDisplayLines {
     }
     else {
         $lines.Add((New-SectionLine -Title 'Category Info' -Width $Width))
-        $lines.Add((New-KeyValueLine -Key 'Group' -Value $SelectedRow.Name -Width $Width))
+        Add-KeyValueLines -Lines $lines -Key 'Group' -Value $SelectedRow.Name -Width $Width
         if ($SelectedRow.Type -eq 'Category' -and $SelectedRow.Ref.Devices) {
             $categoryDevices = @($SelectedRow.Ref.Devices)
-            $lines.Add((New-KeyValueLine -Key 'Devices' -Value ([string]$categoryDevices.Count) -Width $Width))
+            Add-KeyValueLines -Lines $lines -Key 'Devices' -Value ([string]$categoryDevices.Count) -Width $Width
 
             $activeEvidenceCount = @(
                 $categoryDevices | Where-Object {
@@ -3817,7 +3973,7 @@ function Get-DetailDisplayLines {
                 "$cachedEvidenceCount cached"
             }
             $evidenceColor = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
-            $lines.Add((New-KeyValueLine -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor))
+            Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor
         }
     }
 
@@ -4347,27 +4503,38 @@ function Render-Frame {
 
     $renderStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $detailLinesBuilt = 0
+    Lock-ViewportToWindow
     $shouldClear = $ForceClear -or $script:RequestForceClear
     $script:RequestForceClear = $false
 
     $uiWidth = Get-UiWidth
     try { $windowHeight = $Host.UI.RawUI.WindowSize.Height } catch { $windowHeight = 32 }
+    $frameHeightBudget = [Math]::Max(8, $windowHeight - 1)
 
     $useDualPane = ($uiWidth -ge 136)
     $batchStatus = Get-EvidenceBatchStatusText
-    $footerHeight = 1
-    $headerReserve = if ([string]::IsNullOrWhiteSpace($batchStatus)) { 7 } else { 8 }
+    $batchRows = if ([string]::IsNullOrWhiteSpace($batchStatus)) { 0 } else { 1 }
+    $narrowDetailMaxLines = 0
 
     if ($useDualPane) {
         $dividerWidth = 3
         $availablePaneWidth = [Math]::Max(80, $uiWidth - $dividerWidth)
         $leftWidth = [int][Math]::Floor($availablePaneWidth / 2)
         $rightWidth = $availablePaneWidth - $leftWidth
-        $maxVisible = [Math]::Max(4, $windowHeight - $headerReserve - $footerHeight - 4)
+        $maxVisible = [Math]::Max(0, $frameHeightBudget - 11 - $batchRows)
     } else {
         $leftWidth = $uiWidth
         $rightWidth = $uiWidth
-        $maxVisible = [Math]::Max(4, $windowHeight - $headerReserve - $footerHeight - 17)
+        if ($frameHeightBudget -ge 30) {
+            $narrowDetailMaxLines = [Math]::Min(11, $frameHeightBudget - 22)
+        } elseif ($frameHeightBudget -ge 24) {
+            $narrowDetailMaxLines = [Math]::Min(5, $frameHeightBudget - 20)
+        }
+        $narrowDetailMaxLines = [Math]::Max(0, $narrowDetailMaxLines)
+
+        # Narrow/short terminals must not write past the viewport or cursor-home redraws corrupt the header.
+        $fixedNarrowRows = 14 + $batchRows
+        $maxVisible = [Math]::Max(0, $frameHeightBudget - $fixedNarrowRows - $narrowDetailMaxLines)
     }
 
     $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $script:visibleRows.Count - $maxVisible)))
@@ -4381,9 +4548,8 @@ function Render-Frame {
         }
     }
     $categoryCount = if ($null -ne $script:categories) { @($script:categories).Count } else { 0 }
-    $headerTime = Get-Date -Format 'HH:mm:ss'
     $headerSummary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount $categoryCount
-    $subtitleText = "$headerSummary | $headerTime"
+    $subtitleText = $headerSummary
 
     $frame = [System.Text.StringBuilder]::new()
     $null = $frame.Append("$($_E)[?2026h")
@@ -4528,8 +4694,8 @@ function Render-Frame {
         $belowMessage = if ($belowCount -gt 0) { "  $([char]0x2193) $belowCount more below" } else { '' }
         Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
-        if ($null -ne $selectedRow) {
-            $stackedDetailLines = @(Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines 11)
+        if ($narrowDetailMaxLines -gt 0 -and $null -ne $selectedRow) {
+            $stackedDetailLines = @(Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines $narrowDetailMaxLines)
             $detailLinesBuilt = $stackedDetailLines.Count
             foreach ($line in $stackedDetailLines) {
                 Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $line -Width $rightWidth)$($_C.EraseLn)"

@@ -14,14 +14,29 @@
       4) Cursor-home redraw for normal frames, gated full clear only when needed
       5) Responsive resize polling via KeyAvailable + Test-WindowResized
       6) Low-latency key polling around 10ms when render time is under 10ms
-      7) BufferSize = WindowSize to kill scrollback tearing
+      7) BufferSize = WindowSize, including width and height, to kill scrollback tearing
       8) Primary buffer only; do NOT use the alternate screen buffer
+      9) UI width helpers must never report more columns than the real viewport
+     10) Height budgets may hide lower-priority panes/rows; never write past viewport
+     11) Do not batch arrow keys; keep one key -> one selection move -> one frame
 
     The important lesson is that for complex PowerShell TUIs in WT, "partial
     redraw" is not the canonical answer once resize/stretch correctness matters.
     The stable answer is immediate-mode full redraw wrapped in synchronized output,
     emitted as one text frame. Avoid many Write-Host calls inside fast navigation
     loops; use Write-Host for setup/status outside the hot render path.
+
+    Failure modes this template is meant to prevent:
+        - blinking from repeated Clear-Host during normal navigation
+        - header/border multiplication from writing past WindowSize.Height
+        - visual stretching/wrapping when width math exceeds the real viewport
+        - arrow movement skips caused by draining or batching the input queue
+        - good copied terminal text but broken rendering due to stale buffer width
+
+    Performance guardrails:
+        - when render time is under about 10ms, keep idle polling near 10ms
+        - collect benchmark timings in memory and flush logs only on exit
+        - use a single [Console]::Write() per frame in the hot render path
 
 .USAGE
     Import this file as a module, then adapt:
@@ -94,14 +109,15 @@ function Restore-TuiHost {
 }
 
 function Get-UiWidth {
-    try { [Math]::Max(60, $Host.UI.RawUI.WindowSize.Width - 2) }
+    try { [Math]::Max(1, $Host.UI.RawUI.WindowSize.Width - 2) }
     catch { 80 }
 }
 
 function Lock-ViewportToWindow {
     try {
         $windowSize = $Host.UI.RawUI.WindowSize
-        if ($Host.UI.RawUI.BufferSize.Height -ne $windowSize.Height) {
+        $bufferSize = $Host.UI.RawUI.BufferSize
+        if ($bufferSize.Width -ne $windowSize.Width -or $bufferSize.Height -ne $windowSize.Height) {
             $Host.UI.RawUI.BufferSize = $windowSize
         }
     }

@@ -56,6 +56,27 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-07
+Problem: The header subtitle repeated low-value or overly long system information such as generic system manufacturer/model strings, full Windows captions, full CPU marketing strings, live clock text, and long device/category words.
+Root cause: `Get-MachineSummary` reused evidence-style raw fields for the header instead of a presentation-only compact summary.
+Guardrail/rule: Header text is presentation-only. Keep full machine/system/board/CPU/OS data in evidence and details, but compact the header to stable high-signal fields: computer name, useful board product, compact CPU, compact OS, and `dev` / `cat` counts. Avoid guessing subjective motherboard names beyond safe boilerplate trims.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; isolated header formatter smoke for NEOS and PALIOS examples; `git diff --check`.
+
+Date: 2026-06-07
+Problem: Long values in the selected details pane, especially `InstanceId`, were truncated with `...` while path rows such as `Cache` wrapped, making important hardware evidence unreadable.
+Root cause: Most selected-details rows used a single-line `New-KeyValueLine` helper that formatted values with `Format-UiValue`, while path rows had a separate wrapping helper.
+Guardrail/rule: Selected-details values should wrap into real generated frame rows using the current pane width. Do not rely on terminal soft-wrap, and do not use ellipsis for evidence identifiers that the user needs to inspect. Continuation rows should align under the value column and reflow naturally on live resize.
+Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; isolated `Add-KeyValueLines` smoke confirmed a long `InstanceId` wraps into multiple rows without `...`; verified no selected-details `.Add((New-KeyValueLine ...))` calls remain; `git diff --check`.
+
+Date: 2026-06-07
+Problem: After adding remote/login screens, DeviceCheck still broke the main TUI header when Windows Terminal was resized to very small widths/heights, while copied terminal text looked correct and the WinAppManager UI stayed stable.
+Root cause: DeviceCheck only partially adopted the reusable UI blueprint. The remote modal screens used `Add-UiFrameBanner` / `Write-UiFrame`, but the main screen still used a separate legacy `Render-Frame` / `Add-FrameBanner` path with its own height math. In narrow mode it reserved fixed stacked detail rows even when the viewport could not fit them. The shared blueprint also still returned a minimum width of 60 columns even when the real viewport was smaller, and `Lock-ViewportToWindow` checked only buffer height, not width.
+Guardrail/rule: Do not treat the UI template as a visual copy-paste layer. Complex TUIs must have one canonical frame pipeline and every branch must prove it writes no more than the current viewport height. Width helpers must never report more columns than the real viewport. Buffer locks must check both width and height. In short/narrow terminals, hide lower-priority panels before allowing scrollback movement.
+Files affected: `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; narrow renderer line-budget smoke for terminal heights 16/20/24/25/30/40 with and without batch status; `git diff --check`.
+
 Date: 2026-06-06
 Problem: Even with ultra-fast rendering (3.5ms - 6ms), TUI scrolling during held arrow key repeat rate (~30-33Hz) was not smooth and suffered from stuttering.
 Root cause: The idle key polling sleep of 40ms (`Start-Sleep -Milliseconds 40`) restricted the event loop frequency to ~25Hz with high jitter, causing the rendering of buffered keypresses to desynchronize from the input rate.
@@ -657,6 +678,3 @@ Root cause: The evidence collection was executed synchronously on the main threa
 Guardrail/rule: Run the remote snapshot collection asynchronously using `[PowerShell]::Create()` and `BeginInvoke()`. In the main thread loop, poll for completion, read keys, and animate the progress bar (marquee plus spinner) every 100ms. Handle window `ResizeEvent` dynamically and allow user cancellation at any time by pressing `ESC` (which calls `$ps.Stop()`).
 Files affected: `DeviceCheck.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Checked syntax with `Get-Command -Syntax -File DeviceCheck.ps1` successfully.
-
-
-
