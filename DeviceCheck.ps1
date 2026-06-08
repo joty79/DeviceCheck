@@ -3687,6 +3687,24 @@ function Get-DeviceCheckDiscoveredHosts {
     
     if (-not $interfaces) { return $discovered }
 
+    # Retrieve history hosts to make sure we scan them even if they block ICMP pings
+    $historyIPs = @()
+    $history = Get-DeviceCheckConnectionHistory
+    if ($history) {
+        $historyIPs = @($history.LastIPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -Unique)
+    }
+
+    # CRITICAL: Force clear OS-level negative ARP cache (Neighbor cache) for these history IPs
+    # to prevent Windows from immediately discarding connections locally without sending packets on the wire.
+    if ($historyIPs) {
+        foreach ($ip in $historyIPs) {
+            Remove-NetNeighbor -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue
+            try {
+                arp.exe -d $ip *>$null
+            } catch {}
+        }
+    }
+
     # Trigger active ARP discovery by pinging the subnet broadcast and history hosts
     foreach ($if in $interfaces) {
         if ($if.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') {
@@ -3699,19 +3717,14 @@ function Get-DeviceCheckDiscoveredHosts {
         }
     }
 
-    # Ping history hosts asynchronously to resolve them in the ARP cache
-    $history = Get-DeviceCheckConnectionHistory
-    if ($history) {
-        $historyIPs = @($history.LastIPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -Unique)
-        if ($historyIPs) {
-            $pingers = [System.Collections.Generic.List[System.Net.NetworkInformation.Ping]]::new()
-            foreach ($ip in $historyIPs) {
-                try {
-                    $p = [System.Net.NetworkInformation.Ping]::new()
-                    $null = $p.SendAsync($ip, 250, $null)
-                    $pingers.Add($p)
-                } catch {}
-            }
+    if ($historyIPs) {
+        $pingers = [System.Collections.Generic.List[System.Net.NetworkInformation.Ping]]::new()
+        foreach ($ip in $historyIPs) {
+            try {
+                $p = [System.Net.NetworkInformation.Ping]::new()
+                $null = $p.SendAsync($ip, 250, $null)
+                $pingers.Add($p)
+            } catch {}
         }
     }
 
@@ -3723,8 +3736,6 @@ function Get-DeviceCheckDiscoveredHosts {
         Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
             Where-Object { $_.State -ne 'Unreachable' -and $_.IPAddress -notmatch '^\d+\.\d+\.\d+\.255$' -and $_.LinkLayerAddress -ne '00-00-00-00-00-00' }
     }
-    
-    if (-not $neighbors) { return $discovered }
     
     # Filter out gateway IPs to avoid connecting to router WinRM
     $gateways = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -3743,22 +3754,37 @@ function Get-DeviceCheckDiscoveredHosts {
         $null = $localIPs.Add($if.IPAddress)
     }
     
+    $neighborIPs = @()
+    if ($neighbors) {
+        $neighborIPs = @($neighbors.IPAddress)
+    }
+    
     $uniqueIPs = @(
-        $neighbors.IPAddress | 
+        ($neighborIPs + $historyIPs) | 
             Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) } | 
             Select-Object -Unique
     )
     
     if (-not $uniqueIPs) { return $discovered }
     
+    $isPS6Plus = $PSVersionTable.PSVersion.Major -ge 6
+    
     # Fast parallel scan on port 5985
     $results = $uniqueIPs | ForEach-Object -Parallel {
         $ip = $_
         $tcp = [System.Net.Sockets.TcpClient]::new()
+        $cts = [System.Threading.CancellationTokenSource]::new(1000)
         try {
             $ipObj = [System.Net.IPAddress]::Parse($ip)
-            $ar = $tcp.BeginConnect($ipObj, 5985, $null, $null)
-            if ($ar.AsyncWaitHandle.WaitOne(1000) -and $tcp.Connected) {
+            if ($using:isPS6Plus) {
+                $task = $tcp.ConnectAsync($ipObj, 5985, $cts.Token)
+                $task.GetAwaiter().GetResult()
+            } else {
+                $task = $tcp.ConnectAsync($ipObj, 5985)
+                $null = $task.Wait(1000)
+            }
+            
+            if ($tcp.Connected) {
                 $dnsName = $ip
                 try {
                     $dnsName = [System.Net.Dns]::GetHostEntry($ip).HostName
@@ -3770,6 +3796,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 }
             }
         } catch {} finally {
+            $cts.Dispose()
             $tcp.Dispose()
         }
     } -ThrottleLimit 15
@@ -3817,9 +3844,12 @@ function Add-DeviceCheckConnectionHistoryEntry {
     )
 
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
-    $history = Get-DeviceCheckConnectionHistory
-    if ($null -eq $history) {
-        $history = [System.Collections.Generic.List[object]]::new()
+    $historyList = Get-DeviceCheckConnectionHistory
+    $history = [System.Collections.Generic.List[object]]::new()
+    if ($null -ne $historyList) {
+        foreach ($item in @($historyList)) {
+            $history.Add($item)
+        }
     }
     
     $existing = $null
@@ -3863,12 +3893,20 @@ function Test-PortOpen {
     )
 
     $tcp = [System.Net.Sockets.TcpClient]::new()
+    $cts = [System.Threading.CancellationTokenSource]::new($TimeoutMs)
     try {
-        $asyncResult = $tcp.BeginConnect($ComputerName, $Port, $null, $null)
-        return $asyncResult.AsyncWaitHandle.WaitOne($TimeoutMs) -and $tcp.Connected
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $task = $tcp.ConnectAsync($ComputerName, $Port, $cts.Token)
+            $task.GetAwaiter().GetResult()
+        } else {
+            $task = $tcp.ConnectAsync($ComputerName, $Port)
+            $null = $task.Wait($TimeoutMs)
+        }
+        return $tcp.Connected
     } catch {
         return $false
     } finally {
+        $cts.Dispose()
         $tcp.Dispose()
     }
 }
@@ -3967,7 +4005,7 @@ function Invoke-ConnectionHistorySelector {
                     }
                 }
                 
-                $onlineText = $(if ($isOnline) { " (Online)" } else { "" })
+                $onlineText = $(if ($isOnline) { " (Online)" } else { " (Offline)" })
                 $displayText = "$($entry.ComputerName) ($($entry.LastIPAddress)) - user: $($entry.UserName)$onlineText"
                 
                 $items.Add([PSCustomObject]@{
@@ -4111,12 +4149,20 @@ function Invoke-ConnectionHistorySelector {
                     Add-UiFrameLine -Frame $frame -Text "$($item.Text)$($_C.EraseLn)"
                 } else {
                     if ($index -eq $selectedIndex) {
-                        Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($item.Text) $($_C.Reset)$($_C.EraseLn)"
+                        $statusText = ""
+                        $cleanText = $item.Text
+                        if ($item.Type -in @('Saved', 'Discovered')) {
+                            $cleanText = $item.Text -replace '\s*\((Online|Offline)\)\s*$'
+                            $statusColor = $(if ($item.IsOnline) { $_C.OK } else { $_C.Fail })
+                            $statusLabel = $(if ($item.IsOnline) { "(Online)" } else { "(Offline)" })
+                            $statusText = " $statusColor$statusLabel$($_C.Reset)$($_C.SelBg)$($_C.SelFg)$($_C.Bold)"
+                        }
+                        Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($cleanText)$($statusText) $($_C.Reset)$($_C.EraseLn)"
                     } else {
                         if ($item.Type -eq 'Action') {
                             Add-UiFrameLine -Frame $frame -Text "    $($_C.OK)$($item.Text)$($_C.Reset)$($_C.EraseLn)"
                         } else {
-                            $onlineColor = $(if ($item.IsOnline) { " $($_C.OK)(Online)$($_C.Reset)" } else { "" })
+                            $onlineColor = $(if ($item.IsOnline) { " $($_C.OK)(Online)$($_C.Reset)" } else { " $($_C.Fail)(Offline)$($_C.Reset)" })
                             $baseText = $(if ($item.Type -eq 'Saved') {
                                 "$($item.Data.ComputerName) ($($item.Data.LastIPAddress)) - user: $($item.Data.UserName)"
                             } else {
@@ -4278,271 +4324,279 @@ function Invoke-ConnectLanTarget {
     try { [Console]::CursorVisible = $true } catch {}
     $script:RequestForceClear = $true
     
-    # Render scanning loading screens
-    Clear-TuiScreen
-    $frame = New-UiFrame
-    Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle 'Detecting network profile...' -Width (Get-UiWidth)
-    Add-UiFrameLine -Frame $frame
-    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Detecting network profile...$($_C.Reset)$($_C.EraseLn)"
-    Write-UiFrame -Frame $frame
-
-    $networkInfo = Get-CurrentNetworkIdentity
-    $networkName = $networkInfo.ProfileName
-
-    $frame = New-UiFrame
-    Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
-    Add-UiFrameLine -Frame $frame
-    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Active Network: $networkName$($_C.Reset)$($_C.EraseLn)"
-    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
-    Write-UiFrame -Frame $frame
-
-    $discoveredHosts = @(Get-DeviceCheckDiscoveredHosts)
-
-    $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -DiscoveredHosts $discoveredHosts
-    if ($null -eq $choice) {
-        $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
-        $script:RequestForceClear = $true
-        try { Initialize-TuiHost } catch {}
-        try { [Console]::CursorVisible = $false } catch {}
-        return
-    }
-
-    $target = $null
-    $resolvedIp = $null
-    $targetMac = $null
-
-    if ($choice.Action -eq 'New') {
-        $renderBlock = {
-            param($currentInput)
-            $width = Get-UiWidth
-            $frame = New-UiFrame
-            Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle "Active Network: $networkName" -Width $width
-            Add-UiFrameLine -Frame $frame
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Current target :$($_C.Reset) $($_C.Info)$(Get-TargetStatusText)$($_C.Reset)$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS - Use IP to bypass Kerberos lag):$($_C.Reset)$($_C.EraseLn)"
-            $null = $frame.Append("  Target: $currentInput")
-            Write-UiFrame -Frame $frame
-        }
-        $target = Read-TuiLine -RenderBlock $renderBlock -DefaultValue ''
-        if ($null -eq $target) {
-            $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
-            $script:RequestForceClear = $true
-            try { Initialize-TuiHost } catch {}
-            try { [Console]::CursorVisible = $false } catch {}
-            return
-        }
-        if ([string]::IsNullOrWhiteSpace($target)) {
-            $target = 'PALIOS'
-        }
-        $target = $target.Trim()
-        $resolvedIp = $target
-    } elseif ($choice.Action -eq 'ConnectDiscovered') {
-        $target = $choice.ComputerName
-        $resolvedIp = $choice.LastIP
-        $targetMac = $null
-    } else {
-        $target = $choice.ComputerName
-        $targetMac = $choice.MAC
-        $resolvedIp = $choice.LastIP
-        
+    while ($true) {
+        # Render scanning loading screens
         Clear-TuiScreen
         $frame = New-UiFrame
-        Add-UiFrameBanner -Frame $frame -Title "Connecting to $target" -Subtitle "Locating device on network '$networkName'..." -Width (Get-UiWidth)
+        Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle 'Detecting network profile...' -Width (Get-UiWidth)
         Add-UiFrameLine -Frame $frame
-        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Locating PC '$target' dynamically (checking DNS and ARP cache)...$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Detecting network profile...$($_C.Reset)$($_C.EraseLn)"
         Write-UiFrame -Frame $frame
 
-        $resolvedIp = Resolve-HistoryTargetAddress -ComputerName $target -LastIPAddress $choice.LastIP -MACAddress $targetMac
-        if ($null -eq $resolvedIp) {
-            $script:SystemScanMessage = "Could not locate target PC '$target' on LAN. Verify it is online. | $(Get-Date -Format 'HH:mm:ss')"
-            $script:RequestForceClear = $true
-            
-            $renderErrorBlock = {
-                param()
-                Clear-TuiScreen
-                $width = Get-UiWidth
-                $frame = New-Object System.Text.StringBuilder
-                Add-UiFrameBanner -Frame $frame -Title "Cannot locate $target" -Subtitle "The device could not be reached via its hostname or MAC address." -Width $width
-                Add-UiFrameLine -Frame $frame
-                Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)Resolution failed.$($_C.Reset)$($_C.EraseLn)"
-                Add-UiFrameLine -Frame $frame
-                Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The host '$target' (last IP: $($choice.LastIP)) did not respond on port 5985.$($_C.Reset)$($_C.EraseLn)"
-                Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)Ensure the target PC is awake, connected to network '$networkName', and WinRM is enabled.$($_C.Reset)$($_C.EraseLn)"
-                Add-UiFrameLine -Frame $frame
-                Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)"
-                Add-UiFrameLine -Frame $frame
-                try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
-            }
-            while ($true) {
-                & $renderErrorBlock
-                $key = Read-ConsoleKey
-                if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
-                    Start-Sleep -Milliseconds 10
-                    continue
-                }
-                if ($key.Key -eq 'Enter') {
-                    break
-                }
-                if ($key.Key -eq 'ResizeEvent') {
-                    $script:RequestForceClear = $true
-                    continue
-                }
-            }
-            try { Initialize-TuiHost } catch {}
-            try { [Console]::CursorVisible = $false } catch {}
-            return
-        }
-    }
+        $networkInfo = Get-CurrentNetworkIdentity
+        $networkName = $networkInfo.ProfileName
 
-    if (Test-DeviceCheckLocalTargetName -ComputerName $target) {
         $frame = New-UiFrame
-        Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle 'Switching back to local host...' -Width (Get-UiWidth)
+        Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
         Add-UiFrameLine -Frame $frame
-        Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Re-initializing local system scan...$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Active Network: $networkName$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
         Write-UiFrame -Frame $frame
-        
-        $script:TargetMode = 'Local'
-        $script:TargetCredential = $null
-        $script:TargetSnapshot = $null
-        $script:TargetSnapshotPath = $null
-        Invoke-SystemScan -Quiet
-        $script:selectedIndex = 0
-        $script:DetailScrollOffset = 0
-        $script:DetailCursorIndex = 0
-        $script:ActivePane = 'Tree'
-        $script:VisibleRowsDirty = $true
-        $script:visibleRows = Update-VisibleRows
-        $script:VisibleRowsDirty = $false
-        $script:RequestForceClear = $true
-        try { Initialize-TuiHost } catch {}
-        try { [Console]::CursorVisible = $false } catch {}
-        return
-    }
 
-    $cached = Find-LatestSnapshotForComputerName -ComputerName $target
-    if ($null -ne $cached) {
-        $collector = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Collector'
-        $finishedAt = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
-        $devicesRoot = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Devices'
-        $deviceCount = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')
-        if ([string]::IsNullOrWhiteSpace($deviceCount)) {
-            $deviceCount = [string](@((Get-NotePropertyValue -Object $devicesRoot -Name 'Present')).Count)
-        }
+        $discoveredHosts = @(Get-DeviceCheckDiscoveredHosts)
 
-        $script:RequestForceClear = $true
-        $renderChoiceBlock = {
-            param($currentInput)
-            $width = Get-UiWidth
-            $frame = New-UiFrame
-            Add-UiFrameBanner -Frame $frame -Title "Cached Snapshot Found" -Subtitle "Target computer: $target" -Width $width
-            Add-UiFrameLine -Frame $frame
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$target$($_C.Reset)$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Time   :$($_C.Reset) $($_C.White)$finishedAt$($_C.Reset)$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Devices:$($_C.Reset) $($_C.White)$deviceCount$($_C.Reset)$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Choose Action:$($_C.Reset)$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Enter$($_C.Reset) = Open cached snapshot$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)R$($_C.Reset)     = Connect and refresh snapshot now$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)C$($_C.Reset)     = Cancel connection$($_C.EraseLn)"
-            Add-UiFrameLine -Frame $frame
-            $null = $frame.Append("  Select option: $currentInput")
-            Write-UiFrame -Frame $frame
-        }
-        
-        $choiceSub = Read-TuiLine -RenderBlock $renderChoiceBlock -DefaultValue ''
-        if ($null -eq $choiceSub) {
+        $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -DiscoveredHosts $discoveredHosts
+        if ($null -eq $choice) {
             $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
             $script:RequestForceClear = $true
             try { Initialize-TuiHost } catch {}
             try { [Console]::CursorVisible = $false } catch {}
             return
         }
-        
-        if ([string]::IsNullOrWhiteSpace($choiceSub)) {
-            $cachedCredential = $script:TargetCredential
-            if ($null -eq $cachedCredential) {
-                $cachedCredential = $script:CredentialCache[$target.ToLower()]
+
+        $target = $null
+        $resolvedIp = $null
+        $targetMac = $null
+
+        if ($choice.Action -eq 'New') {
+            $renderBlock = {
+                param($currentInput)
+                $width = Get-UiWidth
+                $frame = New-UiFrame
+                Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle "Active Network: $networkName" -Width $width
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Current target :$($_C.Reset) $($_C.Info)$(Get-TargetStatusText)$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS - Use IP to bypass Kerberos lag):$($_C.Reset)$($_C.EraseLn)"
+                $null = $frame.Append("  Target: $currentInput")
+                Write-UiFrame -Frame $frame
             }
-            if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
-                $cachedCredential = $script:CredentialCache[$resolvedIp.ToLower()]
+            $target = Read-TuiLine -RenderBlock $renderBlock -DefaultValue ''
+            if ($null -eq $target) {
+                $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                continue
             }
-            if ($null -eq $cachedCredential) {
-                $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $target
+            if ([string]::IsNullOrWhiteSpace($target)) {
+                $target = 'PALIOS'
             }
-            if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
-                $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
+            $target = $target.Trim()
+            $resolvedIp = $target
+        } elseif ($choice.Action -eq 'ConnectDiscovered') {
+            $target = $choice.ComputerName
+            $resolvedIp = $choice.LastIP
+            $targetMac = $null
+        } else {
+            $target = $choice.ComputerName
+            $targetMac = $choice.MAC
+            $resolvedIp = $choice.LastIP
+            
+            Clear-TuiScreen
+            $frame = New-UiFrame
+            Add-UiFrameBanner -Frame $frame -Title "Connecting to $target" -Subtitle "Locating device on network '$networkName'..." -Width (Get-UiWidth)
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Locating PC '$target' dynamically (checking DNS and ARP cache)...$($_C.Reset)$($_C.EraseLn)"
+            Write-UiFrame -Frame $frame
+
+            $resolvedIp = Resolve-HistoryTargetAddress -ComputerName $target -LastIPAddress $choice.LastIP -MACAddress $targetMac
+            if ($null -eq $resolvedIp) {
+                $script:SystemScanMessage = "Could not locate target PC '$target' on LAN. Verify it is online. | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                
+                $renderErrorBlock = {
+                    param()
+                    Clear-TuiScreen
+                    $width = Get-UiWidth
+                    $frame = New-Object System.Text.StringBuilder
+                    Add-UiFrameBanner -Frame $frame -Title "Cannot locate $target" -Subtitle "The device could not be reached via its hostname or MAC address." -Width $width
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)Resolution failed.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The host '$target' (last IP: $($choice.LastIP)) did not respond on port 5985.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)Ensure the target PC is awake, connected to network '$networkName', and WinRM is enabled.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                    try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
+                }
+                while ($true) {
+                    & $renderErrorBlock
+                    $key = Read-ConsoleKey
+                    if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+                        Start-Sleep -Milliseconds 10
+                        continue
+                    }
+                    if ($key.Key -eq 'Enter') {
+                        break
+                    }
+                    if ($key.Key -eq 'ResizeEvent') {
+                        $script:RequestForceClear = $true
+                        continue
+                    }
+                }
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                continue
+            }
+        }
+
+        if (Test-DeviceCheckLocalTargetName -ComputerName $target) {
+            $frame = New-UiFrame
+            Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle 'Switching back to local host...' -Width (Get-UiWidth)
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Re-initializing local system scan...$($_C.Reset)$($_C.EraseLn)"
+            Write-UiFrame -Frame $frame
+            
+            $script:TargetMode = 'Local'
+            $script:TargetCredential = $null
+            $script:TargetSnapshot = $null
+            $script:TargetSnapshotPath = $null
+            Invoke-SystemScan -Quiet
+            $script:selectedIndex = 0
+            $script:DetailScrollOffset = 0
+            $script:DetailCursorIndex = 0
+            $script:ActivePane = 'Tree'
+            $script:VisibleRowsDirty = $true
+            $script:visibleRows = Update-VisibleRows
+            $script:VisibleRowsDirty = $false
+            $script:RequestForceClear = $true
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
+
+        $cached = Find-LatestSnapshotForComputerName -ComputerName $target
+        if ($null -ne $cached) {
+            $collector = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Collector'
+            $finishedAt = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
+            $devicesRoot = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Devices'
+            $deviceCount = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')
+            if ([string]::IsNullOrWhiteSpace($deviceCount)) {
+                $deviceCount = [string](@((Get-NotePropertyValue -Object $devicesRoot -Name 'Present')).Count)
+            }
+
+            $script:RequestForceClear = $true
+            $renderChoiceBlock = {
+                param($currentInput)
+                $width = Get-UiWidth
+                $frame = New-UiFrame
+                Add-UiFrameBanner -Frame $frame -Title "Cached Snapshot Found" -Subtitle "Target computer: $target" -Width $width
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$target$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Time   :$($_C.Reset) $($_C.White)$finishedAt$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Devices:$($_C.Reset) $($_C.White)$deviceCount$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Choose Action:$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Enter$($_C.Reset) = Open cached snapshot$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)R$($_C.Reset)     = Connect and refresh snapshot now$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)C$($_C.Reset)     = Cancel connection$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame
+                $null = $frame.Append("  Select option: $currentInput")
+                Write-UiFrame -Frame $frame
             }
             
-            $userName = $(if ($null -ne $cachedCredential) { $cachedCredential.UserName } else { $choice.UserName })
-            Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $targetMac -UserName $userName -NetworkId $networkInfo.NetworkId
-
-            Set-ActiveSnapshotTarget -Snapshot $cached.Snapshot -SnapshotPath $cached.LatestPath -ComputerName $target -Credential $cachedCredential
-            try { Initialize-TuiHost } catch {}
-            try { [Console]::CursorVisible = $false } catch {}
-            return
-        }
-        if ($choiceSub.Trim().Equals('C', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
-            $script:RequestForceClear = $true
-            try { Initialize-TuiHost } catch {}
-            try { [Console]::CursorVisible = $false } catch {}
-            return
-        }
-        if (-not $choiceSub.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $script:SystemScanMessage = "Connect cancelled: unknown choice '$choiceSub'. | $(Get-Date -Format 'HH:mm:ss')"
-            $script:RequestForceClear = $true
-            try { Initialize-TuiHost } catch {}
-            try { [Console]::CursorVisible = $false } catch {}
-            return
-        }
-    }
-
-    try {
-        $existingCredential = $script:TargetCredential
-        if ($null -eq $existingCredential) {
-            $existingCredential = $script:CredentialCache[$target.ToLower()]
-        }
-        if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
-            $existingCredential = $script:CredentialCache[$resolvedIp.ToLower()]
-        }
-        if ($null -eq $existingCredential) {
-            $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $target
-        }
-        if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
-            $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
-        }
-        
-        $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential)
-        if ($null -ne $collection -and $collection.Success) {
-            $connectedMac = "Unknown"
-            try {
-                $neighbor = Get-NetNeighbor -IPAddress $resolvedIp -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($neighbor -and $neighbor.LinkLayerAddress) {
-                    $connectedMac = $neighbor.LinkLayerAddress.ToUpper()
-                }
-            } catch {}
-
-            $userName = 'Unknown'
-            if ($null -ne $collection.Credential) {
-                $userName = $collection.Credential.UserName
-            } elseif ($null -ne $collection.Export -and $null -ne $collection.Export.Summary) {
-                $userName = $collection.Export.Summary.UserName
+            $choiceSub = Read-TuiLine -RenderBlock $renderChoiceBlock -DefaultValue ''
+            if ($null -eq $choiceSub) {
+                $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                continue
             }
+            
+            if ([string]::IsNullOrWhiteSpace($choiceSub)) {
+                $cachedCredential = $script:TargetCredential
+                if ($null -eq $cachedCredential) {
+                    $cachedCredential = $script:CredentialCache[$target.ToLower()]
+                }
+                if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                    $cachedCredential = $script:CredentialCache[$resolvedIp.ToLower()]
+                }
+                if ($null -eq $cachedCredential) {
+                    $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $target
+                }
+                if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                    $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
+                }
+                
+                $userName = $(if ($null -ne $cachedCredential) { $cachedCredential.UserName } else { $choice.UserName })
+                Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $targetMac -UserName $userName -NetworkId $networkInfo.NetworkId
 
-            Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $connectedMac -UserName $userName -NetworkId $networkInfo.NetworkId
-
-            Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $target -Credential $collection.Credential
-        } else {
-            $script:SystemScanMessage = "Connect cancelled or failed: $target | $(Get-Date -Format 'HH:mm:ss')"
-            $script:RequestForceClear = $true
+                Set-ActiveSnapshotTarget -Snapshot $cached.Snapshot -SnapshotPath $cached.LatestPath -ComputerName $target -Credential $cachedCredential
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                return
+            }
+            if ($choiceSub.Trim().Equals('C', [System.StringComparison]::OrdinalIgnoreCase)) {
+                $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                continue
+            }
+            if (-not $choiceSub.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase)) {
+                $script:SystemScanMessage = "Connect cancelled: unknown choice '$choiceSub'. | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                continue
+            }
         }
-    } catch {
-        $script:SystemScanMessage = "Connect failed: $target | $(Get-Date -Format 'HH:mm:ss')"
-        $script:RequestForceClear = $true
-    } finally {
-        try { Initialize-TuiHost } catch {}
-        try { [Console]::CursorVisible = $false } catch {}
+
+        try {
+            $existingCredential = $script:TargetCredential
+            if ($null -eq $existingCredential) {
+                $existingCredential = $script:CredentialCache[$target.ToLower()]
+            }
+            if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                $existingCredential = $script:CredentialCache[$resolvedIp.ToLower()]
+            }
+            if ($null -eq $existingCredential) {
+                $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $target
+            }
+            if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
+            }
+            
+            $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential)
+            if ($null -ne $collection -and $collection.Success) {
+                $connectedMac = "Unknown"
+                try {
+                    $neighbor = Get-NetNeighbor -IPAddress $resolvedIp -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($neighbor -and $neighbor.LinkLayerAddress) {
+                        $connectedMac = $neighbor.LinkLayerAddress.ToUpper()
+                    }
+                } catch {}
+
+                $userName = 'Unknown'
+                if ($null -ne $collection.Credential) {
+                    $userName = $collection.Credential.UserName
+                } elseif ($null -ne $collection.Export -and $null -ne $collection.Export.Summary) {
+                    $userName = $collection.Export.Summary.UserName
+                }
+
+                Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $connectedMac -UserName $userName -NetworkId $networkInfo.NetworkId
+
+                Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $target -Credential $collection.Credential
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                return
+            } else {
+                $script:SystemScanMessage = "Connect cancelled or failed: $target | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                try { Initialize-TuiHost } catch {}
+                try { [Console]::CursorVisible = $false } catch {}
+                continue
+            }
+        } catch {
+            $script:SystemScanMessage = "Connect failed: $target | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            continue
+        }
     }
 }
 

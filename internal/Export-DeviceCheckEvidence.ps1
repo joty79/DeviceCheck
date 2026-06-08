@@ -130,7 +130,7 @@ function Add-TrustedHostExact {
         $escapedValue = $newValue.Replace("'", "''")
         $commandText = "Set-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -Value '$escapedValue' -Force -ErrorAction Stop"
         $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($commandText))
-        $shellPath = [System.Diagnostics.Process]::GetCurrentProcess().Path
+        $shellPath = Join-Path $PSHOME $(if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh.exe' } else { 'powershell.exe' })
 
         & $gsudo.Source $shellPath -NoProfile -EncodedCommand $encoded
         if ($LASTEXITCODE -ne 0) {
