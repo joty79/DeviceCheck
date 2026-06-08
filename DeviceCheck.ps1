@@ -3253,9 +3253,11 @@ function Invoke-DeviceCheckSnapshotExport {
         throw "Remote evidence exporter not found: $exportScript"
     }
 
+    $script:RemoteConnectionLog = [System.Collections.Generic.List[string]]::new()
     $exportParams = @{
         ComputerName = $ComputerName
         AsJson       = $true
+        Verbose      = $true
     }
     if ($null -ne $Credential) {
         $exportParams.Credential = $Credential
@@ -3268,6 +3270,7 @@ function Invoke-DeviceCheckSnapshotExport {
         $null = $ps.AddScript({
             param($scriptPath, $params)
             $ProgressPreference = 'SilentlyContinue'
+            $VerbosePreference = 'Continue'
             & $scriptPath @params
         }).AddArgument($exportScript).AddArgument($exportParams)
 
@@ -3280,8 +3283,18 @@ function Invoke-DeviceCheckSnapshotExport {
         $pos = 0
         $direction = 1
         
+        $verboseCount = 0
+        $currentActivity = "Initiating connection"
+        
         try {
             while (-not $asyncResult.IsCompleted) {
+                while ($ps.Streams.Verbose.Count -gt $verboseCount) {
+                    $msg = $ps.Streams.Verbose[$verboseCount].Message
+                    $verboseCount++
+                    $script:RemoteConnectionLog.Add($msg)
+                    $currentActivity = $msg
+                }
+
                 $bar = [System.Text.StringBuilder]::new()
                 for ($i = 0; $i -lt $progressWidth; $i++) {
                     if ($i -ge $pos -and $i -lt ($pos + 4)) {
@@ -3298,7 +3311,7 @@ function Invoke-DeviceCheckSnapshotExport {
                 $spinner = $spinnerChars[$spinnerIdx]
                 $spinnerIdx = ($spinnerIdx + 1) % $spinnerChars.Count
                 
-                $loadingText = "[$($bar.ToString())] Collecting system, devices, properties, pnputil, monitors... $spinner"
+                $loadingText = "[$($bar.ToString())] $currentActivity... $spinner"
                 & $OnProgress $loadingText
                 
                 if ([Console]::KeyAvailable) {
@@ -3493,10 +3506,12 @@ function Invoke-RemoteSnapshotCollectionScreen {
     )
 
     try {
+        Clear-TuiScreen
         $defaultUserName = "$ComputerName\joty79"
         if ($PromptForCredential -or $null -eq $Credential) {
             Show-RemoteSnapshotCollectionScreen -ComputerName $ComputerName -UserName $defaultUserName -Subtitle 'Enter credentials for this LAN target.'
             $Credential = New-DeviceCheckCredentialFromPrompt -ComputerName $ComputerName -DefaultUserName $defaultUserName
+            Clear-TuiScreen
         }
 
         $progressCallback = {
@@ -3530,6 +3545,15 @@ function Invoke-RemoteSnapshotCollectionScreen {
                 $null = $frame.AppendLine("  $($_C.Warn)$line$($_C.Reset)$($_C.EraseLn)")
             }
             $null = $frame.AppendLine('')
+            
+            if ($script:RemoteConnectionLog -and $script:RemoteConnectionLog.Count -gt 0) {
+                $null = $frame.AppendLine("  $($_C.Bold)$($_C.White)Connection Log:$($_C.Reset)$($_C.EraseLn)")
+                foreach ($logLine in $script:RemoteConnectionLog) {
+                    $null = $frame.AppendLine("    $($_C.Dim)> $logLine$($_C.Reset)$($_C.EraseLn)")
+                }
+                $null = $frame.AppendLine('')
+            }
+            
             $null = $frame.AppendLine("  $($_C.Dim)No target switch was made. Wake the PC / check WinRM, then try again.$($_C.Reset)$($_C.EraseLn)")
             $null = $frame.AppendLine('')
             $null = $frame.AppendLine("  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)")
@@ -3622,7 +3646,7 @@ function Invoke-ConnectLanTarget {
         Add-UiFrameLine -Frame $frame
         Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Current target :$($_C.Reset) $($_C.Info)$(Get-TargetStatusText)$($_C.Reset)$($_C.EraseLn)"
         Add-UiFrameLine -Frame $frame
-        Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS):$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS - Use IP to bypass Kerberos lag):$($_C.Reset)$($_C.EraseLn)"
         $null = $frame.Append("  Target: $currentInput")
         Write-UiFrame -Frame $frame
     }

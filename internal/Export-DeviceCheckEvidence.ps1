@@ -161,10 +161,12 @@ function New-CollectorScriptBlock {
         param(
             [string]$RequestedComputerName,
             [bool]$QuickMode,
-            [string]$CollectorVersion
+            [string]$CollectorVersion,
+            [string]$Stage
         )
 
         $ErrorActionPreference = 'Stop'
+        $VerbosePreference = 'Continue'
 
         function ConvertTo-PlainSnapshotValue {
             param($Value)
@@ -334,7 +336,101 @@ function New-CollectorScriptBlock {
             return [PSCustomObject]$result
         }
 
+        if ($Stage -eq 'System') {
+            $computerSystem = Get-CimFirstOrNull -ClassName 'Win32_ComputerSystem'
+            $computerProduct = Get-CimFirstOrNull -ClassName 'Win32_ComputerSystemProduct'
+            $baseBoard = Get-CimFirstOrNull -ClassName 'Win32_BaseBoard'
+            $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
+            $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
+            $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+
+            $identitySeed = @(
+                Get-ObjectPropertyValue -InputObject $computerProduct -PropertyName 'UUID'
+                Get-ObjectPropertyValue -InputObject $baseBoard -PropertyName 'SerialNumber'
+                Get-ObjectPropertyValue -InputObject $bios -PropertyName 'SerialNumber'
+                Get-ObjectPropertyValue -InputObject $computerSystem -PropertyName 'Name'
+            ) -join '|'
+            $machineId = New-ShortHash -Text $identitySeed
+
+            return [PSCustomObject]@{
+                MachineId             = $machineId
+                ComputerSystem        = Get-CimSnapshot -InputObject $computerSystem -PropertyNames @('Name', 'Manufacturer', 'Model', 'SystemType', 'TotalPhysicalMemory', 'Domain', 'Workgroup')
+                ComputerSystemProduct = Get-CimSnapshot -InputObject $computerProduct -PropertyNames @('Name', 'Vendor', 'Version', 'UUID', 'IdentifyingNumber')
+                BaseBoard             = Get-CimSnapshot -InputObject $baseBoard -PropertyNames @('Manufacturer', 'Product', 'Version', 'SerialNumber')
+                BIOS                  = Get-CimSnapshot -InputObject $bios -PropertyNames @('Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate', 'SerialNumber')
+                OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
+                Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')
+            }
+        }
+
+        if ($Stage -eq 'Devices') {
+            $devices = @()
+            try {
+                $rawDevices = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Sort-Object Class, FriendlyName, InstanceId)
+                foreach ($device in $rawDevices) {
+                    $instanceId = [string](Get-ObjectPropertyValue -InputObject $device -PropertyName 'InstanceId')
+                    if ([string]::IsNullOrWhiteSpace($instanceId)) {
+                        $instanceId = [string](Get-ObjectPropertyValue -InputObject $device -PropertyName 'PNPDeviceID')
+                    }
+
+                    $devices += [PSCustomObject]@{
+                        Class                     = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Class')
+                        FriendlyName              = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'FriendlyName')
+                        InstanceId                = ConvertTo-PlainSnapshotValue $instanceId
+                        Status                    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Status')
+                        Problem                   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Problem')
+                        ProblemDescription        = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ProblemDescription')
+                        ConfigManagerErrorCode    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ConfigManagerErrorCode')
+                        Manufacturer              = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Manufacturer')
+                        Service                   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Service')
+                        HardwareId                = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'HardwareID')
+                        CompatibleId              = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'CompatibleID')
+                    }
+                }
+            } catch {}
+            return $devices
+        }
+
+        if ($Stage -eq 'Properties') {
+            $deviceProperties = [ordered]@{}
+            if (-not $QuickMode) {
+                try {
+                    $rawDevices = @(Get-PnpDevice -PresentOnly -ErrorAction Stop)
+                    foreach ($device in $rawDevices) {
+                        $instanceId = [string](Get-ObjectPropertyValue -InputObject $device -PropertyName 'InstanceId')
+                        if (-not [string]::IsNullOrWhiteSpace($instanceId)) {
+                            $deviceProperties[$instanceId] = Get-PnpDevicePropertiesSafe -InstanceId $instanceId
+                        }
+                    }
+                } catch {}
+            }
+            return [PSCustomObject]$deviceProperties
+        }
+
+        if ($Stage -eq 'PnpUtil') {
+            $pnputilOutput = $null
+            $pnputilError = $null
+            try {
+                $pnputilOutput = (& pnputil.exe /enum-devices /connected 2>&1) -join "`n"
+            } catch {
+                $pnputilError = $_.Exception.Message
+            }
+            return [PSCustomObject]@{
+                Command = 'pnputil.exe /enum-devices /connected'
+                Output  = $pnputilOutput
+                Error   = $pnputilError
+            }
+        }
+
+        if ($Stage -eq 'Monitors') {
+            return [PSCustomObject]@{
+                Registry = @(Get-MonitorRegistryEvidence)
+                Wmi      = Get-WmiMonitorEvidence
+            }
+        }
+
         $started = Get-Date
+        Write-Verbose "Remote: Collecting system identification via CIM..."
         $computerSystem = Get-CimFirstOrNull -ClassName 'Win32_ComputerSystem'
         $computerProduct = Get-CimFirstOrNull -ClassName 'Win32_ComputerSystemProduct'
         $baseBoard = Get-CimFirstOrNull -ClassName 'Win32_BaseBoard'
@@ -355,8 +451,14 @@ function New-CollectorScriptBlock {
         $deviceErrors = [System.Collections.Generic.List[object]]::new()
 
         try {
+            Write-Verbose "Remote: Scanning present PnP devices..."
             $rawDevices = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Sort-Object Class, FriendlyName, InstanceId)
+            $deviceCount = @($rawDevices).Count
+            Write-Verbose "Remote: Found $deviceCount present devices. Processing..."
+            
+            $i = 0
             foreach ($device in $rawDevices) {
+                $i++
                 $instanceId = [string](Get-ObjectPropertyValue -InputObject $device -PropertyName 'InstanceId')
                 if ([string]::IsNullOrWhiteSpace($instanceId)) {
                     $instanceId = [string](Get-ObjectPropertyValue -InputObject $device -PropertyName 'PNPDeviceID')
@@ -377,6 +479,9 @@ function New-CollectorScriptBlock {
                 }
 
                 if (-not $QuickMode -and -not [string]::IsNullOrWhiteSpace($instanceId)) {
+                    if ($i % 10 -eq 0 -or $i -eq $deviceCount) {
+                        Write-Verbose "Remote: Collecting PnP properties for device $i of $deviceCount..."
+                    }
                     $deviceProperties[$instanceId] = Get-PnpDevicePropertiesSafe -InstanceId $instanceId
                 }
             }
@@ -387,6 +492,7 @@ function New-CollectorScriptBlock {
             })
         }
 
+        Write-Verbose "Remote: Enumerating active driver packages via pnputil..."
         $pnputilOutput = $null
         $pnputilError = $null
         try {
@@ -401,6 +507,11 @@ function New-CollectorScriptBlock {
             $principal = [Security.Principal.WindowsPrincipal]::new($identity)
             $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         } catch {}
+
+        Write-Verbose "Remote: Collecting monitor and display EDID/WMI details..."
+        $monRegistry = @(Get-MonitorRegistryEvidence)
+        $monWmi = Get-WmiMonitorEvidence
+        Write-Verbose "Remote: Snapshot collection completed successfully."
 
         $finished = Get-Date
         return [PSCustomObject]@{
@@ -439,8 +550,8 @@ function New-CollectorScriptBlock {
                 Error   = $pnputilError
             }
             Monitors      = [PSCustomObject]@{
-                Registry = @(Get-MonitorRegistryEvidence)
-                Wmi      = Get-WmiMonitorEvidence
+                Registry = $monRegistry
+                Wmi      = $monWmi
             }
         }
     }
@@ -506,19 +617,79 @@ if (-not $AsJson) {
     Write-Host "Collecting DeviceCheck evidence from $ComputerName..." -ForegroundColor Cyan
 }
 if ($isLocal) {
+    Write-Verbose "Starting local snapshot collection..."
     $snapshot = & $collector $ComputerName ([bool]$Quick) $script:CollectorVersion
 } else {
-    $invokeParams = @{
-        ComputerName = $ComputerName
-        ScriptBlock  = $collector
-        ArgumentList  = @($ComputerName, [bool]$Quick, $script:CollectorVersion)
+    Write-Verbose "Connecting to target PC $ComputerName via WinRM..."
+    $sessionOption = New-PSSessionOption -OpenTimeout 15000 -OperationTimeout 15000
+    $sessionParams = @{
+        ComputerName  = $ComputerName
+        SessionOption = $sessionOption
         ErrorAction   = 'Stop'
     }
     if ($null -ne $Credential) {
-        $invokeParams.Credential = $Credential
+        $sessionParams.Credential = $Credential
     }
+    $session = New-PSSession @sessionParams
 
-    $snapshot = Invoke-Command @invokeParams
+    try {
+        Write-Verbose "Remote: Collecting system identification..."
+        $machine = Invoke-Command -Session $session -ScriptBlock $collector -ArgumentList @($ComputerName, [bool]$Quick, $script:CollectorVersion, 'System')
+
+        Write-Verbose "Remote: Scanning present PnP devices..."
+        $presentDevices = Invoke-Command -Session $session -ScriptBlock $collector -ArgumentList @($ComputerName, [bool]$Quick, $script:CollectorVersion, 'Devices')
+
+        $deviceProperties = [ordered]@{}
+        if (-not $Quick) {
+            Write-Verbose "Remote: Collecting PnP device properties..."
+            $deviceProperties = Invoke-Command -Session $session -ScriptBlock $collector -ArgumentList @($ComputerName, [bool]$Quick, $script:CollectorVersion, 'Properties')
+        }
+
+        Write-Verbose "Remote: Enumerating active driver packages via pnputil..."
+        $pnpUtil = Invoke-Command -Session $session -ScriptBlock $collector -ArgumentList @($ComputerName, [bool]$Quick, $script:CollectorVersion, 'PnpUtil')
+
+        Write-Verbose "Remote: Collecting monitor and display EDID/WMI details..."
+        $monitors = Invoke-Command -Session $session -ScriptBlock $collector -ArgumentList @($ComputerName, [bool]$Quick, $script:CollectorVersion, 'Monitors')
+
+        Write-Verbose "Remote: Snapshot collection completed successfully."
+
+        $isAdmin = $false
+        try {
+            $isAdmin = Invoke-Command -Session $session -ScriptBlock {
+                $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+                $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+                $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            }
+        } catch {}
+
+        $snapshot = [PSCustomObject]@{
+            SchemaVersion = 'DeviceCheckEvidenceSnapshot/0.1'
+            Collector     = [PSCustomObject]@{
+                Name                  = 'DeviceCheckEvidenceExporter'
+                Version               = $script:CollectorVersion
+                RequestedComputerName = $ComputerName
+                TargetComputerName    = $machine.ComputerSystem.Name
+                UserName              = $Credential.UserName
+                IsAdmin               = $isAdmin
+                PowerShellVersion     = (Invoke-Command -Session $session -ScriptBlock { $PSVersionTable.PSVersion.ToString() })
+                StartedAt             = (Get-Date).ToString('o')
+                FinishedAt            = (Get-Date).ToString('o')
+                DurationMs            = 0
+                QuickMode             = [bool]$Quick
+            }
+            Machine       = $machine
+            Devices       = [PSCustomObject]@{
+                Count      = @($presentDevices).Count
+                Present    = @($presentDevices)
+                Properties = $deviceProperties
+                Errors     = @()
+            }
+            PnpUtil       = $pnpUtil
+            Monitors      = $monitors
+        }
+    } finally {
+        Remove-PSSession $session
+    }
 }
 
 $snapshotJson = $snapshot | ConvertTo-Json -Depth 40
@@ -526,6 +697,7 @@ $outputPath = $null
 $latestPath = $null
 
 if (-not $NoSave) {
+    Write-Verbose "Saving snapshot JSON files to disk..."
     $machineName = $snapshot.Machine.ComputerSystem.Name
     if ([string]::IsNullOrWhiteSpace($machineName)) {
         $machineName = $ComputerName
