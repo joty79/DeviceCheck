@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added an active `R` rescan hotkey in the `Invoke-ConnectionHistorySelector` LAN connection selector screen to reload discovered hosts without exiting the menu.
 - Added parallel local network scanning (`Get-DeviceCheckDiscoveredHosts`) to discover active PC hosts in the local ARP cache with WinRM port 5985 open, resolving hostnames dynamically via reverse DNS lookup.
 - Added a segmented and unified connection selector screen in `Invoke-ConnectionHistorySelector` dividing connections into "Saved Connections (History)", "Discovered PCs on Network", and "Actions", featuring dynamic `(Online)` indicators and smooth keyboard navigation that skips non-selectable headers.
 - Added `internal\Invoke-SdioDriverAudit.ps1`, an audit adapter that parses SDIO matcher logs or launches SDIO with install disabled, extracts indexed driver candidates, labels exact hardware ID vs compatible-ID fallback matches, and can write per-device SDIO reports into the DeviceCheck cache for the selected-details pane.
@@ -17,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
 
 ### Fixed
+- Fixed active host detection when a target PC was booted after launching the script. `Get-DeviceCheckDiscoveredHosts` now performs active ARP discovery by pinging the subnet broadcast and connection history targets asynchronously before reading the local OS neighbor cache.
+- Fixed a null argument binding exception in `DeviceCheck.ps1` when scanning the local network with no other hosts active. Wrapped `Get-DeviceCheckDiscoveredHosts` results in an array subexpression `@(...)` and added a null fallback initialization in `Invoke-ConnectionHistorySelector` to ensure the parameter is never null.
 - Resolved a pipeline unrolling issue where `Get-DeviceCheckConnectionHistory` returning an empty collection unrolled to `$null`, causing subsequent method calls (like `.Add()`) to throw a null-valued expression error.
 - Fixed a constructor overload resolution error in `Add-DeviceCheckConnectionHistoryEntry` when constructing `List[object]` from a single-item sorted history pipeline by wrapping it in `@(...)`.
 - Resolved WinRM connection timeouts and hangs when collecting remote device properties on systems with large numbers of present PnP devices (e.g. over 100 devices). Replaced the slow, loop-based `Get-PnpDeviceProperty` remote calls with a single, batch pipeline execution grouped by `InstanceId`, accelerating remote collection speed by over 15x.

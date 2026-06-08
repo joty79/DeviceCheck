@@ -3686,6 +3686,37 @@ function Get-DeviceCheckDiscoveredHosts {
         Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' }
     
     if (-not $interfaces) { return $discovered }
+
+    # Trigger active ARP discovery by pinging the subnet broadcast and history hosts
+    foreach ($if in $interfaces) {
+        if ($if.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') {
+            $subnetPrefix = $Matches[1]
+            try {
+                $p = [System.Net.NetworkInformation.Ping]::new()
+                # Ping broadcast asynchronously to populate neighbor cache without blocking
+                $null = $p.SendAsync("$subnetPrefix.255", 250, $null)
+            } catch {}
+        }
+    }
+
+    # Ping history hosts asynchronously to resolve them in the ARP cache
+    $history = Get-DeviceCheckConnectionHistory
+    if ($history) {
+        $historyIPs = @($history.LastIPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -Unique)
+        if ($historyIPs) {
+            $pingers = [System.Collections.Generic.List[System.Net.NetworkInformation.Ping]]::new()
+            foreach ($ip in $historyIPs) {
+                try {
+                    $p = [System.Net.NetworkInformation.Ping]::new()
+                    $null = $p.SendAsync($ip, 250, $null)
+                    $pingers.Add($p)
+                } catch {}
+            }
+        }
+    }
+
+    # Wait a tiny bit for ARP replies to register in the OS cache
+    Start-Sleep -Milliseconds 300
     
     # Get neighbors for these interfaces
     $neighbors = foreach ($if in $interfaces) {
@@ -3887,8 +3918,14 @@ function Resolve-HistoryTargetAddress {
 function Invoke-ConnectionHistorySelector {
     param(
         [Parameter(Mandatory)]$NetworkInfo,
-        [Parameter(Mandatory)]$DiscoveredHosts
+        $DiscoveredHosts = @()
     )
+
+    if ($null -eq $DiscoveredHosts) {
+        $DiscoveredHosts = @()
+    }
+
+    $currentDiscovered = $DiscoveredHosts
 
     $networkId = $NetworkInfo.NetworkId
     $networkName = $NetworkInfo.ProfileName
@@ -3923,7 +3960,7 @@ function Invoke-ConnectionHistorySelector {
             foreach ($entry in $filteredHistory) {
                 $savedCount++
                 $isOnline = $false
-                foreach ($d in $DiscoveredHosts) {
+                foreach ($d in $currentDiscovered) {
                     if ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower() -or $entry.LastIPAddress -eq $d.IP) {
                         $isOnline = $true
                         break
@@ -3964,7 +4001,7 @@ function Invoke-ConnectionHistorySelector {
             })
             
             $discoveredCount = 0
-            foreach ($d in $DiscoveredHosts) {
+            foreach ($d in $currentDiscovered) {
                 # Check if already in history
                 $inHistory = $false
                 foreach ($entry in $filteredHistory) {
@@ -4099,6 +4136,8 @@ function Invoke-ConnectionHistorySelector {
             $segments = @(
                 New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
                 New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
+                New-UiShortcutSegment -Text 'R' -Color $_C.Info
+                New-UiShortcutSegment -Text ' = rescan   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
                 New-UiShortcutSegment -Text ' = select   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'Del' -Color $_C.Fail
@@ -4171,6 +4210,20 @@ function Invoke-ConnectionHistorySelector {
                 }
                 'Escape' { return $null }
                 'ResizeEvent' { continue }
+                'R' {
+                    # Show scanning feedback
+                    Clear-TuiScreen
+                    $frame = New-UiFrame
+                    Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Active Network: $networkName$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
+                    Write-UiFrame -Frame $frame
+                    
+                    $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts)
+                    $selectedIndex = -1 # Reset selection
+                    $script:RequestForceClear = $true
+                }
                 'Delete' {
                     $item = $items[$selectedIndex]
                     if ($item.Type -eq 'Saved') {
@@ -4243,7 +4296,7 @@ function Invoke-ConnectLanTarget {
     Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
     Write-UiFrame -Frame $frame
 
-    $discoveredHosts = Get-DeviceCheckDiscoveredHosts
+    $discoveredHosts = @(Get-DeviceCheckDiscoveredHosts)
 
     $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -DiscoveredHosts $discoveredHosts
     if ($null -eq $choice) {
