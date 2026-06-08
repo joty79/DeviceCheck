@@ -3315,13 +3315,8 @@ function Invoke-DeviceCheckSnapshotExport {
                 & $OnProgress $loadingText
                 
                 if ([Console]::KeyAvailable) {
-                    $keyInfo = $null
-                    try {
-                        $keyInfo = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
-                    } catch {
-                        $keyInfo = [Console]::ReadKey($true)
-                    }
-                    if ($null -ne $keyInfo -and ($keyInfo.Key -eq 'Escape' -or $keyInfo.KeyChar -eq [char]27)) {
+                    $key = Read-ConsoleKey
+                    if ($null -ne $key -and ($key.Key -eq 'Escape' -or $key.KeyChar -eq [char]27)) {
                         $ps.Stop()
                         throw "Connection cancelled by user."
                     }

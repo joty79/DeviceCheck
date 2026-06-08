@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
 
 ### Fixed
+- Fixed a Set-StrictMode crash in the remote connection progress loop when a user pressed a key. Replaced raw $Host.UI.RawUI.ReadKey property access with the Read-ConsoleKey helper to safely handle console key properties.
 - Fixed indefinite WinRM connection hangs in remote snapshot collection. Added a 15-second connection and operation timeout (New-PSSessionOption) to Invoke-Command within internal\Export-DeviceCheckEvidence.ps1, so unreachable target PCs fail fast with a descriptive error instead of hanging the TUI.
 - Rendered Agent Markdown answers with a controlled TUI-safe formatter instead of stripping Markdown into all-white plain text. Agent results now style headings, numbered source sections, bullets, inline code, and URLs while still respecting the selected-details pane width/height budget.
 - Fixed a StrictMode crash in the new Agent deferred logging path. The deferred event queue is now initialized before tool calls and guarded with `Get-Variable`, so cache-hit logging no longer terminates the Agent with "unexpectedly without returning result".
