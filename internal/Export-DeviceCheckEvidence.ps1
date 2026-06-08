@@ -396,10 +396,31 @@ function New-CollectorScriptBlock {
             if (-not $QuickMode) {
                 try {
                     $rawDevices = @(Get-PnpDevice -PresentOnly -ErrorAction Stop)
+                    $instanceIds = @()
                     foreach ($device in $rawDevices) {
                         $instanceId = [string](Get-ObjectPropertyValue -InputObject $device -PropertyName 'InstanceId')
                         if (-not [string]::IsNullOrWhiteSpace($instanceId)) {
-                            $deviceProperties[$instanceId] = Get-PnpDevicePropertiesSafe -InstanceId $instanceId
+                            $instanceIds += $instanceId
+                        }
+                    }
+                    if ($instanceIds.Count -gt 0) {
+                        $allProps = Get-PnpDeviceProperty -InstanceId $instanceIds -ErrorAction SilentlyContinue
+                        $grouped = $allProps | Group-Object -Property InstanceId -AsHashTable -AsString
+                        foreach ($instId in $instanceIds) {
+                            $propsList = $grouped[$instId]
+                            if ($propsList) {
+                                $deviceProperties[$instId] = @(
+                                    foreach ($p in $propsList) {
+                                        [PSCustomObject]@{
+                                            KeyName = ConvertTo-PlainSnapshotValue $p.KeyName
+                                            Type    = ConvertTo-PlainSnapshotValue $p.Type
+                                            Data    = ConvertTo-PlainSnapshotValue $p.Data
+                                        }
+                                    }
+                                )
+                            } else {
+                                $deviceProperties[$instId] = @()
+                            }
                         }
                     }
                 } catch {}
@@ -478,11 +499,43 @@ function New-CollectorScriptBlock {
                     CompatibleId              = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'CompatibleID')
                 }
 
-                if (-not $QuickMode -and -not [string]::IsNullOrWhiteSpace($instanceId)) {
-                    if ($i % 10 -eq 0 -or $i -eq $deviceCount) {
-                        Write-Verbose "Remote: Collecting PnP properties for device $i of $deviceCount..."
+            }
+
+            if (-not $QuickMode -and $rawDevices.Count -gt 0) {
+                Write-Verbose "Remote: Batch collecting PnP properties for all devices..."
+                try {
+                    $instanceIds = @()
+                    foreach ($d in $rawDevices) {
+                        $instanceId = [string](Get-ObjectPropertyValue -InputObject $d -PropertyName 'InstanceId')
+                        if ([string]::IsNullOrWhiteSpace($instanceId)) {
+                            $instanceId = [string](Get-ObjectPropertyValue -InputObject $d -PropertyName 'PNPDeviceID')
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($instanceId)) {
+                            $instanceIds += $instanceId
+                        }
                     }
-                    $deviceProperties[$instanceId] = Get-PnpDevicePropertiesSafe -InstanceId $instanceId
+                    if ($instanceIds.Count -gt 0) {
+                        $allProps = Get-PnpDeviceProperty -InstanceId $instanceIds -ErrorAction SilentlyContinue
+                        $grouped = $allProps | Group-Object -Property InstanceId -AsHashTable -AsString
+                        foreach ($instId in $instanceIds) {
+                            $propsList = $grouped[$instId]
+                            if ($propsList) {
+                                $deviceProperties[$instId] = @(
+                                    foreach ($p in $propsList) {
+                                        [PSCustomObject]@{
+                                            KeyName = ConvertTo-PlainSnapshotValue $p.KeyName
+                                            Type    = ConvertTo-PlainSnapshotValue $p.Type
+                                            Data    = ConvertTo-PlainSnapshotValue $p.Data
+                                        }
+                                    }
+                                )
+                            } else {
+                                $deviceProperties[$instId] = @()
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Verbose "Error batch collecting properties in main flow: $_"
                 }
             }
         } catch {

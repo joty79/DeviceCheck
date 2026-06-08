@@ -50,11 +50,11 @@ function Initialize-AvailableModels {
             foreach ($row in $filteredRows) {
                 if ([string]::IsNullOrWhiteSpace($row.model)) { continue }
 
-                $apiName = if ($row.model -like '*Gemma*') {
+                $apiName = $(if ($row.model -like '*Gemma*') {
                     if ($row.model -like '*26B*') { 'gemma-4-26b-a4b-it' } else { 'gemma-4-31b-it' }
                 } else {
                     ($row.model -replace ' ', '-').ToLower()
-                }
+                })
 
                 # Check for duplicate API IDs
                 $existing = $script:AvailableModels | Where-Object { $_.ApiId -eq $apiName }
@@ -485,7 +485,7 @@ function Test-RemoteSnapshotTargetActive {
 
 function Get-TargetStatusText {
     if (Test-RemoteSnapshotTargetActive) {
-        $targetName = if (-not [string]::IsNullOrWhiteSpace($script:TargetComputerName)) { $script:TargetComputerName } else { Get-MachineDisplayName -MachineEvidence $script:MachineEvidence }
+        $targetName = $(if (-not [string]::IsNullOrWhiteSpace($script:TargetComputerName)) { $script:TargetComputerName } else { Get-MachineDisplayName -MachineEvidence $script:MachineEvidence })
         return "Target $targetName (remote snapshot)"
     }
 
@@ -1068,13 +1068,13 @@ function Add-BoardModelEvidenceRows {
     $sourceUrl = [string](Get-NotePropertyValue -Object $source -Name 'Url')
     $confidence = [string](Get-NotePropertyValue -Object $evidence -Name 'Confidence')
     $confidenceScore = [string](Get-NotePropertyValue -Object $evidence -Name 'ConfidenceScore')
-    $sourceDisplay = if ($sourceType -eq 'UserConfirmedExternalPage' -and $sourceUrl -match 'techpowerup\.com') {
+    $sourceDisplay = $(if ($sourceType -eq 'UserConfirmedExternalPage' -and $sourceUrl -match 'techpowerup\.com') {
         'User-confirmed + TechPowerUp GPU Database'
     } else {
         $sourceName
-    }
+    })
     if ([string]::IsNullOrWhiteSpace($modelKey)) {
-        $modelKey = if ($resolutionBus -in @('USB', 'HID')) { 'Product Model' } else { 'Board Model' }
+        $modelKey = $(if ($resolutionBus -in @('USB', 'HID')) { 'Product Model' } else { 'Board Model' })
     }
 
     if (-not [string]::IsNullOrWhiteSpace($modelName)) {
@@ -1340,11 +1340,11 @@ function Add-MonitorEdidRows {
     }
 
     if ($manufactureYear -gt 1990) {
-        $madeText = if ($manufactureWeek -gt 0) {
+        $madeText = $(if ($manufactureWeek -gt 0) {
             "week $manufactureWeek / $manufactureYear"
         } else {
             [string]$manufactureYear
-        }
+        })
         $Rows.Add((New-HardwareIdentityRow -Key 'Made' -Value $madeText -Color 'Dim'))
     }
 
@@ -1357,8 +1357,8 @@ function Add-MonitorEdidRows {
         $Rows.Add((New-HardwareIdentityRow -Key 'Native Timing' -Value $timingText -Color 'White'))
     }
 
-    $checksumText = if ($checksumValid) { 'OK' } else { 'Invalid' }
-    $checksumColor = if ($checksumValid) { 'OK' } else { 'Warn' }
+    $checksumText = $(if ($checksumValid) { 'OK' } else { 'Invalid' })
+    $checksumColor = $(if ($checksumValid) { 'OK' } else { 'Warn' })
     $Rows.Add((New-HardwareIdentityRow -Key 'EDID Checksum' -Value $checksumText -Color $checksumColor))
 
     return $true
@@ -1482,10 +1482,10 @@ function Get-HardwareResolutionDetailRows {
             $driver = Get-InstalledDriverEvidenceFields -Evidence $Evidence
             $safeVendorName = Get-ShortHardwareVendorName -Name $vendorName
             if (-not [string]::IsNullOrWhiteSpace($safeVendorName) -and -not [string]::IsNullOrWhiteSpace($driver.DeviceName)) {
-                $safeKind = if ($driver.DeviceName -match '(?i)audio') { 'USB Audio device' } else { 'USB device' }
+                $safeKind = $(if ($driver.DeviceName -match '(?i)audio') { 'USB Audio device' } else { 'USB device' })
                 $rows.Add((New-HardwareIdentityRow -Key 'Safe Label' -Value "$safeVendorName $safeKind, $($driver.DeviceName) driver" -Color 'White'))
             }
-            $busPrefix = if ($bus -eq 'HID') { 'HID' } else { 'USB' }
+            $busPrefix = $(if ($bus -eq 'HID') { 'HID' } else { 'USB' })
             $tupleHint = ''
             if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) {
                 $tupleHint = "$busPrefix\VID_$vendorId&PID_$productId"
@@ -1556,7 +1556,7 @@ function Get-HardwareResolutionDetailRows {
                 $rows.Add((New-HardwareIdentityRow -Key 'Coverage' -Value 'HDAUDIO codec/subsystem parsed; exact codec model needs board/OEM/open-source evidence' -Color 'Dim'))
             }
 
-            $tupleFunctionId = if ([string]::IsNullOrWhiteSpace($functionId)) { '01' } else { $functionId }
+            $tupleFunctionId = $(if ([string]::IsNullOrWhiteSpace($functionId)) { '01' } else { $functionId })
             $tupleHint = "HDAUDIO\FUNC_$tupleFunctionId&VEN_$vendorId&DEV_$deviceId"
             if (-not [string]::IsNullOrWhiteSpace($subvendorId) -and -not [string]::IsNullOrWhiteSpace($subdeviceId)) {
                 $tupleHint = "$tupleHint&SUBSYS_$subvendorId$subdeviceId"
@@ -1580,22 +1580,22 @@ function Get-HardwareResolutionDetailRows {
             $vendorName = [string](Get-NotePropertyValue -Object $lookup -Name 'VendorName')
             $hasEdid = Add-MonitorEdidRows -Rows $rows -Resolution $Resolution -Evidence $Evidence
             $hasWmiOrInf = Add-MonitorWmiAndInfRows -Rows $rows -Resolution $Resolution -Evidence $Evidence
-            $displayVendor = if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
+            $displayVendor = $(if (-not [string]::IsNullOrWhiteSpace($vendorName)) {
                 Get-FormattedHardwareVendorName -Name $vendorName
             } else {
                 $vendorId
-            }
+            })
             if (-not ($hasEdid -or $hasWmiOrInf) -and -not [string]::IsNullOrWhiteSpace($displayVendor)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Display Vendor' -Value $displayVendor -Color 'White'))
             }
             if (-not ($hasEdid -or $hasWmiOrInf) -and -not [string]::IsNullOrWhiteSpace($productId)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'EDID Product' -Value $productId -Color 'Info'))
             }
-            $coverageText = if ($hasEdid -or $hasWmiOrInf) {
+            $coverageText = $(if ($hasEdid -or $hasWmiOrInf) {
                 'Registry EDID + WMI + INF'
             } else {
                 'DISPLAY ID gives EDID vendor/product code; exact monitor model needs EDID/INF/WMI/OEM evidence'
-            }
+            })
             $rows.Add((New-HardwareIdentityRow -Key 'Evidence' -Value $coverageText -Color 'Dim'))
             $searchParts = @(
                 $(if (-not [string]::IsNullOrWhiteSpace($vendorId) -and -not [string]::IsNullOrWhiteSpace($productId)) { "DISPLAY\$vendorId$productId" })
@@ -1614,7 +1614,7 @@ function Get-HardwareResolutionDetailRows {
             $productName = [string](Get-NotePropertyValue -Object $lookup -Name 'ProductName')
             $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
             $friendlyName = [string](Get-NotePropertyValue -Object $device -Name 'FriendlyName')
-            $displayModel = if (-not [string]::IsNullOrWhiteSpace($friendlyName)) { $friendlyName } else { $productName }
+            $displayModel = $(if (-not [string]::IsNullOrWhiteSpace($friendlyName)) { $friendlyName } else { $productName })
             if (-not [string]::IsNullOrWhiteSpace($displayModel)) {
                 $rows.Add((New-HardwareIdentityRow -Key 'Storage Model' -Value $displayModel -Color 'White'))
             }
@@ -2013,7 +2013,7 @@ function Add-SdioDriverMatchDetailLines {
     $index = 1
     foreach ($candidate in @($candidates | Select-Object -First $MaxCandidates)) {
         $labels = @(Get-NotePropertyValue -Object $candidate -Name 'StatusLabels') | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
-        $statusText = if ($labels.Count -gt 0) { $labels -join '+' } else { [string](Get-NotePropertyValue -Object $candidate -Name 'Status') }
+        $statusText = $(if ($labels.Count -gt 0) { $labels -join '+' } else { [string](Get-NotePropertyValue -Object $candidate -Name 'Status') })
         $matchKind = [string](Get-NotePropertyValue -Object $candidate -Name 'MatchKind')
         if ([string]::IsNullOrWhiteSpace($matchKind)) { $matchKind = 'Unknown' }
         $candidateColor = Get-SdioCandidateColor -Candidate $candidate
@@ -2199,7 +2199,7 @@ function Set-SystemStatusMessage {
 
     $Message = ($Message -replace '[\r\n\t]+', ' ') -replace '\s{2,}', ' '
     $Message = $Message.Trim()
-    $suffix = if ($NoTimestamp) { '' } else { " | $(Get-Date -Format 'HH:mm:ss')" }
+    $suffix = $(if ($NoTimestamp) { '' } else { " | $(Get-Date -Format 'HH:mm:ss')" })
     $script:SystemScanMessage = "$Message$suffix"
 }
 
@@ -2271,7 +2271,7 @@ function New-KeyValueLine {
     )
 
     if (-not $ValueColor) { $ValueColor = $_C.White }
-    $keyWidth = if ($Width -ge 56) { 14 } else { 13 }
+    $keyWidth = $(if ($Width -ge 56) { 14 } else { 13 })
     $keyText = Format-PlainToWidth -Text $Key -Width $keyWidth
     $valueWidth = [Math]::Max(8, $Width - ($keyWidth + 4))
     $valueText = Format-UiValue -Text $Value -MaxLength $valueWidth
@@ -2281,7 +2281,7 @@ function New-KeyValueLine {
 function Get-KeyValueLayout {
     param([int]$Width)
 
-    $keyWidth = if ($Width -ge 56) { 14 } else { 13 }
+    $keyWidth = $(if ($Width -ge 56) { 14 } else { 13 })
     $valueWidth = [Math]::Max(8, $Width - ($keyWidth + 4))
     [pscustomobject]@{
         KeyWidth           = $keyWidth
@@ -2320,7 +2320,7 @@ function Split-DetailValueText {
                 $word = $word.Substring($Width)
             }
 
-            $candidate = if ($current) { "$current $word" } else { $word }
+            $candidate = $(if ($current) { "$current $word" } else { $word })
             if ($candidate.Length -gt $Width) {
                 if ($current) { $lines.Add($current) }
                 $current = $word
@@ -2433,10 +2433,10 @@ function Get-HardwareIdBreakdownLines {
             $subdeviceId = $res.Fields.SubdeviceId
             $revision = $res.Fields.Revision
 
-            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' }
-            $deviceName = if ($res.Lookup.DeviceName) { $res.Lookup.DeviceName } else { 'Unknown Device' }
-            $subvendorName = if ($res.Lookup.SubvendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.SubvendorName } else { '' }
-            $subsystemName = if ($res.Lookup.SubsystemName) { $res.Lookup.SubsystemName } else { '' }
+            $vendorName = $(if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' })
+            $deviceName = $(if ($res.Lookup.DeviceName) { $res.Lookup.DeviceName } else { 'Unknown Device' })
+            $subvendorName = $(if ($res.Lookup.SubvendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.SubvendorName } else { '' })
+            $subsystemName = $(if ($res.Lookup.SubsystemName) { $res.Lookup.SubsystemName } else { '' })
 
             # 1. VEN
             $venText = "VEN_$vendorId"
@@ -2453,13 +2453,13 @@ function Get-HardwareIdBreakdownLines {
             # 3. SUBSYS (if present)
             if (-not [string]::IsNullOrWhiteSpace($subsysRaw)) {
                 $subvendorShort = Get-ShortHardwareVendorName -Name $subvendorName
-                $subsysDesc = if (-not [string]::IsNullOrWhiteSpace($subsystemName)) {
+                $subsysDesc = $(if (-not [string]::IsNullOrWhiteSpace($subsystemName)) {
                     $subsystemName
                 } elseif (-not [string]::IsNullOrWhiteSpace($subvendorShort)) {
                     "$subvendorShort board-specific model"
                 } else {
                     "board-specific model"
-                }
+                })
 
                 $subsysText = "SUBSYS_$subsysRaw"
                 $subsysVal = Format-UiValue -Text $subsysDesc -MaxLength $valueWidth
@@ -2472,11 +2472,11 @@ function Get-HardwareIdBreakdownLines {
                 $lines.Add("$pad$($_C.Dim)$($subdevLine)$($_C.Reset)")
 
                 # Subvendor ID
-                $subvendorDesc = if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+                $subvendorDesc = $(if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
                     "subvendor = $subvendorName"
                 } else {
                     "subvendor"
-                }
+                })
                 $subvendorVal = Format-UiValue -Text $subvendorDesc -MaxLength ($valueWidth - 3)
                 $subvendorLine = "   {0,-12} = {1}" -f $subvendorId, $subvendorVal
                 $lines.Add("$pad$($_C.Dim)$($subvendorLine)$($_C.Reset)")
@@ -2496,21 +2496,21 @@ function Get-HardwareIdBreakdownLines {
             $revision = $res.Fields.Revision
             $evidence = Get-BoardModelEvidenceForResolution -Resolution $res
 
-            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' }
-            $productName = if ($res.Lookup.ProductName) {
+            $vendorName = $(if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' })
+            $productName = $(if ($res.Lookup.ProductName) {
                 $res.Lookup.ProductName
             } elseif ($null -ne $evidence) {
                 [string](Get-NotePropertyValue -Object $evidence -Name 'ModelName')
             } else {
                 'Unknown Product'
-            }
-            $interfaceName = if ($res.Lookup.InterfaceName) {
+            })
+            $interfaceName = $(if ($res.Lookup.InterfaceName) {
                 $res.Lookup.InterfaceName
             } elseif ($null -ne $evidence) {
                 [string](Get-NotePropertyValue -Object $evidence -Name 'InterfaceName')
             } else {
                 ''
-            }
+            })
 
             # 1. VID
             $vidText = "VID_$vendorId"
@@ -2527,7 +2527,7 @@ function Get-HardwareIdBreakdownLines {
             # 3. MI (if present)
             if (-not [string]::IsNullOrWhiteSpace($interfaceId)) {
                 $miText = "MI_$interfaceId"
-                $miVal = if ($interfaceName) { $interfaceName } else { "interface" }
+                $miVal = $(if ($interfaceName) { $interfaceName } else { "interface" })
                 $miLine = "{0,-15} = {1}" -f $miText, (Format-UiValue -Text $miVal -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($miLine)$($_C.Reset)")
             }
@@ -2543,9 +2543,9 @@ function Get-HardwareIdBreakdownLines {
             $classId = $res.Fields.ClassId
             $subclassId = $res.Fields.SubclassId
             $protocolId = $res.Fields.ProtocolId
-            $className = if ($res.Lookup.ClassName) { $res.Lookup.ClassName } else { 'USB class' }
-            $subclassName = if ($res.Lookup.SubclassName) { $res.Lookup.SubclassName } else { 'subclass' }
-            $protocolName = if ($res.Lookup.ProtocolName) { $res.Lookup.ProtocolName } else { 'protocol' }
+            $className = $(if ($res.Lookup.ClassName) { $res.Lookup.ClassName } else { 'USB class' })
+            $subclassName = $(if ($res.Lookup.SubclassName) { $res.Lookup.SubclassName } else { 'subclass' })
+            $protocolName = $(if ($res.Lookup.ProtocolName) { $res.Lookup.ProtocolName } else { 'protocol' })
 
             if (-not [string]::IsNullOrWhiteSpace($classId)) {
                 $classLine = "{0,-15} = {1}" -f "Class_$classId", (Format-UiValue -Text $className -MaxLength $valueWidth)
@@ -2572,19 +2572,19 @@ function Get-HardwareIdBreakdownLines {
             $controllerDeviceId = $res.Fields.ControllerDeviceId
             $evidence = Get-BoardModelEvidenceForResolution -Resolution $res
 
-            $functionName = if ($res.Lookup.FunctionName) { $res.Lookup.FunctionName } else { 'HD Audio function' }
-            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown codec vendor' }
-            $codecName = if ($null -ne $evidence) { [string](Get-NotePropertyValue -Object $evidence -Name 'CodecName') } else { '' }
-            $deviceName = if (-not [string]::IsNullOrWhiteSpace($codecName)) {
+            $functionName = $(if ($res.Lookup.FunctionName) { $res.Lookup.FunctionName } else { 'HD Audio function' })
+            $vendorName = $(if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown codec vendor' })
+            $codecName = $(if ($null -ne $evidence) { [string](Get-NotePropertyValue -Object $evidence -Name 'CodecName') } else { '' })
+            $deviceName = $(if (-not [string]::IsNullOrWhiteSpace($codecName)) {
                 $codecName
             } elseif ($res.Lookup.DeviceName) {
                 $res.Lookup.DeviceName
             } else {
                 'codec device id'
-            }
-            $subvendorName = if ($res.Lookup.SubvendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.SubvendorName } else { '' }
-            $controllerVendorName = if ($res.Lookup.ControllerVendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.ControllerVendorName } else { '' }
-            $controllerDeviceName = if ($res.Lookup.ControllerDeviceName) { $res.Lookup.ControllerDeviceName } else { '' }
+            })
+            $subvendorName = $(if ($res.Lookup.SubvendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.SubvendorName } else { '' })
+            $controllerVendorName = $(if ($res.Lookup.ControllerVendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.ControllerVendorName } else { '' })
+            $controllerDeviceName = $(if ($res.Lookup.ControllerDeviceName) { $res.Lookup.ControllerDeviceName } else { '' })
 
             if (-not [string]::IsNullOrWhiteSpace($functionId)) {
                 $functionLine = "{0,-15} = {1}" -f "FUNC_$functionId", (Format-UiValue -Text $functionName -MaxLength $valueWidth)
@@ -2599,19 +2599,19 @@ function Get-HardwareIdBreakdownLines {
                 $lines.Add("$pad$($_C.White)$($deviceLine)$($_C.Reset)")
             }
             if (-not [string]::IsNullOrWhiteSpace($subsysRaw)) {
-                $subsystemDesc = if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+                $subsystemDesc = $(if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
                     "$subvendorName audio implementation"
                 } else {
                     'board audio implementation'
-                }
+                })
                 $subsysLine = "{0,-15} = {1}" -f "SUBSYS_$subsysRaw", (Format-UiValue -Text $subsystemDesc -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Info)$($subsysLine)$($_C.Reset)")
 
-                $subvendorDesc = if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
+                $subvendorDesc = $(if (-not [string]::IsNullOrWhiteSpace($subvendorName)) {
                     "subsystem vendor = $subvendorName"
                 } else {
                     'subsystem vendor'
-                }
+                })
                 $subvendorLine = "   {0,-12} = {1}" -f $subvendorId, (Format-UiValue -Text $subvendorDesc -MaxLength ($valueWidth - 3))
                 $lines.Add("$pad$($_C.Dim)$($subvendorLine)$($_C.Reset)")
 
@@ -2623,12 +2623,12 @@ function Get-HardwareIdBreakdownLines {
                 $lines.Add("$pad$($_C.Dim)$($revisionLine)$($_C.Reset)")
             }
             if (-not [string]::IsNullOrWhiteSpace($controllerVendorId)) {
-                $controllerVendorText = if (-not [string]::IsNullOrWhiteSpace($controllerVendorName)) { $controllerVendorName } else { 'controller vendor' }
+                $controllerVendorText = $(if (-not [string]::IsNullOrWhiteSpace($controllerVendorName)) { $controllerVendorName } else { 'controller vendor' })
                 $controllerVendorLine = "{0,-15} = {1}" -f "CTLR_VEN_$controllerVendorId", (Format-UiValue -Text $controllerVendorText -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($controllerVendorLine)$($_C.Reset)")
             }
             if (-not [string]::IsNullOrWhiteSpace($controllerDeviceId)) {
-                $controllerDeviceText = if (-not [string]::IsNullOrWhiteSpace($controllerDeviceName)) { $controllerDeviceName } else { 'controller device' }
+                $controllerDeviceText = $(if (-not [string]::IsNullOrWhiteSpace($controllerDeviceName)) { $controllerDeviceName } else { 'controller device' })
                 $controllerDeviceLine = "{0,-15} = {1}" -f "CTLR_DEV_$controllerDeviceId", (Format-UiValue -Text $controllerDeviceText -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($controllerDeviceLine)$($_C.Reset)")
             }
@@ -2638,13 +2638,13 @@ function Get-HardwareIdBreakdownLines {
             $productId = $res.Fields.ProductId
             $importantProperties = Get-NotePropertyValue -Object $Evidence -Name 'ImportantProperties'
             $localManufacturer = [string](Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer')
-            $vendorName = if ($res.Lookup.VendorName) {
+            $vendorName = $(if ($res.Lookup.VendorName) {
                 Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName
             } elseif (-not [string]::IsNullOrWhiteSpace($localManufacturer)) {
                 "$localManufacturer (Windows)"
             } else {
                 'display vendor code'
-            }
+            })
 
             if (-not [string]::IsNullOrWhiteSpace($vendorId)) {
                 $vendorLine = "{0,-15} = {1}" -f $vendorId, (Format-UiValue -Text $vendorName -MaxLength $valueWidth)
@@ -2663,9 +2663,9 @@ function Get-HardwareIdBreakdownLines {
             $productId = $res.Fields.ProductId
             $productDisplayId = [string](Get-NotePropertyValue -Object $res.Fields -Name 'ProductDisplayId')
             $revision = $res.Fields.Revision
-            $deviceTypeName = if ($res.Lookup.DeviceTypeName) { $res.Lookup.DeviceTypeName } else { 'storage device' }
-            $vendorName = if ($res.Lookup.VendorName) { $res.Lookup.VendorName } else { '' }
-            $productName = if ($res.Lookup.ProductName) { $res.Lookup.ProductName } else { '' }
+            $deviceTypeName = $(if ($res.Lookup.DeviceTypeName) { $res.Lookup.DeviceTypeName } else { 'storage device' })
+            $vendorName = $(if ($res.Lookup.VendorName) { $res.Lookup.VendorName } else { '' })
+            $productName = $(if ($res.Lookup.ProductName) { $res.Lookup.ProductName } else { '' })
             $device = Get-NotePropertyValue -Object $Evidence -Name 'Device'
             $friendlyName = [string](Get-NotePropertyValue -Object $device -Name 'FriendlyName')
             if (-not [string]::IsNullOrWhiteSpace($friendlyName)) {
@@ -2679,13 +2679,13 @@ function Get-HardwareIdBreakdownLines {
                 $lines.Add("$pad$($_C.White)$($typeLine)$($_C.Reset)")
             }
             if (-not [string]::IsNullOrWhiteSpace($vendorDisplayId)) {
-                $vendorDisplayName = if ($vendorName -match '^(?i:NVME)$') { 'NVMe storage stack' } else { $vendorName }
-                $vendorToken = if ($vendorName -match '^(?i:NVME)$') { "STACK_$vendorDisplayId" } else { "VEN_$vendorDisplayId" }
+                $vendorDisplayName = $(if ($vendorName -match '^(?i:NVME)$') { 'NVMe storage stack' } else { $vendorName })
+                $vendorToken = $(if ($vendorName -match '^(?i:NVME)$') { "STACK_$vendorDisplayId" } else { "VEN_$vendorDisplayId" })
                 $vendorLine = "{0,-15} = {1}" -f $vendorToken, (Format-UiValue -Text $vendorDisplayName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Dim)$($vendorLine)$($_C.Reset)")
             }
             if (-not [string]::IsNullOrWhiteSpace($productDisplayId)) {
-                $productToken = if ($isCompactStorageId) { 'MODEL' } else { "PROD_$productDisplayId" }
+                $productToken = $(if ($isCompactStorageId) { 'MODEL' } else { "PROD_$productDisplayId" })
                 $productLine = "{0,-15} = {1}" -f $productToken, (Format-UiValue -Text $productName -MaxLength $valueWidth)
                 $lines.Add("$pad$($_C.Info)$($productLine)$($_C.Reset)")
             }
@@ -2697,8 +2697,8 @@ function Get-HardwareIdBreakdownLines {
         elseif ($res.Bus -in @('ACPI', 'PNP')) {
             $vendorId = $res.Fields.VendorId
             $deviceId = $res.Fields.DeviceId
-            $vendorName = if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' }
-            $deviceName = if ($res.Lookup.DeviceName) { $res.Lookup.DeviceName } else { '' }
+            $vendorName = $(if ($res.Lookup.VendorName) { Get-FormattedHardwareVendorName -Name $res.Lookup.VendorName } else { 'Unknown Vendor' })
+            $deviceName = $(if ($res.Lookup.DeviceName) { $res.Lookup.DeviceName } else { '' })
 
             # 1. VEN
             $venText = "VEN_$vendorId"
@@ -2708,7 +2708,7 @@ function Get-HardwareIdBreakdownLines {
 
             # 2. DEV
             $devText = "DEV_$deviceId"
-            $devVal = if ($deviceName) { $deviceName } else { "device code" }
+            $devVal = $(if ($deviceName) { $deviceName } else { "device code" })
             $devLine = "{0,-15} = {1}" -f $devText, (Format-UiValue -Text $devVal -MaxLength $valueWidth)
             $lines.Add("$pad$($_C.White)$($devLine)$($_C.Reset)")
         }
@@ -2773,7 +2773,7 @@ function Complete-EvidenceBatchIfFinished {
     if ([int]$state.Completed -lt $total) { return }
 
     $elapsed = [int]((Get-Date) - $state.StartedAt).TotalSeconds
-    $errorText = if ([int]$state.Errors -gt 0) { " | $($state.Errors) errors" } else { '' }
+    $errorText = $(if ([int]$state.Errors -gt 0) { " | $($state.Errors) errors" } else { '' })
     $script:SystemScanMessage = "Evidence scan complete: $($state.Label) | $($state.Completed)/$total devices | ${elapsed}s$errorText | $(Get-Date -Format 'HH:mm:ss')"
     $script:EvidenceBatchState = $null
     $script:EvidenceBatchQueuedIds.Clear()
@@ -2793,7 +2793,7 @@ function Wrap-PlainText {
 
     foreach ($word in $words) {
         if ([string]::IsNullOrWhiteSpace($word)) { continue }
-        $candidate = if ($current) { "$current $word" } else { $word }
+        $candidate = $(if ($current) { "$current $word" } else { $word })
         if ($candidate.Length -gt $Width) {
             if ($current) { $lines.Add($current) }
             $current = $word
@@ -2867,7 +2867,7 @@ function Add-WrappedMarkdownParagraphLines {
     $written = 0
 
     for ($i = 0; $i -lt $wrapped.Count -and $written -lt $remaining; $i++) {
-        $prefix = if ($i -eq 0) { $FirstPrefix } else { $RestPrefix }
+        $prefix = $(if ($i -eq 0) { $FirstPrefix } else { $RestPrefix })
         $prefixPlainLength = (Remove-AnsiSequence -Text $prefix).Length
         $lineWidth = [Math]::Max(1, $Width - $prefixPlainLength)
         $lineText = Convert-MarkdownInlineToAnsi -Text (Format-PlainToWidth -Text $wrapped[$i] -Width $lineWidth) -BaseColor $Color
@@ -2920,7 +2920,7 @@ function Add-MarkdownDetailTextLines {
         }
 
         $display = Convert-MarkdownResultToDisplayText -Text $line
-        $color = if ($display -match ':\s*$') { "$($_C.Bold)$($_C.H1)" } elseif ($display -match 'https?://') { $_C.Info } else { $_C.White }
+        $color = $(if ($display -match ':\s*$') { "$($_C.Bold)$($_C.H1)" } elseif ($display -match 'https?://') { $_C.Info } else { $_C.White })
         $remaining -= Add-WrappedMarkdownParagraphLines -Lines $Lines -Text $display -Width $Width -MaxLines $remaining -Color $color -FirstPrefix '  ' -RestPrefix '  '
     }
 }
@@ -3006,8 +3006,8 @@ function Get-DeviceCategories {
 
     $grouped = @{}
     foreach ($dev in $pnpDevices) {
-        $guid = if ($dev.ClassGuid) { $dev.ClassGuid.ToLower() } else { "" }
-        $classKey = if (-not [string]::IsNullOrWhiteSpace($dev.Class)) { $dev.Class } elseif ($classMap.ContainsKey($guid)) { $classMap[$guid] } else { 'Other devices' }
+        $guid = $(if ($dev.ClassGuid) { $dev.ClassGuid.ToLower() } else { "" })
+        $classKey = $(if (-not [string]::IsNullOrWhiteSpace($dev.Class)) { $dev.Class } elseif ($classMap.ContainsKey($guid)) { $classMap[$guid] } else { 'Other devices' })
         $className = Get-DeviceManagerClassName -ClassName $classKey
         if ([string]::IsNullOrWhiteSpace($className)) {
             $className = "Other devices"
@@ -3197,7 +3197,7 @@ function Invoke-SystemScan {
     param([switch]$Quiet)
 
     if (Test-RemoteSnapshotTargetActive) {
-        $targetName = if (-not [string]::IsNullOrWhiteSpace($script:TargetComputerName)) { $script:TargetComputerName } else { 'remote target' }
+        $targetName = $(if (-not [string]::IsNullOrWhiteSpace($script:TargetComputerName)) { $script:TargetComputerName } else { 'remote target' })
         try { [Console]::CursorVisible = $true } catch {}
         
         if ($null -eq $script:TargetCredential -and -not [string]::IsNullOrWhiteSpace($targetName)) {
@@ -3365,7 +3365,7 @@ function Read-TuiLine {
     try {
         [Console]::CursorVisible = $true
         while ($true) {
-            $displayInput = if ($IsPassword) { '*' * $inputVal.Length } else { $inputVal }
+            $displayInput = $(if ($IsPassword) { '*' * $inputVal.Length } else { $inputVal })
             & $RenderBlock $displayInput
             
             $key = Read-ConsoleKey
@@ -3455,11 +3455,11 @@ function New-DeviceCheckCredentialFromPrompt {
     if ($null -eq $passwordStr) {
         throw "Connection cancelled by user."
     }
-    $password = if ([string]::IsNullOrEmpty($passwordStr)) {
+    $password = $(if ([string]::IsNullOrEmpty($passwordStr)) {
         [System.Security.SecureString]::new()
     } else {
         ConvertTo-SecureString $passwordStr -AsPlainText -Force
-    }
+    })
     return [System.Management.Automation.PSCredential]::new($userName, $password)
 }
 
@@ -3484,7 +3484,7 @@ function Show-RemoteSnapshotCollectionScreen {
     $null = $frame.AppendLine('')
 
     if ($ShowCollecting) {
-        $barText = if (-not [string]::IsNullOrWhiteSpace($ProgressText)) { $ProgressText } else { '[##########----------] Collecting system, devices, properties, pnputil, monitors...' }
+        $barText = $(if (-not [string]::IsNullOrWhiteSpace($ProgressText)) { $ProgressText } else { '[##########----------] Collecting system, devices, properties, pnputil, monitors...' })
         $null = $frame.AppendLine("  $($_C.Info)$barText$($_C.Reset)$($_C.EraseLn)")
         $null = $frame.AppendLine('')
         $null = $frame.AppendLine("  $($_C.Dim)This can take a few seconds on LAN. Press ESC to cancel.$($_C.Reset)$($_C.EraseLn)")
@@ -3628,35 +3628,719 @@ function Set-ActiveSnapshotTarget {
     $script:SystemScanMessage = "Connected to $ComputerName snapshot: $deviceCount devices | $(Get-Date -Format 'HH:mm:ss')"
 }
 
+function Get-CurrentNetworkIdentity {
+    $profileName = "Unknown Network"
+    $gatewayMac = "00-00-00-00-00-00"
+    $subnetId = "0.0.0.0"
+
+    try {
+        $profile = Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object IPv4Connectivity -eq 'Internet' | Select-Object -First 1
+        if ($null -eq $profile) {
+            $profile = Get-NetConnectionProfile -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if ($null -ne $profile) {
+            $profileName = $profile.Name
+        }
+    } catch {}
+
+    try {
+        $routes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue
+        if ($routes) {
+            $gatewayIp = $routes[0].NextHop
+            $neighbor = Get-NetNeighbor -IPAddress $gatewayIp -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($neighbor -and $neighbor.LinkLayerAddress) {
+                $gatewayMac = $neighbor.LinkLayerAddress.ToUpper()
+            }
+        }
+    } catch {}
+
+    try {
+        $ipInfo = $null
+        if ($null -ne $profile) {
+            $ipInfo = Get-NetIPAddress -InterfaceIndex $profile.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if ($null -eq $ipInfo) {
+            $ipInfo = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+                Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' } | 
+                Select-Object -First 1
+        }
+        if ($ipInfo -and $ipInfo.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') {
+            $subnetId = $Matches[1]
+        }
+    } catch {}
+
+    $networkId = "$profileName|$gatewayMac|$subnetId"
+    return [PSCustomObject]@{
+        NetworkId   = $networkId
+        ProfileName = $profileName
+        GatewayMac  = $gatewayMac
+        SubnetId    = $subnetId
+    }
+}
+
+function Get-DeviceCheckDiscoveredHosts {
+    $discovered = [System.Collections.Generic.List[object]]::new()
+    
+    # Get active interfaces excluding loopback and virtual adapters
+    $interfaces = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+        Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' }
+    
+    if (-not $interfaces) { return $discovered }
+    
+    # Get neighbors for these interfaces
+    $neighbors = foreach ($if in $interfaces) {
+        Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+            Where-Object { $_.State -ne 'Unreachable' -and $_.IPAddress -notmatch '^\d+\.\d+\.\d+\.255$' -and $_.LinkLayerAddress -ne '00-00-00-00-00-00' }
+    }
+    
+    if (-not $neighbors) { return $discovered }
+    
+    # Filter out gateway IPs to avoid connecting to router WinRM
+    $gateways = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $routes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue
+    if ($routes) {
+        foreach ($r in $routes) {
+            if (-not [string]::IsNullOrWhiteSpace($r.NextHop)) {
+                $null = $gateways.Add($r.NextHop)
+            }
+        }
+    }
+    
+    # Filter out local machine IPs to avoid self-discovery
+    $localIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($if in $interfaces) {
+        $null = $localIPs.Add($if.IPAddress)
+    }
+    
+    $uniqueIPs = @(
+        $neighbors.IPAddress | 
+            Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) } | 
+            Select-Object -Unique
+    )
+    
+    if (-not $uniqueIPs) { return $discovered }
+    
+    # Fast parallel scan on port 5985
+    $results = $uniqueIPs | ForEach-Object -Parallel {
+        $ip = $_
+        $tcp = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $ipObj = [System.Net.IPAddress]::Parse($ip)
+            $ar = $tcp.BeginConnect($ipObj, 5985, $null, $null)
+            if ($ar.AsyncWaitHandle.WaitOne(1000) -and $tcp.Connected) {
+                $dnsName = $ip
+                try {
+                    $dnsName = [System.Net.Dns]::GetHostEntry($ip).HostName
+                    if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                } catch {}
+                [PSCustomObject]@{
+                    IP       = $ip
+                    HostName = $dnsName
+                }
+            }
+        } catch {} finally {
+            $tcp.Dispose()
+        }
+    } -ThrottleLimit 15
+    
+    foreach ($res in $results) {
+        if ($null -ne $res) {
+            $discovered.Add($res)
+        }
+    }
+    
+    return $discovered
+}
+
+function Get-DeviceCheckConnectionHistory {
+    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'connection-history.json'
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try {
+            $history = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($history -is [Array]) {
+                return [System.Collections.Generic.List[object]]::new($history)
+            } else {
+                return [System.Collections.Generic.List[object]]::new(@($history))
+            }
+        } catch {}
+    }
+    return [System.Collections.Generic.List[object]]::new()
+}
+
+function Save-DeviceCheckConnectionHistory {
+    param([Parameter(Mandatory)]$History)
+    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'connection-history.json'
+    try {
+        $json = $History | ConvertTo-Json -Depth 4
+        $json | Set-Content -LiteralPath $path -Encoding UTF8
+    } catch {}
+}
+
+function Add-DeviceCheckConnectionHistoryEntry {
+    param(
+        [string]$ComputerName,
+        [string]$LastIPAddress,
+        [string]$MACAddress,
+        [string]$UserName,
+        [string]$NetworkId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
+    $history = Get-DeviceCheckConnectionHistory
+    if ($null -eq $history) {
+        $history = [System.Collections.Generic.List[object]]::new()
+    }
+    
+    $existing = $null
+    foreach ($entry in $history) {
+        if ($entry.ComputerName.ToLower() -eq $ComputerName.ToLower() -and $entry.NetworkId -eq $NetworkId) {
+            $existing = $entry
+            break
+        }
+    }
+
+    if ($null -ne $existing) {
+        $existing.LastIPAddress = $LastIPAddress
+        if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
+            $existing.MACAddress = $MACAddress
+        }
+        $existing.UserName = $UserName
+        $existing.LastConnected = (Get-Date).ToString('o')
+    } else {
+        $newEntry = [PSCustomObject]@{
+            ComputerName    = $ComputerName
+            LastIPAddress   = $LastIPAddress
+            MACAddress      = $(if ([string]::IsNullOrWhiteSpace($MACAddress)) { 'Unknown' } else { $MACAddress })
+            UserName        = $UserName
+            NetworkId       = $NetworkId
+            LastConnected   = (Get-Date).ToString('o')
+        }
+        $history.Add($newEntry)
+    }
+
+    $sortedHistory = [System.Collections.Generic.List[object]]::new(
+        @($history | Sort-Object { [DateTime]$_.LastConnected } -Descending)
+    )
+    Save-DeviceCheckConnectionHistory -History $sortedHistory
+}
+
+function Test-PortOpen {
+    param(
+        [string]$ComputerName,
+        [int]$Port = 5985,
+        [int]$TimeoutMs = 1500
+    )
+
+    $tcp = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $asyncResult = $tcp.BeginConnect($ComputerName, $Port, $null, $null)
+        return $asyncResult.AsyncWaitHandle.WaitOne($TimeoutMs) -and $tcp.Connected
+    } catch {
+        return $false
+    } finally {
+        $tcp.Dispose()
+    }
+}
+
+function Resolve-HistoryTargetAddress {
+    param(
+        [string]$ComputerName,
+        [string]$LastIPAddress,
+        [string]$MACAddress
+    )
+
+    Write-Verbose "Resolving address for target $ComputerName..."
+    
+    # 1. Try to resolve the hostname directly via DNS/LLMNR
+    try {
+        $ips = [System.Net.Dns]::GetHostAddresses($ComputerName)
+        if ($ips) {
+            $resolvedIp = $ips[0].IPAddressToString
+            if (Test-PortOpen -ComputerName $resolvedIp -Port 5985) {
+                return $resolvedIp
+            }
+        }
+    } catch {}
+
+    # 2. Check local ARP cache
+    if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
+        $neighbors = Get-NetNeighbor -ErrorAction SilentlyContinue | 
+            Where-Object { $_.LinkLayerAddress -eq $MACAddress -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet' }
+        if ($neighbors) {
+            $arpIp = $neighbors[0].IPAddress
+            if (Test-PortOpen -ComputerName $arpIp -Port 5985) {
+                return $arpIp
+            }
+        }
+    }
+
+    # 3. Fallback to last known IP
+    if (-not [string]::IsNullOrWhiteSpace($LastIPAddress)) {
+        if (Test-PortOpen -ComputerName $LastIPAddress -Port 5985) {
+            return $LastIPAddress
+        }
+    }
+
+    return $null
+}
+
+function Invoke-ConnectionHistorySelector {
+    param(
+        [Parameter(Mandatory)]$NetworkInfo,
+        [Parameter(Mandatory)]$DiscoveredHosts
+    )
+
+    $networkId = $NetworkInfo.NetworkId
+    $networkName = $NetworkInfo.ProfileName
+
+    [Console]::CursorVisible = $false
+    try {
+        $selectedIndex = -1
+        while ($true) {
+            Lock-ViewportToWindow
+            
+            $allHistory = Get-DeviceCheckConnectionHistory
+            if ($null -eq $allHistory) {
+                $allHistory = [System.Collections.Generic.List[object]]::new()
+            }
+            $filteredHistory = [System.Collections.Generic.List[object]]::new()
+            foreach ($entry in $allHistory) {
+                if ($entry.NetworkId -eq $networkId) {
+                    $filteredHistory.Add($entry)
+                }
+            }
+
+            $items = [System.Collections.Generic.List[object]]::new()
+            
+            # Section 1: Saved Connections
+            $items.Add([PSCustomObject]@{
+                Type       = 'Header'
+                Text       = "$($_C.Bold)$($_C.Info)Saved Connections (History)$($_C.Reset)"
+                Selectable = $false
+            })
+            
+            $savedCount = 0
+            foreach ($entry in $filteredHistory) {
+                $savedCount++
+                $isOnline = $false
+                foreach ($d in $DiscoveredHosts) {
+                    if ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower() -or $entry.LastIPAddress -eq $d.IP) {
+                        $isOnline = $true
+                        break
+                    }
+                }
+                
+                $onlineText = $(if ($isOnline) { " (Online)" } else { "" })
+                $displayText = "$($entry.ComputerName) ($($entry.LastIPAddress)) - user: $($entry.UserName)$onlineText"
+                
+                $items.Add([PSCustomObject]@{
+                    Type       = 'Saved'
+                    Text       = $displayText
+                    Selectable = $true
+                    Data       = $entry
+                    IsOnline   = $isOnline
+                })
+            }
+            
+            if ($savedCount -eq 0) {
+                $items.Add([PSCustomObject]@{
+                    Type       = 'Placeholder'
+                    Text       = "  $($_C.Dim)(No saved connections on this network)$($_C.Reset)"
+                    Selectable = $false
+                })
+            }
+            
+            $items.Add([PSCustomObject]@{
+                Type       = 'Separator'
+                Text       = ""
+                Selectable = $false
+            })
+            
+            # Section 2: Discovered PCs
+            $items.Add([PSCustomObject]@{
+                Type       = 'Header'
+                Text       = "$($_C.Bold)$($_C.Info)Discovered PCs on Network$($_C.Reset)"
+                Selectable = $false
+            })
+            
+            $discoveredCount = 0
+            foreach ($d in $DiscoveredHosts) {
+                # Check if already in history
+                $inHistory = $false
+                foreach ($entry in $filteredHistory) {
+                    if ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower() -or $entry.LastIPAddress -eq $d.IP) {
+                        $inHistory = $true
+                        break
+                    }
+                }
+                
+                if (-not $inHistory) {
+                    $discoveredCount++
+                    $displayText = "$($d.HostName) ($($d.IP)) (Online)"
+                    $items.Add([PSCustomObject]@{
+                        Type       = 'Discovered'
+                        Text       = $displayText
+                        Selectable = $true
+                        Data       = $d
+                        IsOnline   = $true
+                    })
+                }
+            }
+            
+            if ($discoveredCount -eq 0) {
+                $items.Add([PSCustomObject]@{
+                    Type       = 'Placeholder'
+                    Text       = "  $($_C.Dim)(No other active PCs detected)$($_C.Reset)"
+                    Selectable = $false
+                })
+            }
+            
+            $items.Add([PSCustomObject]@{
+                Type       = 'Separator'
+                Text       = ""
+                Selectable = $false
+            })
+            
+            # Section 3: Options/Actions
+            $items.Add([PSCustomObject]@{
+                Type       = 'Header'
+                Text       = "$($_C.Bold)$($_C.Info)Actions$($_C.Reset)"
+                Selectable = $false
+            })
+            
+            $items.Add([PSCustomObject]@{
+                Type       = 'Action'
+                Text       = "[Connect to new target...]"
+                Selectable = $true
+                Data       = $null
+                IsOnline   = $false
+            })
+
+            # Initialize selectedIndex on the first selectable item if not set
+            if ($selectedIndex -lt 0 -or $selectedIndex -ge $items.Count) {
+                $selectedIndex = 0
+                for ($i = 0; $i -lt $items.Count; $i++) {
+                    if ($items[$i].Selectable) {
+                        $selectedIndex = $i
+                        break
+                    }
+                }
+            } else {
+                # Ensure the current selectedIndex is on a selectable item
+                if (-not $items[$selectedIndex].Selectable) {
+                    $found = $false
+                    for ($i = $selectedIndex; $i -lt $items.Count; $i++) {
+                        if ($items[$i].Selectable) {
+                            $selectedIndex = $i
+                            $found = $true
+                            break
+                        }
+                    }
+                    if (-not $found) {
+                        for ($i = $selectedIndex; $i -ge 0; $i--) {
+                            if ($items[$i].Selectable) {
+                                $selectedIndex = $i
+                                $found = $true
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+
+            try {
+                $maxVisible = [Math]::Max(3, $Host.UI.RawUI.WindowSize.Height - 10)
+            } catch {
+                $maxVisible = 10
+            }
+
+            $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $items.Count - $maxVisible)))
+            $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $items.Count - 1)
+
+            $frame = New-UiFrame
+            Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle "Active Network: $networkName (MAC Gateway: $($NetworkInfo.GatewayMac))" -Width (Get-UiWidth)
+            Add-UiFrameLine -Frame $frame
+
+            $aboveMessage = $(if ($viewTop -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $viewTop more above$($_C.Reset)" } else { '' })
+            Add-UiFrameLine -Frame $frame -Text "$aboveMessage$($_C.EraseLn)"
+
+            for ($index = $viewTop; $index -le $viewBot; $index++) {
+                $item = $items[$index]
+                if ($item.Type -eq 'Header') {
+                    Add-UiFrameLine -Frame $frame -Text "  $($item.Text)$($_C.EraseLn)"
+                } elseif ($item.Type -eq 'Separator') {
+                    Add-UiFrameLine -Frame $frame -Text "$($_C.EraseLn)"
+                } elseif ($item.Type -eq 'Placeholder') {
+                    Add-UiFrameLine -Frame $frame -Text "$($item.Text)$($_C.EraseLn)"
+                } else {
+                    if ($index -eq $selectedIndex) {
+                        Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($item.Text) $($_C.Reset)$($_C.EraseLn)"
+                    } else {
+                        if ($item.Type -eq 'Action') {
+                            Add-UiFrameLine -Frame $frame -Text "    $($_C.OK)$($item.Text)$($_C.Reset)$($_C.EraseLn)"
+                        } else {
+                            $onlineColor = $(if ($item.IsOnline) { " $($_C.OK)(Online)$($_C.Reset)" } else { "" })
+                            $baseText = $(if ($item.Type -eq 'Saved') {
+                                "$($item.Data.ComputerName) ($($item.Data.LastIPAddress)) - user: $($item.Data.UserName)"
+                            } else {
+                                "$($item.Data.HostName) ($($item.Data.IP))"
+                            })
+                            Add-UiFrameLine -Frame $frame -Text "    $($_C.White)$baseText$onlineColor$($_C.Reset)$($_C.EraseLn)"
+                        }
+                    }
+                }
+            }
+
+            $below = $items.Count - 1 - $viewBot
+            $belowMessage = $(if ($below -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $below more below$($_C.Reset)" } else { '' })
+            Add-UiFrameLine -Frame $frame -Text "$belowMessage$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame -Text "$($_C.EraseLn)"
+
+            $segments = @(
+                New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
+                New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
+                New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
+                New-UiShortcutSegment -Text ' = select   ' -Color $_C.Dim
+                New-UiShortcutSegment -Text 'Del' -Color $_C.Fail
+                New-UiShortcutSegment -Text ' = delete   ' -Color $_C.Dim
+                New-UiShortcutSegment -Text 'Esc' -Color $_C.Fail
+                New-UiShortcutSegment -Text ' = cancel' -Color $_C.Dim
+            )
+            Add-UiFrameShortcutSegments -Frame $frame -Segments $segments
+            Write-UiFrame -Frame $frame
+
+            $key = Read-ConsoleKey
+            switch ($key.Key) {
+                'UpArrow' {
+                    $newIdx = $selectedIndex
+                    while ($newIdx -gt 0) {
+                        $newIdx--
+                        if ($items[$newIdx].Selectable) {
+                            $selectedIndex = $newIdx
+                            break
+                        }
+                    }
+                }
+                'DownArrow' {
+                    $newIdx = $selectedIndex
+                    while ($newIdx -lt ($items.Count - 1)) {
+                        $newIdx++
+                        if ($items[$newIdx].Selectable) {
+                            $selectedIndex = $newIdx
+                            break
+                        }
+                    }
+                }
+                'PageUp' {
+                    $count = 0
+                    $newIdx = $selectedIndex
+                    while ($newIdx -gt 0 -and $count -lt $maxVisible) {
+                        $newIdx--
+                        if ($items[$newIdx].Selectable) {
+                            $selectedIndex = $newIdx
+                            $count++
+                        }
+                    }
+                }
+                'PageDown' {
+                    $count = 0
+                    $newIdx = $selectedIndex
+                    while ($newIdx -lt ($items.Count - 1) -and $count -lt $maxVisible) {
+                        $newIdx++
+                        if ($items[$newIdx].Selectable) {
+                            $selectedIndex = $newIdx
+                            $count++
+                        }
+                    }
+                }
+                'Home' {
+                    for ($i = 0; $i -lt $items.Count; $i++) {
+                        if ($items[$i].Selectable) {
+                            $selectedIndex = $i
+                            break
+                        }
+                    }
+                }
+                'End' {
+                    for ($i = ($items.Count - 1); $i -ge 0; $i--) {
+                        if ($items[$i].Selectable) {
+                            $selectedIndex = $i
+                            break
+                        }
+                    }
+                }
+                'Escape' { return $null }
+                'ResizeEvent' { continue }
+                'Delete' {
+                    $item = $items[$selectedIndex]
+                    if ($item.Type -eq 'Saved') {
+                        $targetEntry = $item.Data
+                        $updatedHistory = [System.Collections.Generic.List[object]]::new()
+                        foreach ($entry in $allHistory) {
+                            if (-not ($entry.ComputerName.ToLower() -eq $targetEntry.ComputerName.ToLower() -and $entry.NetworkId -eq $networkId)) {
+                                $updatedHistory.Add($entry)
+                            }
+                        }
+                        Save-DeviceCheckConnectionHistory -History $updatedHistory
+                        $selectedIndex = -1
+                    }
+                }
+                'Enter' {
+                    $item = $items[$selectedIndex]
+                    if ($item.Type -eq 'Action') {
+                        return [PSCustomObject]@{
+                            Action       = 'New'
+                            ComputerName = $null
+                            LastIP       = $null
+                            MAC          = $null
+                            UserName     = 'Unknown'
+                        }
+                    } elseif ($item.Type -eq 'Saved') {
+                        return [PSCustomObject]@{
+                            Action       = 'Connect'
+                            ComputerName = $item.Data.ComputerName
+                            LastIP       = $item.Data.LastIPAddress
+                            MAC          = $item.Data.MACAddress
+                            UserName     = $item.Data.UserName
+                        }
+                    } elseif ($item.Type -eq 'Discovered') {
+                        return [PSCustomObject]@{
+                            Action       = 'ConnectDiscovered'
+                            ComputerName = $item.Data.HostName
+                            LastIP       = $item.Data.IP
+                            MAC          = $null
+                            UserName     = 'Unknown'
+                        }
+                    }
+                }
+            }
+        }
+    } finally {
+        try { [Console]::CursorVisible = $true } catch {}
+    }
+}
+
 function Invoke-ConnectLanTarget {
     Reset-AllEvidenceScanConfirmation
     try { [Console]::CursorVisible = $true } catch {}
     $script:RequestForceClear = $true
     
-    $renderBlock = {
-        param($currentInput)
-        $width = Get-UiWidth
-        $frame = New-UiFrame
-        Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle 'Open cached snapshots instantly; refresh only when you ask.' -Width $width
-        Add-UiFrameLine -Frame $frame
-        Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Current target :$($_C.Reset) $($_C.Info)$(Get-TargetStatusText)$($_C.Reset)$($_C.EraseLn)"
-        Add-UiFrameLine -Frame $frame
-        Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS - Use IP to bypass Kerberos lag):$($_C.Reset)$($_C.EraseLn)"
-        $null = $frame.Append("  Target: $currentInput")
-        Write-UiFrame -Frame $frame
-    }
-    $target = Read-TuiLine -RenderBlock $renderBlock -DefaultValue ''
-    if ($null -eq $target) {
+    # Render scanning loading screens
+    Clear-TuiScreen
+    $frame = New-UiFrame
+    Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle 'Detecting network profile...' -Width (Get-UiWidth)
+    Add-UiFrameLine -Frame $frame
+    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Detecting network profile...$($_C.Reset)$($_C.EraseLn)"
+    Write-UiFrame -Frame $frame
+
+    $networkInfo = Get-CurrentNetworkIdentity
+    $networkName = $networkInfo.ProfileName
+
+    $frame = New-UiFrame
+    Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
+    Add-UiFrameLine -Frame $frame
+    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Active Network: $networkName$($_C.Reset)$($_C.EraseLn)"
+    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
+    Write-UiFrame -Frame $frame
+
+    $discoveredHosts = Get-DeviceCheckDiscoveredHosts
+
+    $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -DiscoveredHosts $discoveredHosts
+    if ($null -eq $choice) {
         $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
         $script:RequestForceClear = $true
         try { Initialize-TuiHost } catch {}
         try { [Console]::CursorVisible = $false } catch {}
         return
     }
-    if ([string]::IsNullOrWhiteSpace($target)) {
-        $target = 'PALIOS'
+
+    $target = $null
+    $resolvedIp = $null
+    $targetMac = $null
+
+    if ($choice.Action -eq 'New') {
+        $renderBlock = {
+            param($currentInput)
+            $width = Get-UiWidth
+            $frame = New-UiFrame
+            Add-UiFrameBanner -Frame $frame -Title 'Connect to LAN PC' -Subtitle "Active Network: $networkName" -Width $width
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Current target :$($_C.Reset) $($_C.Info)$(Get-TargetStatusText)$($_C.Reset)$($_C.EraseLn)"
+            Add-UiFrameLine -Frame $frame
+            Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Enter Computer name or IP (default: PALIOS - Use IP to bypass Kerberos lag):$($_C.Reset)$($_C.EraseLn)"
+            $null = $frame.Append("  Target: $currentInput")
+            Write-UiFrame -Frame $frame
+        }
+        $target = Read-TuiLine -RenderBlock $renderBlock -DefaultValue ''
+        if ($null -eq $target) {
+            $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($target)) {
+            $target = 'PALIOS'
+        }
+        $target = $target.Trim()
+        $resolvedIp = $target
+    } elseif ($choice.Action -eq 'ConnectDiscovered') {
+        $target = $choice.ComputerName
+        $resolvedIp = $choice.LastIP
+        $targetMac = $null
+    } else {
+        $target = $choice.ComputerName
+        $targetMac = $choice.MAC
+        $resolvedIp = $choice.LastIP
+        
+        Clear-TuiScreen
+        $frame = New-UiFrame
+        Add-UiFrameBanner -Frame $frame -Title "Connecting to $target" -Subtitle "Locating device on network '$networkName'..." -Width (Get-UiWidth)
+        Add-UiFrameLine -Frame $frame
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Locating PC '$target' dynamically (checking DNS and ARP cache)...$($_C.Reset)$($_C.EraseLn)"
+        Write-UiFrame -Frame $frame
+
+        $resolvedIp = Resolve-HistoryTargetAddress -ComputerName $target -LastIPAddress $choice.LastIP -MACAddress $targetMac
+        if ($null -eq $resolvedIp) {
+            $script:SystemScanMessage = "Could not locate target PC '$target' on LAN. Verify it is online. | $(Get-Date -Format 'HH:mm:ss')"
+            $script:RequestForceClear = $true
+            
+            $renderErrorBlock = {
+                param()
+                Clear-TuiScreen
+                $width = Get-UiWidth
+                $frame = New-Object System.Text.StringBuilder
+                Add-UiFrameBanner -Frame $frame -Title "Cannot locate $target" -Subtitle "The device could not be reached via its hostname or MAC address." -Width $width
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)Resolution failed.$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The host '$target' (last IP: $($choice.LastIP)) did not respond on port 5985.$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)Ensure the target PC is awake, connected to network '$networkName', and WinRM is enabled.$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame
+                Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)"
+                Add-UiFrameLine -Frame $frame
+                try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
+            }
+            while ($true) {
+                & $renderErrorBlock
+                $key = Read-ConsoleKey
+                if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+                    Start-Sleep -Milliseconds 10
+                    continue
+                }
+                if ($key.Key -eq 'Enter') {
+                    break
+                }
+                if ($key.Key -eq 'ResizeEvent') {
+                    $script:RequestForceClear = $true
+                    continue
+                }
+            }
+            try { Initialize-TuiHost } catch {}
+            try { [Console]::CursorVisible = $false } catch {}
+            return
+        }
     }
-    $target = $target.Trim()
 
     if (Test-DeviceCheckLocalTargetName -ComputerName $target) {
         $frame = New-UiFrame
@@ -3713,8 +4397,8 @@ function Invoke-ConnectLanTarget {
             Write-UiFrame -Frame $frame
         }
         
-        $choice = Read-TuiLine -RenderBlock $renderChoiceBlock -DefaultValue ''
-        if ($null -eq $choice) {
+        $choiceSub = Read-TuiLine -RenderBlock $renderChoiceBlock -DefaultValue ''
+        if ($null -eq $choiceSub) {
             $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
             $script:RequestForceClear = $true
             try { Initialize-TuiHost } catch {}
@@ -3722,28 +4406,38 @@ function Invoke-ConnectLanTarget {
             return
         }
         
-        if ([string]::IsNullOrWhiteSpace($choice)) {
+        if ([string]::IsNullOrWhiteSpace($choiceSub)) {
             $cachedCredential = $script:TargetCredential
             if ($null -eq $cachedCredential) {
                 $cachedCredential = $script:CredentialCache[$target.ToLower()]
             }
+            if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                $cachedCredential = $script:CredentialCache[$resolvedIp.ToLower()]
+            }
             if ($null -eq $cachedCredential) {
                 $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $target
             }
+            if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
+            }
+            
+            $userName = $(if ($null -ne $cachedCredential) { $cachedCredential.UserName } else { $choice.UserName })
+            Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $targetMac -UserName $userName -NetworkId $networkInfo.NetworkId
+
             Set-ActiveSnapshotTarget -Snapshot $cached.Snapshot -SnapshotPath $cached.LatestPath -ComputerName $target -Credential $cachedCredential
             try { Initialize-TuiHost } catch {}
             try { [Console]::CursorVisible = $false } catch {}
             return
         }
-        if ($choice.Trim().Equals('C', [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($choiceSub.Trim().Equals('C', [System.StringComparison]::OrdinalIgnoreCase)) {
             $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
             $script:RequestForceClear = $true
             try { Initialize-TuiHost } catch {}
             try { [Console]::CursorVisible = $false } catch {}
             return
         }
-        if (-not $choice.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $script:SystemScanMessage = "Connect cancelled: unknown choice '$choice'. | $(Get-Date -Format 'HH:mm:ss')"
+        if (-not $choiceSub.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $script:SystemScanMessage = "Connect cancelled: unknown choice '$choiceSub'. | $(Get-Date -Format 'HH:mm:ss')"
             $script:RequestForceClear = $true
             try { Initialize-TuiHost } catch {}
             try { [Console]::CursorVisible = $false } catch {}
@@ -3756,11 +4450,35 @@ function Invoke-ConnectLanTarget {
         if ($null -eq $existingCredential) {
             $existingCredential = $script:CredentialCache[$target.ToLower()]
         }
+        if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+            $existingCredential = $script:CredentialCache[$resolvedIp.ToLower()]
+        }
         if ($null -eq $existingCredential) {
             $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $target
         }
-        $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $target -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential)
-        if ($collection.Success) {
+        if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+            $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
+        }
+        
+        $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential)
+        if ($null -ne $collection -and $collection.Success) {
+            $connectedMac = "Unknown"
+            try {
+                $neighbor = Get-NetNeighbor -IPAddress $resolvedIp -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($neighbor -and $neighbor.LinkLayerAddress) {
+                    $connectedMac = $neighbor.LinkLayerAddress.ToUpper()
+                }
+            } catch {}
+
+            $userName = 'Unknown'
+            if ($null -ne $collection.Credential) {
+                $userName = $collection.Credential.UserName
+            } elseif ($null -ne $collection.Export -and $null -ne $collection.Export.Summary) {
+                $userName = $collection.Export.Summary.UserName
+            }
+
+            Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $connectedMac -UserName $userName -NetworkId $networkInfo.NetworkId
+
             Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $target -Credential $collection.Credential
         } else {
             $script:SystemScanMessage = "Connect cancelled or failed: $target | $(Get-Date -Format 'HH:mm:ss')"
@@ -3815,7 +4533,7 @@ function Update-VisibleRows {
                     if ($d.SearchStatus -eq 'Searching') {
                         $rows.Add([PSCustomObject]@{
                             Type         = 'Status'
-                            Name         = if ($script:CurrentLoadingText) { $script:CurrentLoadingText } else { 'Searching databases & web...' }
+                            Name         = $(if ($script:CurrentLoadingText) { $script:CurrentLoadingText } else { 'Searching databases & web...' })
                             ParentIsLast = $isLast
                             ParentDevice = $d
                         })
@@ -3925,18 +4643,18 @@ function Get-TreeDisplayLine {
     $ansiText = ''
 
     if ($Row.Type -eq 'Root') {
-        $icon = if ($Row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
+        $icon = $(if ($Row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed })
         $plainText = " $icon  $($Row.Name)"
         $ansiText = "$($_C.White)$plainText$($_C.Reset)"
     }
     elseif ($Row.Type -eq 'Category') {
-        $icon = if ($Row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
+        $icon = $(if ($Row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed })
         $plainText = "   $icon  $($Row.Name)"
         $ansiText = "$($_C.White)$plainText$($_C.Reset)"
     }
     elseif ($Row.Type -eq 'Device') {
-        $branch = if ($Row.IsLast) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
-        $warning = if ($Row.IsProblem) { "[!] " } else { "" }
+        $branch = $(if ($Row.IsLast) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch })
+        $warning = $(if ($Row.IsProblem) { "[!] " } else { "" })
         $plainText = "       $branch$warning$($Row.Name) [$($Row.Class)]"
         if ($Row.IsProblem) {
             $ansiText = "$($_C.Dim)       $branch$($_C.Reset)$($_C.Warn)[!] $($_C.Reset)$($_C.White)$($Row.Name) $($_C.Dim)[$($Row.Class)]$($_C.Reset)"
@@ -3945,20 +4663,20 @@ function Get-TreeDisplayLine {
         }
     }
     elseif ($Row.Type -eq 'Status') {
-        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
+        $parentPrefix = $(if ($Row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " })
         $branchLast = Get-UiGlyph -Name BranchLast
         $plainText = "$parentPrefix$branchLast[$($Row.Name)]"
         $ansiText = "$($_C.Dim)$parentPrefix$branchLast$($_C.Reset)$($_C.Warn)[$($Row.Name)]$($_C.Reset)"
     }
     elseif ($Row.Type -eq 'Result') {
-        $parentPrefix = if ($Row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
+        $parentPrefix = $(if ($Row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " })
         $text = [string]$Row.Name
         $isSubResult = $text.StartsWith('  ')
         if ($isSubResult) {
             $text = $text.Substring(2)
-            $branch = if ($Row.IsLastResult) { "    $(Get-UiGlyph -Name BranchLast)" } else { "$(Get-UiGlyph -Name VLine)   $(Get-UiGlyph -Name BranchLast)" }
+            $branch = $(if ($Row.IsLastResult) { "    $(Get-UiGlyph -Name BranchLast)" } else { "$(Get-UiGlyph -Name VLine)   $(Get-UiGlyph -Name BranchLast)" })
         } else {
-            $branch = if ($Row.IsLastResult) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
+            $branch = $(if ($Row.IsLastResult) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch })
         }
 
         $plainText = "$parentPrefix$branch$text"
@@ -3966,7 +4684,7 @@ function Get-TreeDisplayLine {
             $tag = $Matches[1]
             $tagName = $Matches[2]
             $rest = $Matches[3]
-            $tagColor = if ($tagName -like '*Error*') {
+            $tagColor = $(if ($tagName -like '*Error*') {
                 $_C.Fail
             } elseif ($tagName -like '*Gemini*') {
                 $_C.Info
@@ -3978,7 +4696,7 @@ function Get-TreeDisplayLine {
                 $_C.Warn
             } else {
                 $_C.Info
-            }
+            })
             $ansiText = "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$tagColor$tag$($_C.Reset)$($_C.White)$rest$($_C.Reset)"
         } else {
             $ansiText = "$($_C.Dim)$parentPrefix$branch$($_C.Reset)$($_C.White)$text$($_C.Reset)"
@@ -4008,7 +4726,7 @@ function Add-AgentTraceLines {
         'Waiting' { $_C.Warn }
         default { $_C.Info }
     }
-    $stateText = if ($ActiveSearch.AgentState) { $ActiveSearch.AgentState } else { 'Unknown' }
+    $stateText = $(if ($ActiveSearch.AgentState) { $ActiveSearch.AgentState } else { 'Unknown' })
     Add-KeyValueLines -Lines $lines -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor
     if (-not [string]::IsNullOrWhiteSpace($ActiveSearch.AgentTracePath)) {
         Add-WrappedPathLine -Lines $lines -Key 'Log' -Path $ActiveSearch.AgentTracePath -Width $Width
@@ -4058,7 +4776,7 @@ function Get-DetailDisplayLines {
     if ($SelectedRow.Type -eq 'Root') {
         $machine = $SelectedRow.Ref
         $lines.Add((New-SectionLine -Title 'Computer Info' -Width $Width))
-        $targetColor = if (Test-RemoteSnapshotTargetActive) { $_C.Info } else { $_C.OK }
+        $targetColor = $(if (Test-RemoteSnapshotTargetActive) { $_C.Info } else { $_C.OK })
         Add-KeyValueLines -Lines $lines -Key 'Target' -Value (Get-TargetStatusText) -Width $Width -ValueColor $targetColor
         if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
             Add-WrappedPathLine -Lines $lines -Key 'Snapshot' -Path $script:TargetSnapshotPath -Width $Width
@@ -4088,12 +4806,12 @@ function Get-DetailDisplayLines {
                     $script:EvidenceBatchQueuedIds.Contains($_.InstanceId)
                 }
             ).Count
-            $evidenceText = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) {
+            $evidenceText = $(if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) {
                 "$activeEvidenceCount scanning / $queuedEvidenceCount queued / $cachedEvidenceCount cached"
             } else {
                 "$cachedEvidenceCount cached"
-            }
-            $evidenceColor = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
+            })
+            $evidenceColor = $(if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim })
             Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor
         }
     }
@@ -4104,11 +4822,11 @@ function Get-DetailDisplayLines {
 
         $errCode = [int]$SelectedRow.Ref.ConfigManagerErrorCode
         $errDesc = Get-DeviceProblemDescription -ErrorCode $errCode
-        $statusColor = if ($errCode -eq 0) { $_C.OK } else { $_C.Fail }
-        $statusValue = if ($errCode -eq 0) { "OK ($errDesc)" } else { "Error (Code ${errCode}: $errDesc)" }
+        $statusColor = $(if ($errCode -eq 0) { $_C.OK } else { $_C.Fail })
+        $statusValue = $(if ($errCode -eq 0) { "OK ($errDesc)" } else { "Error (Code ${errCode}: $errDesc)" })
         Add-KeyValueLines -Lines $lines -Key 'Status' -Value $statusValue -Width $Width -ValueColor $statusColor
 
-        $activeSearch = if ($script:ActiveSearches.Contains($SelectedRow.Ref.InstanceId)) { $script:ActiveSearches[$SelectedRow.Ref.InstanceId] } else { $null }
+        $activeSearch = $(if ($script:ActiveSearches.Contains($SelectedRow.Ref.InstanceId)) { $script:ActiveSearches[$SelectedRow.Ref.InstanceId] } else { $null })
         if ($null -ne $activeSearch -and $activeSearch.EvidenceState -eq 'Searching') {
             Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value 'Collecting local evidence...' -Width $Width -ValueColor $_C.Warn
         } elseif ($null -ne $activeSearch -and $activeSearch.EvidenceState -eq 'Error') {
@@ -4118,7 +4836,7 @@ function Get-DetailDisplayLines {
         $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $SelectedRow.Ref.InstanceId
         if ($null -ne $cachedEvidence) {
             $capturedAt = Get-NotePropertyValue -Object $cachedEvidence -Name 'CapturedAt'
-            $capturedText = if ($capturedAt) { $capturedAt } else { 'unknown time' }
+            $capturedText = $(if ($capturedAt) { $capturedAt } else { 'unknown time' })
             if ($null -eq $activeSearch -or $activeSearch.EvidenceState -ne 'Searching') {
                 Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value "Cached ($capturedText)" -Width $Width -ValueColor $_C.OK
             }
@@ -4126,7 +4844,7 @@ function Get-DetailDisplayLines {
             $importantProperties = Get-NotePropertyValue -Object $cachedEvidence -Name 'ImportantProperties'
             $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
             if ($hardwareIds) {
-                $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
+                $firstHardwareId = $(if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds })
                 Add-KeyValueLines -Lines $lines -Key 'HardwareId' -Value $firstHardwareId -Width $Width
                 foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width $Width -Evidence $cachedEvidence)) {
                     $lines.Add($breakdownLine)
@@ -4140,7 +4858,7 @@ function Get-DetailDisplayLines {
 
             $compatibleIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_CompatibleIds'
             if ($compatibleIds) {
-                $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
+                $firstCompatibleId = $(if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds })
                 Add-KeyValueLines -Lines $lines -Key 'CompatibleId' -Value $firstCompatibleId -Width $Width
                 foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width $Width -Evidence $cachedEvidence)) {
                     $lines.Add($breakdownLine)
@@ -4152,7 +4870,7 @@ function Get-DetailDisplayLines {
                 $lines.Add((New-SectionLine -Title 'Local Hardware Identity' -Width $Width))
                 foreach ($row in $localIdentityRows) {
                     $rowColorName = [string](Get-NotePropertyValue -Object $row -Name 'Color')
-                    $rowColor = if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White }
+                    $rowColor = $(if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White })
                     Add-KeyValueLines -Lines $lines -Key ([string]$row.Key) -Value ([string]$row.Value) -Width $Width -ValueColor $rowColor
                 }
             }
@@ -4178,39 +4896,39 @@ function Get-DetailDisplayLines {
     }
     elseif ($SelectedRow.Type -eq 'Result') {
         $parentDevice = Get-NotePropertyValue -Object $SelectedRow -Name 'ParentDevice'
-        $resultSearch = if ($null -ne $parentDevice -and $script:ActiveSearches.Contains($parentDevice.InstanceId)) { $script:ActiveSearches[$parentDevice.InstanceId] } else { $null }
+        $resultSearch = $(if ($null -ne $parentDevice -and $script:ActiveSearches.Contains($parentDevice.InstanceId)) { $script:ActiveSearches[$parentDevice.InstanceId] } else { $null })
         $isAgentResult = ([string]$SelectedRow.Name -match '^\[Agent:')
 
         if ($isAgentResult) {
             $lines.Add((New-SectionLine -Title 'Agent Result' -Width $Width))
             $stateText = ([string]$SelectedRow.Name -replace '^\[Agent:\s*[^\]]+\]\s*', '').Trim()
             if (-not [string]::IsNullOrWhiteSpace($stateText)) {
-                $stateColor = if ($stateText -match 'Failed|Error|Cancelled') { $_C.Fail } elseif ($stateText -match 'Done') { $_C.OK } else { $_C.Warn }
+                $stateColor = $(if ($stateText -match 'Failed|Error|Cancelled') { $_C.Fail } elseif ($stateText -match 'Done') { $_C.OK } else { $_C.Warn })
                 Add-KeyValueLines -Lines $lines -Key 'State' -Value $stateText -Width $Width -ValueColor $stateColor
             }
 
-            $tracePath = if ($null -ne $resultSearch -and -not [string]::IsNullOrWhiteSpace($resultSearch.AgentTracePath)) {
+            $tracePath = $(if ($null -ne $resultSearch -and -not [string]::IsNullOrWhiteSpace($resultSearch.AgentTracePath)) {
                 $resultSearch.AgentTracePath
             } else {
                 Get-NotePropertyValue -Object $parentDevice -Name 'SearchTracePath'
-            }
+            })
             if (-not [string]::IsNullOrWhiteSpace($tracePath)) {
                 Add-WrappedPathLine -Lines $lines -Key 'Log' -Path $tracePath -Width $Width
             }
-            $checkpointPath = if ($null -ne $resultSearch) {
+            $checkpointPath = $(if ($null -ne $resultSearch) {
                 Get-NotePropertyValue -Object $resultSearch -Name 'AgentCheckpointPath'
             } else {
                 Get-NotePropertyValue -Object $parentDevice -Name 'SearchCheckpointPath'
-            }
+            })
             if (-not [string]::IsNullOrWhiteSpace($checkpointPath)) {
                 Add-WrappedPathLine -Lines $lines -Key 'Checkpoint' -Path $checkpointPath -Width $Width
             }
 
-            $detailText = if ($null -ne $resultSearch -and -not [string]::IsNullOrWhiteSpace($resultSearch.AgentVal)) {
+            $detailText = $(if ($null -ne $resultSearch -and -not [string]::IsNullOrWhiteSpace($resultSearch.AgentVal)) {
                 $resultSearch.AgentVal
             } else {
                 Get-NotePropertyValue -Object $parentDevice -Name 'SearchDetail'
-            }
+            })
 
             if (-not [string]::IsNullOrWhiteSpace($detailText)) {
                 $lines.Add((New-SectionLine -Title 'Answer' -Width $Width))
@@ -4267,12 +4985,12 @@ function Get-DetailDisplayLines {
                     $script:EvidenceBatchQueuedIds.Contains($_.InstanceId)
                 }
             ).Count
-            $evidenceText = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) {
+            $evidenceText = $(if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) {
                 "$activeEvidenceCount scanning / $queuedEvidenceCount queued / $cachedEvidenceCount cached"
             } else {
                 "$cachedEvidenceCount cached"
-            }
-            $evidenceColor = if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim }
+            })
+            $evidenceColor = $(if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim })
             Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor
         }
     }
@@ -4315,14 +5033,14 @@ function Invoke-ModelSelector {
             Write-UiSection -Title 'Available AI Models for Scan' -Icon ''
             Write-Host ''
 
-            $aboveMessage = if ($viewTop -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $viewTop more above$($_C.Reset)" } else { '' }
+            $aboveMessage = $(if ($viewTop -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $viewTop more above$($_C.Reset)" } else { '' })
             Write-Host "$aboveMessage$($_C.EraseLn)"
 
             for ($index = $viewTop; $index -le $viewBot; $index++) {
                 $model = $script:AvailableModels[$index]
-                $check = if ($model.Selected) { "[x]" } else { "[ ]" }
-                $checkColor = if ($model.Selected) { $_C.OK } else { $_C.Dim }
-                $providerColor = if ($model.Provider -eq 'Gemini') { $_C.Info } else { $_C.Gold }
+                $check = $(if ($model.Selected) { "[x]" } else { "[ ]" })
+                $checkColor = $(if ($model.Selected) { $_C.OK } else { $_C.Dim })
+                $providerColor = $(if ($model.Provider -eq 'Gemini') { $_C.Info } else { $_C.Gold })
 
                 $displayText = " $checkColor$check$($_C.Reset) $providerColor$($model.Provider):$($_C.Reset) $($model.FriendlyName) $($_C.Dim)($($model.ApiId))$($_C.Reset)"
 
@@ -4346,7 +5064,7 @@ function Invoke-ModelSelector {
             }
 
             $below = $script:AvailableModels.Count - 1 - $viewBot
-            $belowMessage = if ($below -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $below more below$($_C.Reset)" } else { '' }
+            $belowMessage = $(if ($below -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $below more below$($_C.Reset)" } else { '' })
             Write-Host "$belowMessage$($_C.EraseLn)"
             Write-Host "$($_C.EraseLn)"
 
@@ -4432,7 +5150,7 @@ function Render-FrameLegacy {
 
     # Scrolling indicators above
     $aboveCount = $viewTop
-    $aboveMessage = if ($aboveCount -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $aboveCount more above$($_C.Reset)" } else { '' }
+    $aboveMessage = $(if ($aboveCount -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Up) $aboveCount more above$($_C.Reset)" } else { '' })
     Write-Host "$aboveMessage$($_C.EraseLn)"
 
     # Render visible rows
@@ -4441,7 +5159,7 @@ function Render-FrameLegacy {
         $isSelected = ($index -eq $selectedIndex)
 
         if ($row.Type -eq 'Root') {
-            $icon = if ($row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
+            $icon = $(if ($row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed })
             $displayText = " $icon  $($row.Name)"
 
             if ($isSelected) {
@@ -4451,7 +5169,7 @@ function Render-FrameLegacy {
             }
         }
         elseif ($row.Type -eq 'Category') {
-            $icon = if ($row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed }
+            $icon = $(if ($row.IsExpanded) { Get-UiGlyph -Name Expanded } else { Get-UiGlyph -Name Collapsed })
             $displayText = "   $icon  $($row.Name)"
 
             if ($isSelected) {
@@ -4461,12 +5179,12 @@ function Render-FrameLegacy {
             }
         }
         elseif ($row.Type -eq 'Device') {
-            $branch = if ($row.IsLast) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
-            $warningIcon = if ($row.IsProblem) { "$($_C.Warn)[!]$($_C.Reset) " } else { "" }
+            $branch = $(if ($row.IsLast) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch })
+            $warningIcon = $(if ($row.IsProblem) { "$($_C.Warn)[!]$($_C.Reset) " } else { "" })
             $displayText = "       $branch$warningIcon$($row.Name) [$($row.Class)]"
 
             if ($isSelected) {
-                $cleanWarning = if ($row.IsProblem) { "[!] " } else { "" }
+                $cleanWarning = $(if ($row.IsProblem) { "[!] " } else { "" })
                 $cleanText = "       $branch$cleanWarning$($row.Name) [$($row.Class)]"
                 Write-Host "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $cleanText $($_C.Reset)$($_C.EraseLn)"
             } else {
@@ -4474,20 +5192,20 @@ function Render-FrameLegacy {
             }
         }
         elseif ($row.Type -eq 'Status') {
-            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
+            $parentPrefix = $(if ($row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " })
             Write-Host "$($_C.Dim)$parentPrefix$(Get-UiGlyph -Name BranchLast)$($_C.Reset)$($_C.Warn)[$($row.Name)]$($_C.Reset)$($_C.EraseLn)"
         }
         elseif ($row.Type -eq 'Result') {
-            $parentPrefix = if ($row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " }
+            $parentPrefix = $(if ($row.ParentIsLast) { "            " } else { "       $(Get-UiGlyph -Name VLine)    " })
 
             $text = $row.Name
             $isSubResult = $text.StartsWith("  ")
 
             if ($isSubResult) {
                 $text = $text.Substring(2)
-                $branch = if ($row.IsLastResult) { "    $(Get-UiGlyph -Name BranchLast)" } else { "$(Get-UiGlyph -Name VLine)   $(Get-UiGlyph -Name BranchLast)" }
+                $branch = $(if ($row.IsLastResult) { "    $(Get-UiGlyph -Name BranchLast)" } else { "$(Get-UiGlyph -Name VLine)   $(Get-UiGlyph -Name BranchLast)" })
             } else {
-                $branch = if ($row.IsLastResult) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch }
+                $branch = $(if ($row.IsLastResult) { Get-UiGlyph -Name BranchLast } else { Get-UiGlyph -Name Branch })
             }
 
             # Truncate result text to console width dynamically
@@ -4501,7 +5219,7 @@ function Render-FrameLegacy {
                 $tag = $Matches[1]
                 $tagName = $Matches[2]
                 $rest = $Matches[3]
-                $tagColor = if ($tagName -like '*Error*') {
+                $tagColor = $(if ($tagName -like '*Error*') {
                     $_C.Fail
                 } elseif ($tagName -like '*Gemini*') {
                     $_C.Info    # Blue for Gemini
@@ -4513,7 +5231,7 @@ function Render-FrameLegacy {
                     $_C.Warn
                 } else {
                     $_C.Info
-                }
+                })
 
                 $useSameColorForRest = ($tagName -like '*Gemini*' -or $tagName -like '*OpenRouter*' -or $tagName -like '*nvidia*' -or $tagName -like '*nemotron*')
 
@@ -4538,7 +5256,7 @@ function Render-FrameLegacy {
 
     # Scrolling indicators below
     $belowCount = $script:visibleRows.Count - 1 - $viewBot
-    $belowMessage = if ($belowCount -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $belowCount more below$($_C.Reset)" } else { '' }
+    $belowMessage = $(if ($belowCount -gt 0) { "  $($_C.Dim)$(Get-UiGlyph -Name Down) $belowCount more below$($_C.Reset)" } else { '' })
     Write-Host "$belowMessage$($_C.EraseLn)"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4571,24 +5289,24 @@ function Render-FrameLegacy {
             default { "Unknown problem status" }
         }
 
-        $statusText = if ($errCode -eq 0) {
+        $statusText = $(if ($errCode -eq 0) {
             "$($_C.OK)OK ($errDesc)$($_C.Reset)"
         } else {
             "$($_C.Fail)Error (Code ${errCode}: $errDesc)$($_C.Reset)"
-        }
+        })
 
         Write-Host "  $($_C.Dim)Status       :$($_C.Reset) $statusText$($_C.EraseLn)"
 
         $cachedEvidence = Read-CachedDeviceEvidence -InstanceId $selectedRow.Ref.InstanceId
         if ($null -ne $cachedEvidence) {
             $capturedAt = Get-NotePropertyValue -Object $cachedEvidence -Name 'CapturedAt'
-            $capturedText = if ($capturedAt) { $capturedAt } else { 'unknown time' }
+            $capturedText = $(if ($capturedAt) { $capturedAt } else { 'unknown time' })
             Write-Host "  $($_C.Dim)Evidence     :$($_C.Reset) $($_C.OK)Cached ($capturedText)$($_C.Reset)$($_C.EraseLn)"
 
             $importantProperties = Get-NotePropertyValue -Object $cachedEvidence -Name 'ImportantProperties'
             $hardwareIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
             if ($hardwareIds) {
-                $firstHardwareId = if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds }
+                $firstHardwareId = $(if ($hardwareIds -is [array]) { $hardwareIds[0] } else { $hardwareIds })
                 Write-Host "  $($_C.Dim)HardwareId   :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstHardwareId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
                 foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstHardwareId -Width (Get-UiWidth) -Evidence $cachedEvidence)) {
                     Write-Host "$breakdownLine$($_C.EraseLn)"
@@ -4602,7 +5320,7 @@ function Render-FrameLegacy {
 
             $compatibleIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_CompatibleIds'
             if ($compatibleIds) {
-                $firstCompatibleId = if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds }
+                $firstCompatibleId = $(if ($compatibleIds -is [array]) { $compatibleIds[0] } else { $compatibleIds })
                 Write-Host "  $($_C.Dim)CompatibleId :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $firstCompatibleId -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
                 foreach ($breakdownLine in (Get-HardwareIdBreakdownLines -HardwareId $firstCompatibleId -Width (Get-UiWidth) -Evidence $cachedEvidence)) {
                     Write-Host $breakdownLine
@@ -4614,7 +5332,7 @@ function Render-FrameLegacy {
                 Write-Host "  $($_C.H1)Local Hardware Identity$($_C.Reset)$($_C.EraseLn)"
                 foreach ($row in $localIdentityRows) {
                     $rowColorName = [string](Get-NotePropertyValue -Object $row -Name 'Color')
-                    $rowColor = if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White }
+                    $rowColor = $(if ($rowColorName -and $_C.ContainsKey($rowColorName)) { $_C[$rowColorName] } else { $_C.White })
                     $keyText = Format-PlainToWidth -Text ([string]$row.Key) -Width 13
                     Write-Host "  $($_C.Dim)$keyText :$($_C.Reset) $rowColor$(Format-UiValue -Text ([string]$row.Value) -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
                 }
@@ -4658,7 +5376,7 @@ function Render-FrameLegacy {
                 $wrappedLines += $currentLine
                 $currentLine = "  $word"
             } else {
-                $currentLine = if ($currentLine -eq "  ") { "  $word" } else { "$currentLine $word" }
+                $currentLine = $(if ($currentLine -eq "  ") { "  $word" } else { "$currentLine $word" })
             }
         }
         if ($currentLine) { $wrappedLines += $currentLine }
@@ -4746,14 +5464,14 @@ function Add-FrameBanner {
     $border = (Get-UiGlyph -Name BoxH) * [Math]::Max(0, $Width - 2)
     $maxTextWidth = [Math]::Max(1, $Width - 3)
 
-    $displayTitle = if ($null -eq $Title) { '' } else { $Title }
+    $displayTitle = $(if ($null -eq $Title) { '' } else { $Title })
     if ($displayTitle.Length -gt $maxTextWidth) {
         $ellipsis = Get-UiGlyph -Name Ellipsis
         $displayTitle = $displayTitle.Substring(0, [Math]::Max(1, $maxTextWidth - $ellipsis.Length)) + $ellipsis
     }
     $titlePad = [Math]::Max(0, $maxTextWidth - $displayTitle.Length)
 
-    $displaySubtitle = if ($null -eq $Subtitle) { '' } else { $Subtitle }
+    $displaySubtitle = $(if ($null -eq $Subtitle) { '' } else { $Subtitle })
     $subtitlePad = 0
     if (-not [string]::IsNullOrWhiteSpace($displaySubtitle)) {
         if ($displaySubtitle.Length -gt $maxTextWidth) {
@@ -4781,7 +5499,7 @@ function Add-FrameSection {
         [string]$Icon = (Get-UiGlyph -Name Diamond)
     )
 
-    $prefix = if ($Icon) { " $Icon $Title " } else { " $Title " }
+    $prefix = $(if ($Icon) { " $Icon $Title " } else { " $Title " })
     $remaining = [Math]::Max(0, $Width - $prefix.Length - 1)
     $line = (Get-UiGlyph -Name HLine) * $remaining
 
@@ -4803,7 +5521,7 @@ function Add-FrameShortcutSegments {
         if ($remaining -le 0) { break }
         $text = [string]$segment.Text
         if ($text.Length -gt $remaining) {
-            $text = if ($remaining -eq 1) { $text.Substring(0, 1) } else { $text.Substring(0, $remaining - 1) + '~' }
+            $text = $(if ($remaining -eq 1) { $text.Substring(0, 1) } else { $text.Substring(0, $remaining - 1) + '~' })
         }
         $null = $line.Append("$($segment.Color)$text$($_C.Reset)")
         $remaining -= $text.Length
@@ -4829,7 +5547,7 @@ function Render-Frame {
     if ($frameHeightBudget -lt 16) {
         $batchStatus = ''
     }
-    $batchRows = if ([string]::IsNullOrWhiteSpace($batchStatus)) { 0 } else { 1 }
+    $batchRows = $(if ([string]::IsNullOrWhiteSpace($batchStatus)) { 0 } else { 1 })
     $footerRows = 3
     $narrowDetailMaxLines = 0
 
@@ -4856,7 +5574,7 @@ function Render-Frame {
 
     $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $script:visibleRows.Count - $maxVisible)))
     $viewBot = [Math]::Min($viewTop + $maxVisible - 1, $script:visibleRows.Count - 1)
-    $selectedRow = if ($script:visibleRows.Count -gt 0) { $script:visibleRows[$selectedIndex] } else { $null }
+    $selectedRow = $(if ($script:visibleRows.Count -gt 0) { $script:visibleRows[$selectedIndex] } else { $null })
 
     $deviceCount = 0
     if ($null -ne $script:categories) {
@@ -4864,7 +5582,7 @@ function Render-Frame {
             $deviceCount += @($category.Devices).Count
         }
     }
-    $categoryCount = if ($null -ne $script:categories) { @($script:categories).Count } else { 0 }
+    $categoryCount = $(if ($null -ne $script:categories) { @($script:categories).Count } else { 0 })
     $headerSummary = Get-MachineSummary -MachineEvidence $script:MachineEvidence -DeviceCount $deviceCount -CategoryCount $categoryCount
     $subtitleText = $headerSummary
 
@@ -4894,10 +5612,10 @@ function Render-Frame {
     }
 
     if ($useDualPane) {
-        $leftTitleColor = if ($script:ActivePane -eq 'Tree') { $_C.H1 } else { $_C.Dim }
-        $rightTitleColor = if ($script:ActivePane -eq 'Detail') { $_C.H1 } else { $_C.Dim }
-        $leftIndicator = if ($script:ActivePane -eq 'Tree') { "$(Get-UiGlyph -Name Diamond) " } else { '  ' }
-        $rightIndicator = if ($script:ActivePane -eq 'Detail') { "$(Get-UiGlyph -Name Diamond) " } else { '  ' }
+        $leftTitleColor = $(if ($script:ActivePane -eq 'Tree') { $_C.H1 } else { $_C.Dim })
+        $rightTitleColor = $(if ($script:ActivePane -eq 'Detail') { $_C.H1 } else { $_C.Dim })
+        $leftIndicator = $(if ($script:ActivePane -eq 'Tree') { "$(Get-UiGlyph -Name Diamond) " } else { '  ' })
+        $rightIndicator = $(if ($script:ActivePane -eq 'Detail') { "$(Get-UiGlyph -Name Diamond) " } else { '  ' })
         $leftTitleText = "${leftIndicator}Device Connection Tree"
         $rightTitleText = "${rightIndicator}Selected Details"
         $leftPrefix = " $leftTitleText "
@@ -4910,7 +5628,7 @@ function Render-Frame {
 
         $treeLines = [System.Collections.Generic.List[string]]::new()
         $aboveCount = $viewTop
-        $aboveMessage = if ($aboveCount -gt 0) { "$(Get-UiGlyph -Name Up) $aboveCount more above" } else { '' }
+        $aboveMessage = $(if ($aboveCount -gt 0) { "$(Get-UiGlyph -Name Up) $aboveCount more above" } else { '' })
         $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)")
 
         for ($index = $viewTop; $index -le $viewBot; $index++) {
@@ -4919,16 +5637,16 @@ function Render-Frame {
         }
 
         $belowCount = $script:visibleRows.Count - 1 - $viewBot
-        $belowMessage = if ($belowCount -gt 0) { "$(Get-UiGlyph -Name Down) $belowCount more below" } else { '' }
+        $belowMessage = $(if ($belowCount -gt 0) { "$(Get-UiGlyph -Name Down) $belowCount more below" } else { '' })
         $treeLines.Add("$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)")
 
         # Generate all detail lines (generous MaxLines for scrolling)
         $detailMaxLines = [Math]::Max($treeLines.Count, 200)
-        $allDetailLines = if ($null -ne $selectedRow) {
+        $allDetailLines = $(if ($null -ne $selectedRow) {
             @(Get-DetailDisplayLines -SelectedRow $selectedRow -Width $rightWidth -MaxLines $detailMaxLines)
         } else {
             @((New-SectionLine -Title 'Selected Details' -Width $rightWidth))
-        }
+        })
         $detailLinesBuilt = $allDetailLines.Count
         # Trim trailing empty lines to get true content count
         $detailContentCount = $allDetailLines.Count
@@ -4991,8 +5709,8 @@ function Render-Frame {
 
         $lineCount = [Math]::Max($treeLines.Count, $detailSlice.Count)
         for ($i = 0; $i -lt $lineCount; $i++) {
-            $leftLine = if ($i -lt $treeLines.Count) { $treeLines[$i] } else { '' }
-            $rightLine = if ($i -lt $detailSlice.Count) { $detailSlice[$i] } else { '' }
+            $leftLine = $(if ($i -lt $treeLines.Count) { $treeLines[$i] } else { '' })
+            $rightLine = $(if ($i -lt $detailSlice.Count) { $detailSlice[$i] } else { '' })
             Add-FrameLine -Frame $frame -Text "$(Format-AnsiToWidth -Text $leftLine -Width $leftWidth)$($_C.Dim) $(Get-UiGlyph -Name VLine) $($_C.Reset)$(Format-AnsiToWidth -Text $rightLine -Width $rightWidth)$($_C.EraseLn)"
         }
     } else {
@@ -5000,7 +5718,7 @@ function Render-Frame {
         Add-FrameLine -Frame $frame
 
         $aboveCount = $viewTop
-        $aboveMessage = if ($aboveCount -gt 0) { "  $(Get-UiGlyph -Name Up) $aboveCount more above" } else { '' }
+        $aboveMessage = $(if ($aboveCount -gt 0) { "  $(Get-UiGlyph -Name Up) $aboveCount more above" } else { '' })
         Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $aboveMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
         for ($index = $viewTop; $index -le $viewBot; $index++) {
@@ -5009,7 +5727,7 @@ function Render-Frame {
         }
 
         $belowCount = $script:visibleRows.Count - 1 - $viewBot
-        $belowMessage = if ($belowCount -gt 0) { "  $(Get-UiGlyph -Name Down) $belowCount more below" } else { '' }
+        $belowMessage = $(if ($belowCount -gt 0) { "  $(Get-UiGlyph -Name Down) $belowCount more below" } else { '' })
         Add-FrameLine -Frame $frame -Text "$($_C.Dim)$(Format-PlainToWidth -Text $belowMessage -Width $leftWidth)$($_C.Reset)$($_C.EraseLn)"
 
         if ($narrowDetailMaxLines -gt 0 -and $null -ne $selectedRow) {
@@ -5157,7 +5875,7 @@ function Invoke-SelectedWebScan {
 
     $currentRow = Get-SelectedTreeRow -Rows $Rows -Index $Index
     if ($null -eq $currentRow) {
-        $lookupLabel = if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' }
+        $lookupLabel = $(if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' })
         Set-SystemStatusMessage -Message "$lookupLabel needs a selected device row."
         return
     }
@@ -5167,7 +5885,7 @@ function Invoke-SelectedWebScan {
     } elseif ($currentRow.Type -in @('Result', 'Status') -and $null -ne $currentRow.ParentDevice) {
         Start-DeviceLookup -Dev $currentRow.ParentDevice -UseAgent:$UseAgent -ForceEvidenceRefresh
     } else {
-        $lookupLabel = if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' }
+        $lookupLabel = $(if ($UseAgent) { 'Agent' } else { 'Web/AI lookup' })
         Set-SystemStatusMessage -Message "$lookupLabel needs a device row. Select a device or an existing lookup result."
     }
 }
@@ -5234,7 +5952,7 @@ function Start-DeviceLookup {
             $deviceName = Get-DeviceLookupDisplayName -Device $Dev
             Set-SystemStatusMessage -Message "Remote snapshot evidence unavailable for ${deviceName}: $($_.Exception.Message)"
             $Dev.SearchStatus = 'Error'
-            $Dev.SearchKind = if ($UseAgent) { 'Agent' } else { $null }
+            $Dev.SearchKind = $(if ($UseAgent) { 'Agent' } else { $null })
             $Dev.SearchDetail = $_.Exception.Message
             $Dev.SearchTracePath = $null
             $Dev.SearchCheckpointPath = $null
@@ -5253,10 +5971,10 @@ function Start-DeviceLookup {
     $modelRuns = [System.Collections.Generic.List[object]]::new()
     $activeResults = [System.Collections.Generic.List[string]]::new()
 
-    $selectedModels = if ($UseAgent) { @() } else { $script:AvailableModels | Where-Object { $_.Selected } }
+    $selectedModels = $(if ($UseAgent) { @() } else { $script:AvailableModels | Where-Object { $_.Selected } })
     foreach ($model in $selectedModels) {
-        $runKey = if ($model.Provider -eq 'Gemini') { $apiKey } else { $openRouterKey }
-        $state = if ((-not $EvidenceOnly) -and $runKey) { 'Waiting' } else { 'None' }
+        $runKey = $(if ($model.Provider -eq 'Gemini') { $apiKey } else { $openRouterKey })
+        $state = $(if ((-not $EvidenceOnly) -and $runKey) { 'Waiting' } else { 'None' })
 
         $run = [pscustomobject]@{
             Provider    = $model.Provider
@@ -5279,15 +5997,15 @@ function Start-DeviceLookup {
 
     # Initialize search states
     $evidenceState = 'Searching'
-    $localState = if ($EvidenceOnly) { 'None' } else { 'Searching' }
-    $webState = if ($EvidenceOnly) { 'None' } else { 'Searching' }
-    $agentTracePath = if ($UseAgent) { New-AgentTracePath -InstanceId $instanceId } else { $null }
-    $agentCheckpointPath = if ($UseAgent) { New-AgentCheckpointPath -InstanceId $instanceId } else { $null }
-    $agentToolCacheRoot = if ($UseAgent) { New-AgentToolCacheRoot } else { $null }
+    $localState = $(if ($EvidenceOnly) { 'None' } else { 'Searching' })
+    $webState = $(if ($EvidenceOnly) { 'None' } else { 'Searching' })
+    $agentTracePath = $(if ($UseAgent) { New-AgentTracePath -InstanceId $instanceId } else { $null })
+    $agentCheckpointPath = $(if ($UseAgent) { New-AgentCheckpointPath -InstanceId $instanceId } else { $null })
+    $agentToolCacheRoot = $(if ($UseAgent) { New-AgentToolCacheRoot } else { $null })
 
     # Pre-populate search rows
     $Dev.SearchStatus = 'Done'
-    $Dev.SearchKind = if ($UseAgent) { 'Agent' } else { $null }
+    $Dev.SearchKind = $(if ($UseAgent) { 'Agent' } else { $null })
     $Dev.SearchDetail = $null
     $Dev.SearchTracePath = $agentTracePath
     $Dev.SearchCheckpointPath = $agentCheckpointPath
@@ -5301,7 +6019,7 @@ function Start-DeviceLookup {
     $Dev.SearchResults = $newResults
     if ([string]::IsNullOrWhiteSpace($EvidenceBatchId)) {
         $deviceName = Get-DeviceLookupDisplayName -Device $Dev
-        $sourceText = if ($null -ne $preloadedEvidence) { 'remote snapshot' } else { 'local evidence' }
+        $sourceText = $(if ($null -ne $preloadedEvidence) { 'remote snapshot' } else { 'local evidence' })
         if ($UseAgent) {
             Set-SystemStatusMessage -Message "Agent queued: $deviceName | $agentModel | $sourceText"
         } elseif ($EvidenceOnly) {
@@ -5372,7 +6090,7 @@ function Start-DeviceLookup {
                             ForEach-Object {
                                 [PSCustomObject]@{
                                     KeyName = $_.KeyName
-                                    Type    = if ($null -eq $_.Type) { $null } else { $_.Type.ToString() }
+                                    Type    = $(if ($null -eq $_.Type) { $null } else { $_.Type.ToString() })
                                     Data    = ConvertTo-PlainEvidenceValue $_.Data
                                 }
                             }
@@ -5538,7 +6256,7 @@ function Start-DeviceLookup {
                     if ($vendorName) {
                         return [PSCustomObject]@{
                             Vendor = $vendorName
-                            Device = if ($deviceName) { $deviceName } else { "Unknown Device" }
+                            Device = $(if ($deviceName) { $deviceName } else { "Unknown Device" })
                         }
                     }
                 } catch {}
@@ -5587,11 +6305,11 @@ function Start-DeviceLookup {
 
             if ($null -ne $PreloadedEvidence) {
                 $snapshotPath = $PreloadedEvidence.SnapshotPath
-                $resultText = if ([string]::IsNullOrWhiteSpace([string]$snapshotPath)) {
+                $resultText = $(if ([string]::IsNullOrWhiteSpace([string]$snapshotPath)) {
                     "[Evidence Snapshot] Loaded remote snapshot evidence."
                 } else {
                     "[Evidence Snapshot] Loaded remote snapshot evidence: $snapshotPath"
-                }
+                })
                 Write-Output ([PSCustomObject]@{
                     Source   = 'Evidence'
                     Status   = 'Done'
@@ -5662,12 +6380,12 @@ function Start-DeviceLookup {
         EvidenceState      = $evidenceState
         EvidenceOnly       = [bool]$EvidenceOnly
         EvidenceBatchId    = $EvidenceBatchId
-        EvidenceSource     = if ($null -ne $preloadedEvidence) { 'remote snapshot' } else { 'local evidence' }
+        EvidenceSource     = $(if ($null -ne $preloadedEvidence) { 'remote snapshot' } else { 'local evidence' })
         UseAgent           = [bool]$UseAgent
         AgentModelName     = $agentModel
         ApiKey             = $apiKey
         AgentLogs          = [System.Collections.Generic.List[string]]::new()
-        AgentState         = if ($UseAgent) { 'Waiting' } else { 'None' }
+        AgentState         = $(if ($UseAgent) { 'Waiting' } else { 'None' })
         AgentCurrentActivity = $null
         AgentPs            = $null
         AgentAsync         = $null
@@ -5777,7 +6495,7 @@ function Start-CategoryEvidenceScan {
     if ($null -eq $Category -or -not $Category.Devices) { return }
 
     $categoryDisplayName = Get-NotePropertyValue -Object $Category -Name 'DisplayName'
-    $categoryName = if (-not [string]::IsNullOrWhiteSpace($categoryDisplayName)) { $categoryDisplayName } else { $Category.Name }
+    $categoryName = $(if (-not [string]::IsNullOrWhiteSpace($categoryDisplayName)) { $categoryDisplayName } else { $Category.Name })
     Start-DeviceEvidenceBatchScan -Devices @($Category.Devices) -Label $categoryName
 }
 
@@ -5833,11 +6551,11 @@ function Stop-DeviceLookup {
                 $newResults.Add("[$($run.Provider) Error: $($run.ModelName)] (Cancelled)")
                 $newResults.Add("  Cancelled by user.")
             } elseif ($run.State -eq 'Done') {
-                $durationStr = if ($null -ne $run.Duration) { "in $($run.Duration)s" } else { "Done" }
+                $durationStr = $(if ($null -ne $run.Duration) { "in $($run.Duration)s" } else { "Done" })
                 $newResults.Add("[$($run.Provider): $($run.ModelName)] (Done $durationStr)")
                 $newResults.Add("  $($run.Val)")
             } elseif ($run.State -eq 'Error') {
-                $durationStr = if ($null -ne $run.Duration) { " after $($run.Duration)s" } else { "" }
+                $durationStr = $(if ($null -ne $run.Duration) { " after $($run.Duration)s" } else { "" })
                 $newResults.Add("[$($run.Provider) Error: $($run.ModelName)] (Failed$durationStr)")
                 $newResults.Add("  $($run.Val)")
             }
@@ -5966,7 +6684,7 @@ function Update-ActiveSearches {
                         $manufacturer = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_Manufacturer'
                         $hwIds = Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_HardwareIds'
                         if ($hwIds) {
-                            $hardwareId = if ($hwIds -is [array]) { $hwIds[0] } else { $hwIds }
+                            $hardwareId = $(if ($hwIds -is [array]) { $hwIds[0] } else { $hwIds })
                         }
                         if ($search.DeviceEvidence.SignedDriver) {
                             $driver = $search.DeviceEvidence.SignedDriver
@@ -6293,7 +7011,7 @@ function Update-ActiveSearches {
                 if (-not [string]::IsNullOrWhiteSpace($activityText) -and $activityText.Length -gt 110) {
                     $activityText = $activityText.Substring(0, 107) + '...'
                 }
-                $activitySuffix = if ([string]::IsNullOrWhiteSpace($activityText)) { '' } else { " | $activityText" }
+                $activitySuffix = $(if ([string]::IsNullOrWhiteSpace($activityText)) { '' } else { " | $activityText" })
                 if ($search.AgentState -eq 'Waiting') {
                     Set-SystemStatusMessage -Message "Agent preparing evidence: $deviceName | $mName | $sourceText | ${elapsed}s$activitySuffix"
                 } elseif ($search.AgentState -eq 'Searching') {
@@ -6315,11 +7033,11 @@ function Update-ActiveSearches {
                 } elseif ($run.State -eq 'Searching') {
                     $newResults.Add("[$($run.Provider): $($run.ModelName)] (Searching... $spChar ${elapsed}s)")
                 } elseif ($run.State -eq 'Done') {
-                    $durationStr = if ($null -ne $run.Duration) { "in $($run.Duration)s" } else { "Done" }
+                    $durationStr = $(if ($null -ne $run.Duration) { "in $($run.Duration)s" } else { "Done" })
                     $newResults.Add("[$($run.Provider): $($run.ModelName)] (Done $durationStr)")
                     $newResults.Add("  $($run.Val)")
                 } elseif ($run.State -eq 'Error') {
-                    $durationStr = if ($null -ne $run.Duration) { " after $($run.Duration)s" } else { "" }
+                    $durationStr = $(if ($null -ne $run.Duration) { " after $($run.Duration)s" } else { "" })
                     $newResults.Add("[$($run.Provider) Error: $($run.ModelName)] (Failed$durationStr)")
                     $newResults.Add("  $($run.Val)")
                 }
@@ -6755,11 +7473,11 @@ try {
 
         # Log entry
         $now = [datetime]::Now
-        $repeatDelayMs = if ($script:LastKeyTimestamp -ne [datetime]::MinValue) {
+        $repeatDelayMs = $(if ($script:LastKeyTimestamp -ne [datetime]::MinValue) {
             ($now - $script:LastKeyTimestamp).TotalMilliseconds
         } else {
             0
-        }
+        })
         $script:LastKeyTimestamp = $now
 
         $logEntry = "[$(Get-Date -Format 'HH:mm:ss.fff')] Key: $($key.Key) (char: '$($key.KeyChar)') | KeyRead: $([Math]::Round($keyReadMs, 1))ms | EventProcess: $([Math]::Round($processMs, 1))ms | Render: $([Math]::Round($renderMs, 1))ms | Prep: $([Math]::Round($prepMs, 1))ms | KeyDelay: $([Math]::Round($repeatDelayMs, 1))ms"

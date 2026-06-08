@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added parallel local network scanning (`Get-DeviceCheckDiscoveredHosts`) to discover active PC hosts in the local ARP cache with WinRM port 5985 open, resolving hostnames dynamically via reverse DNS lookup.
+- Added a segmented and unified connection selector screen in `Invoke-ConnectionHistorySelector` dividing connections into "Saved Connections (History)", "Discovered PCs on Network", and "Actions", featuring dynamic `(Online)` indicators and smooth keyboard navigation that skips non-selectable headers.
 - Added `internal\Invoke-SdioDriverAudit.ps1`, an audit adapter that parses SDIO matcher logs or launches SDIO with install disabled, extracts indexed driver candidates, labels exact hardware ID vs compatible-ID fallback matches, and can write per-device SDIO reports into the DeviceCheck cache for the selected-details pane.
 - Added cached `SDIO Matches` rendering to selected-device details, showing candidate status labels, match kind, version/date, INF, driver pack, the installed device ID, and the candidate INF hardware ID without running SDIO from the TUI render loop.
 - Added `-UpdateAllDeviceCheckCaches` to the SDIO audit adapter so one SDIO log can populate cached match details for every present local device that SDIO matched.
@@ -15,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integrated DPAPI credentials storage (`%LOCALAPPDATA%\DeviceCheck\credentials\<computername>.xml`) directly into the remote snapshot exporter `internal\Export-DeviceCheckEvidence.ps1`. When credentials are null, it automatically looks for a stored XML file matching the lowercase target name and loads it safely. When credentials are provided by the user, it automatically saves them for future reuse.
 
 ### Fixed
+- Resolved a pipeline unrolling issue where `Get-DeviceCheckConnectionHistory` returning an empty collection unrolled to `$null`, causing subsequent method calls (like `.Add()`) to throw a null-valued expression error.
+- Fixed a constructor overload resolution error in `Add-DeviceCheckConnectionHistoryEntry` when constructing `List[object]` from a single-item sorted history pipeline by wrapping it in `@(...)`.
+- Resolved WinRM connection timeouts and hangs when collecting remote device properties on systems with large numbers of present PnP devices (e.g. over 100 devices). Replaced the slow, loop-based `Get-PnpDeviceProperty` remote calls with a single, batch pipeline execution grouped by `InstanceId`, accelerating remote collection speed by over 15x.
+- Cleaned up all other syntax errors on PowerShell 5.1 related to inline `if` statement assignments throughout the entire script by wrapping all statement-mode variable assignments in subexpressions (`$()`) globally.
+- Resolved a critical PowerShell 5.1 syntax error (`The term 'if' is not recognized`) by wrapping inline `if` assignments in subexpressions (`$()`) in the connection choice block.
+- Fixed a credential cache lookup mismatch by searching cached and stored credentials using both the hostname target (e.g. `se`) and the resolved IP address (e.g. `192.168.1.5`).
+- Prevented a `PropertyNotFoundException` crash under `Set-StrictMode -Version Latest` when connecting via current/token-based credentials by safely handling null `Credential` values in the connection collection result object.
+- Resolved syntax errors in `Add-DeviceCheckConnectionHistoryEntry` by replacing parenthesized `(if ...)` assignments with subexpressions `$(if ...)` and wrapping inline `if` expressions to satisfy the PowerShell 5.1 parser.
+- Improved `Get-CurrentNetworkIdentity` to bind connection metadata to the active interface associated with the Internet connection profile, ensuring correct subnet resolution (e.g., `192.168.1`) rather than picking inactive interfaces like Bluetooth.
+- Fixed a StrictMode property error when loading a cached snapshot from history without active credentials. Replaced direct property access on a potentially null `$cachedCredential` object with a safe conditional check falling back to the selected history target's `UserName` property, and updated all returned objects in `Invoke-ConnectionHistorySelector` to guarantee the `UserName` property exists.
 - Fixed a Set-StrictMode crash in the remote connection progress loop when a user pressed a key. Replaced raw $Host.UI.RawUI.ReadKey property access with the Read-ConsoleKey helper to safely handle console key properties.
 - Fixed indefinite WinRM connection hangs in remote snapshot collection. Added a 15-second connection and operation timeout (New-PSSessionOption) to Invoke-Command within internal\Export-DeviceCheckEvidence.ps1, so unreachable target PCs fail fast with a descriptive error instead of hanging the TUI.
 - Rendered Agent Markdown answers with a controlled TUI-safe formatter instead of stripping Markdown into all-white plain text. Agent results now style headings, numbered source sections, bullets, inline code, and URLs while still respecting the selected-details pane width/height budget.
