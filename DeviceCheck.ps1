@@ -4357,6 +4357,7 @@ function Invoke-ConnectLanTarget {
         $target = $null
         $resolvedIp = $null
         $targetMac = $null
+        $targetIsOffline = $false
 
         if ($choice.Action -eq 'New') {
             $renderBlock = {
@@ -4402,43 +4403,50 @@ function Invoke-ConnectLanTarget {
 
             $resolvedIp = Resolve-HistoryTargetAddress -ComputerName $target -LastIPAddress $choice.LastIP -MACAddress $targetMac
             if ($null -eq $resolvedIp) {
-                $script:SystemScanMessage = "Could not locate target PC '$target' on LAN. Verify it is online. | $(Get-Date -Format 'HH:mm:ss')"
-                $script:RequestForceClear = $true
-                
-                $renderErrorBlock = {
-                    param()
-                    Clear-TuiScreen
-                    $width = Get-UiWidth
-                    $frame = New-Object System.Text.StringBuilder
-                    Add-UiFrameBanner -Frame $frame -Title "Cannot locate $target" -Subtitle "The device could not be reached via its hostname or MAC address." -Width $width
-                    Add-UiFrameLine -Frame $frame
-                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)Resolution failed.$($_C.Reset)$($_C.EraseLn)"
-                    Add-UiFrameLine -Frame $frame
-                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The host '$target' (last IP: $($choice.LastIP)) did not respond on port 5985.$($_C.Reset)$($_C.EraseLn)"
-                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)Ensure the target PC is awake, connected to network '$networkName', and WinRM is enabled.$($_C.Reset)$($_C.EraseLn)"
-                    Add-UiFrameLine -Frame $frame
-                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)"
-                    Add-UiFrameLine -Frame $frame
-                    try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
+                # Target is offline. Check if we have a cached snapshot before failing
+                $cached = Find-LatestSnapshotForComputerName -ComputerName $target
+                if ($null -ne $cached) {
+                    $targetIsOffline = $true
+                    $resolvedIp = $choice.LastIP  # Keep last IP to prevent connection history issues
+                } else {
+                    $script:SystemScanMessage = "Could not locate target PC '$target' on LAN. Verify it is online. | $(Get-Date -Format 'HH:mm:ss')"
+                    $script:RequestForceClear = $true
+                    
+                    $renderErrorBlock = {
+                        param()
+                        Clear-TuiScreen
+                        $width = Get-UiWidth
+                        $frame = New-Object System.Text.StringBuilder
+                        Add-UiFrameBanner -Frame $frame -Title "Cannot locate $target" -Subtitle "The device could not be reached via its hostname or MAC address." -Width $width
+                        Add-UiFrameLine -Frame $frame
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)Resolution failed.$($_C.Reset)$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The host '$target' (last IP: $($choice.LastIP)) did not respond on port 5985.$($_C.Reset)$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)Ensure the target PC is awake, connected to network '$networkName', and WinRM is enabled.$($_C.Reset)$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame
+                        try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
+                    }
+                    while ($true) {
+                        & $renderErrorBlock
+                        $key = Read-ConsoleKey
+                        if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+                            Start-Sleep -Milliseconds 10
+                            continue
+                        }
+                        if ($key.Key -eq 'Enter') {
+                            break
+                        }
+                        if ($key.Key -eq 'ResizeEvent') {
+                            $script:RequestForceClear = $true
+                            continue
+                        }
+                    }
+                    try { Initialize-TuiHost } catch {}
+                    try { [Console]::CursorVisible = $false } catch {}
+                    continue
                 }
-                while ($true) {
-                    & $renderErrorBlock
-                    $key = Read-ConsoleKey
-                    if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
-                        Start-Sleep -Milliseconds 10
-                        continue
-                    }
-                    if ($key.Key -eq 'Enter') {
-                        break
-                    }
-                    if ($key.Key -eq 'ResizeEvent') {
-                        $script:RequestForceClear = $true
-                        continue
-                    }
-                }
-                try { Initialize-TuiHost } catch {}
-                try { [Console]::CursorVisible = $false } catch {}
-                continue
             }
         }
 
@@ -4482,15 +4490,23 @@ function Invoke-ConnectLanTarget {
                 param($currentInput)
                 $width = Get-UiWidth
                 $frame = New-UiFrame
-                Add-UiFrameBanner -Frame $frame -Title "Cached Snapshot Found" -Subtitle "Target computer: $target" -Width $width
+                $statusMsg = $(if ($targetIsOffline) { " [OFFLINE]" } else { "" })
+                Add-UiFrameBanner -Frame $frame -Title "Cached Snapshot Found$statusMsg" -Subtitle "Target computer: $target" -Width $width
                 Add-UiFrameLine -Frame $frame
                 Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Target :$($_C.Reset) $($_C.Info)$target$($_C.Reset)$($_C.EraseLn)"
                 Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Time   :$($_C.Reset) $($_C.White)$finishedAt$($_C.Reset)$($_C.EraseLn)"
                 Add-UiFrameLine -Frame $frame -Text "  $($_C.Dim)Devices:$($_C.Reset) $($_C.White)$deviceCount$($_C.Reset)$($_C.EraseLn)"
                 Add-UiFrameLine -Frame $frame
+                if ($targetIsOffline) {
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The target computer is currently offline/unreachable on port 5985.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)You can only view the offline snapshot.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                }
                 Add-UiFrameLine -Frame $frame -Text "  $($_C.Bold)$($_C.White)Choose Action:$($_C.Reset)$($_C.EraseLn)"
                 Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Enter$($_C.Reset) = Open cached snapshot$($_C.EraseLn)"
-                Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)R$($_C.Reset)     = Connect and refresh snapshot now$($_C.EraseLn)"
+                if (-not $targetIsOffline) {
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)R$($_C.Reset)     = Connect and refresh snapshot now$($_C.EraseLn)"
+                }
                 Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)C$($_C.Reset)     = Cancel connection$($_C.EraseLn)"
                 Add-UiFrameLine -Frame $frame
                 $null = $frame.Append("  Select option: $currentInput")
@@ -4534,6 +4550,42 @@ function Invoke-ConnectLanTarget {
                 $script:RequestForceClear = $true
                 try { Initialize-TuiHost } catch {}
                 try { [Console]::CursorVisible = $false } catch {}
+                continue
+            }
+            if ($choiceSub.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase) -and $targetIsOffline) {
+                $script:SystemScanMessage = "Cannot refresh: Target PC '$target' is offline. | $(Get-Date -Format 'HH:mm:ss')"
+                $script:RequestForceClear = $true
+                $renderErrorBlock = {
+                    param()
+                    Clear-TuiScreen
+                    $width = Get-UiWidth
+                    $frame = New-Object System.Text.StringBuilder
+                    Add-UiFrameBanner -Frame $frame -Title "Refresh Failed" -Subtitle "Target PC is offline." -Width $width
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Fail)Cannot refresh snapshot.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)The host '$target' is currently offline or unreachable on port 5985.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Warn)Please wake the PC or check its WinRM configuration to refresh.$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                    Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press Enter to return to options$($_C.Reset)$($_C.EraseLn)"
+                    Add-UiFrameLine -Frame $frame
+                    try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
+                }
+                while ($true) {
+                    & $renderErrorBlock
+                    $key = Read-ConsoleKey
+                    if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+                        Start-Sleep -Milliseconds 10
+                        continue
+                    }
+                    if ($key.Key -eq 'Enter') {
+                        break
+                    }
+                    if ($key.Key -eq 'ResizeEvent') {
+                        $script:RequestForceClear = $true
+                        continue
+                    }
+                }
                 continue
             }
             if (-not $choiceSub.Trim().Equals('R', [System.StringComparison]::OrdinalIgnoreCase)) {

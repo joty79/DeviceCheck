@@ -83,7 +83,7 @@ $env:DEVICECHECK_TUI_PERF = '1'
 ### The Solution
 
 `internal\Export-DeviceCheckEvidence.ps1` collects system identity, present PnP devices, optional per-device properties, `pnputil` output, and monitor registry/WMI evidence from either the local host or a same-LAN WinRM target. `Connect-PaliosDeviceCheck.ps1` is a convenience wrapper for the known `PALIOS` desktop and writes snapshots under `%LOCALAPPDATA%\DeviceCheck\snapshots\`.
-Inside the TUI, `Ctrl+L` prompts for a computer name/IP and opens the existing `latest.json` snapshot immediately when one is available. Choose refresh only when you want a live WinRM rescan. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
+Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. If the target PC is offline, DeviceCheck detects it and still allows you to load its cached snapshot in offline mode, dynamically disabling live refresh ("R"). Choose refresh only when you want a live WinRM rescan. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
 
 ```text
 NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree

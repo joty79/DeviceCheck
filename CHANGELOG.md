@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added offline target snapshot loading support. When attempting to connect to an offline or unreachable LAN target, the connection selector now checks if a local cached snapshot exists for that computer name. If a cache is found, it prompts the user to load and view the offline snapshot instead of failing with a resolution error, disabling live refresh dynamically.
 - Added an active `R` rescan hotkey in the `Invoke-ConnectionHistorySelector` LAN connection selector screen to reload discovered hosts without exiting the menu.
 - Added parallel local network scanning (`Get-DeviceCheckDiscoveredHosts`) to discover active PC hosts in the local ARP cache with WinRM port 5985 open, resolving hostnames dynamically via reverse DNS lookup.
 - Added a segmented and unified connection selector screen in `Invoke-ConnectionHistorySelector` dividing connections into "Saved Connections (History)", "Discovered PCs on Network", and "Actions", featuring dynamic `(Online)` indicators and smooth keyboard navigation that skips non-selectable headers.
