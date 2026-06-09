@@ -238,6 +238,7 @@ DeviceCheck/
 ├── .gitignore            # Generated evidence/cache folder ignores
 ├── .gitattributes        # Repository line-ending policy
 ├── Connect-PaliosDeviceCheck.ps1 # Convenience wrapper for PALIOS remote snapshot export
+├── Enable-RemotePs.ps1     # WinRM/PSRemoting administrator configuration helper
 ├── DeviceCheck.ps1         # Main interactive TUI script
 ├── Get-DriverUpdateAgent.ps1 # Gemini tool-calling driver finder
 ├── PROJECT_RULES.md        # Project-specific implementation memory
