@@ -3715,9 +3715,39 @@ function Get-DeviceCheckDiscoveredHosts {
 
     # Retrieve history hosts to make sure we scan them even if they block ICMP pings
     $historyIPs = @()
+    $historyIpToName = @{}
     $history = Get-DeviceCheckConnectionHistory
     if ($history) {
-        $historyIPs = @($history.LastIPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -Unique)
+        $ipList = [System.Collections.Generic.List[string]]::new()
+        foreach ($entry in $history) {
+            if ($entry.LastIPAddress -match '^\d+\.\d+\.\d+\.\d+$') {
+                $ipList.Add($entry.LastIPAddress)
+                $historyIpToName[$entry.LastIPAddress] = $entry.ComputerName
+            }
+            if (-not [string]::IsNullOrWhiteSpace($entry.ComputerName) -and $entry.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+                try {
+                    $ips = [System.Net.Dns]::GetHostAddresses($entry.ComputerName)
+                    if ($ips) {
+                        foreach ($ip in $ips) {
+                            $ipList.Add($ip.IPAddressToString)
+                            $historyIpToName[$ip.IPAddressToString] = $entry.ComputerName
+                        }
+                    }
+                } catch {}
+                try {
+                    $resolved = Resolve-DnsName -Name $entry.ComputerName -ErrorAction SilentlyContinue
+                    if ($resolved) {
+                        foreach ($r in $resolved) {
+                            if ($r.IPAddress) {
+                                $ipList.Add($r.IPAddress)
+                                $historyIpToName[$r.IPAddress] = $entry.ComputerName
+                            }
+                        }
+                    }
+                } catch {}
+            }
+        }
+        $historyIPs = @($ipList | Select-Object -Unique)
     }
 
     # CRITICAL: Force clear OS-level negative ARP cache (Neighbor cache) for these history IPs
@@ -3798,6 +3828,7 @@ function Get-DeviceCheckDiscoveredHosts {
     # Fast parallel scan on port 5985
     $results = $uniqueIPs | ForEach-Object -Parallel {
         $ip = $_
+        $historyMap = $using:historyIpToName
         $tcp = [System.Net.Sockets.TcpClient]::new()
         $cts = [System.Threading.CancellationTokenSource]::new(1000)
         try {
@@ -3812,10 +3843,22 @@ function Get-DeviceCheckDiscoveredHosts {
             
             if ($tcp.Connected) {
                 $dnsName = $ip
-                try {
-                    $dnsName = [System.Net.Dns]::GetHostEntry($ip).HostName
-                    if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                } catch {}
+                if ($historyMap.ContainsKey($ip)) {
+                    $dnsName = $historyMap[$ip]
+                } else {
+                    try {
+                        $dnsName = [System.Net.Dns]::GetHostEntry($ip).HostName
+                        if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                    } catch {
+                        try {
+                            $dnsRes = Resolve-DnsName -Name $ip -ErrorAction SilentlyContinue
+                            if ($dnsRes) {
+                                $dnsName = $dnsRes[0].NameHost
+                                if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                            }
+                        } catch {}
+                    }
+                }
                 [PSCustomObject]@{
                     IP       = $ip
                     HostName = $dnsName
@@ -3827,9 +3870,29 @@ function Get-DeviceCheckDiscoveredHosts {
         }
     } -ThrottleLimit 15
     
+    $latestNeighbors = foreach ($if in $interfaces) {
+        Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    }
+    $macLookup = @{}
+    if ($latestNeighbors) {
+        foreach ($n in $latestNeighbors) {
+            if (-not [string]::IsNullOrWhiteSpace($n.IPAddress) -and -not [string]::IsNullOrWhiteSpace($n.LinkLayerAddress)) {
+                $macLookup[$n.IPAddress] = $n.LinkLayerAddress.Replace(':', '-').ToUpper()
+            }
+        }
+    }
+    
     foreach ($res in $results) {
         if ($null -ne $res) {
-            $discovered.Add($res)
+            $mac = 'Unknown'
+            if ($macLookup.ContainsKey($res.IP)) {
+                $mac = $macLookup[$res.IP]
+            }
+            $discovered.Add([PSCustomObject]@{
+                IP       = $res.IP
+                HostName = $res.HostName
+                MAC      = $mac
+            })
         }
     }
     
@@ -3966,10 +4029,26 @@ function Resolve-HistoryTargetAddress {
         }
     } catch {}
 
+    try {
+        $resolved = Resolve-DnsName -Name $ComputerName -ErrorAction SilentlyContinue
+        if ($resolved) {
+            foreach ($r in $resolved) {
+                if ($r.IPAddress -and (Test-PortOpen -ComputerName $r.IPAddress -Port 5985)) {
+                    return $r.IPAddress
+                }
+            }
+        }
+    } catch {}
+
     # 2. Check local ARP cache
     if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
+        $normMAC = $MACAddress.Replace(':', '-').ToUpper()
         $neighbors = Get-NetNeighbor -ErrorAction SilentlyContinue | 
-            Where-Object { $_.LinkLayerAddress -eq $MACAddress -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet' }
+            Where-Object { 
+                $nMac = $_.LinkLayerAddress
+                if ($nMac) { $nMac = $nMac.Replace(':', '-').ToUpper() }
+                $nMac -eq $normMAC -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet' 
+            }
         if ($neighbors) {
             $arpIp = $neighbors[0].IPAddress
             if (Test-PortOpen -ComputerName $arpIp -Port 5985) {
@@ -4033,15 +4112,25 @@ function Invoke-ConnectionHistorySelector {
             foreach ($entry in $filteredHistory) {
                 $savedCount++
                 $isOnline = $false
+                $currentIP = $entry.LastIPAddress
                 foreach ($d in $currentDiscovered) {
-                    if ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower() -or $entry.LastIPAddress -eq $d.IP) {
+                    $nameMatch = $false
+                    if (-not [string]::IsNullOrWhiteSpace($entry.ComputerName) -and -not [string]::IsNullOrWhiteSpace($d.HostName)) {
+                        $nameMatch = ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower())
+                    }
+                    $macMatch = $false
+                    if (-not [string]::IsNullOrWhiteSpace($entry.MACAddress) -and $entry.MACAddress -ne 'Unknown' -and -not [string]::IsNullOrWhiteSpace($d.MAC) -and $d.MAC -ne 'Unknown') {
+                        $macMatch = ($entry.MACAddress.Replace(':', '-').ToLower() -eq $d.MAC.Replace(':', '-').ToLower())
+                    }
+                    if ($nameMatch -or $entry.LastIPAddress -eq $d.IP -or $macMatch) {
                         $isOnline = $true
+                        $currentIP = $d.IP
                         break
                     }
                 }
                 
                 $onlineText = $(if ($isOnline) { " (Online)" } else { " (Offline)" })
-                $displayText = "$($entry.ComputerName) ($($entry.LastIPAddress)) - user: $($entry.UserName)$onlineText"
+                $displayText = "$($entry.ComputerName) ($currentIP) - user: $($entry.UserName)$onlineText"
                 
                 $items.Add([PSCustomObject]@{
                     Type       = 'Saved'
@@ -4049,6 +4138,7 @@ function Invoke-ConnectionHistorySelector {
                     Selectable = $true
                     Data       = $entry
                     IsOnline   = $isOnline
+                    ResolvedIP = $currentIP
                 })
             }
             
@@ -4199,7 +4289,7 @@ function Invoke-ConnectionHistorySelector {
                         } else {
                             $onlineColor = $(if ($item.IsOnline) { " $($_C.OK)(Online)$($_C.Reset)" } else { " $($_C.Fail)(Offline)$($_C.Reset)" })
                             $baseText = $(if ($item.Type -eq 'Saved') {
-                                "$($item.Data.ComputerName) ($($item.Data.LastIPAddress)) - user: $($item.Data.UserName)"
+                                "$($item.Data.ComputerName) ($($item.ResolvedIP)) - user: $($item.Data.UserName)"
                             } else {
                                 "$($item.Data.HostName) ($($item.Data.IP))"
                             })
@@ -4333,7 +4423,7 @@ function Invoke-ConnectionHistorySelector {
                         return [PSCustomObject]@{
                             Action       = 'Connect'
                             ComputerName = $item.Data.ComputerName
-                            LastIP       = $item.Data.LastIPAddress
+                            LastIP       = $item.ResolvedIP
                             MAC          = $item.Data.MACAddress
                             UserName     = $item.Data.UserName
                         }
@@ -4342,7 +4432,7 @@ function Invoke-ConnectionHistorySelector {
                             Action       = 'ConnectDiscovered'
                             ComputerName = $item.Data.HostName
                             LastIP       = $item.Data.IP
-                            MAC          = $null
+                            MAC          = $item.Data.MAC
                             UserName     = 'Unknown'
                         }
                     }
@@ -4423,7 +4513,7 @@ function Invoke-ConnectLanTarget {
         } elseif ($choice.Action -eq 'ConnectDiscovered') {
             $target = $choice.ComputerName
             $resolvedIp = $choice.LastIP
-            $targetMac = $null
+            $targetMac = $choice.MAC
         } else {
             $target = $choice.ComputerName
             $targetMac = $choice.MAC
