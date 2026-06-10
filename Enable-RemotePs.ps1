@@ -10,21 +10,55 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 
 Write-Host "Starting Remote PowerShell configuration..." -ForegroundColor Cyan
 
-# 2. Change network profile categories to Private (required to enable WinRM firewall rules)
-Write-Host "Changing network profile categories to Private..." -ForegroundColor White
+# 2. Check and change network profile categories to Private
+Write-Host "Checking network adapters and profile categories..." -ForegroundColor White
+$requiresSkipNetworkProfileCheck = $false
+
 try {
-    Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -ne 'DomainAuthenticated' } | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction Stop
-    Write-Host "✅ Network profile category changed to Private." -ForegroundColor Green
+    # Get all active IPv4 interfaces (excluding loopback)
+    $activeInterfaces = Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' }
+    
+    foreach ($interface in $activeInterfaces) {
+        $profile = Get-NetConnectionProfile -InterfaceIndex $interface.InterfaceIndex -ErrorAction SilentlyContinue
+        
+        if ($profile) {
+            Write-Host "Network Adapter: $($interface.InterfaceAlias) [Index: $($interface.InterfaceIndex)]" -ForegroundColor Gray
+            Write-Host "  Profile Name: $($profile.Name)" -ForegroundColor Gray
+            Write-Host "  Category    : $($profile.NetworkCategory)" -ForegroundColor Gray
+            
+            if ($profile.NetworkCategory -eq 'Public') {
+                Write-Host "  Attempting to change Network Category to Private..." -ForegroundColor White
+                try {
+                    Set-NetConnectionProfile -InterfaceIndex $interface.InterfaceIndex -NetworkCategory Private -ErrorAction Stop
+                    Write-Host "  ✅ Category successfully changed to Private." -ForegroundColor Green
+                } catch {
+                    Write-Warning "  ❌ Failed to set category to Private: $_"
+                    $requiresSkipNetworkProfileCheck = $true
+                }
+            }
+        } else {
+            # Active adapter with no NLA connection profile (unidentified network)
+            Write-Host "⚠️ Warning: Network Adapter '$($interface.InterfaceAlias)' [Index: $($interface.InterfaceIndex)] has no active connection profile." -ForegroundColor Yellow
+            Write-Host "  Windows treats Unidentified Networks as PUBLIC by default, which blocks WinRM." -ForegroundColor Yellow
+            $requiresSkipNetworkProfileCheck = $true
+        }
+    }
 } catch {
-    Write-Warning "Failed to set network category to Private: $_"
+    Write-Warning "Failed to inspect network interfaces: $_"
+    $requiresSkipNetworkProfileCheck = $true
 }
 
 # 3. Enable PowerShell Remoting and quick config
 Write-Host "Enabling PowerShell Remoting..." -ForegroundColor White
 try {
-    # WSMan quick configuration
-    Enable-PSRemoting -Force -ErrorAction Stop
-    Set-WSManQuickConfig -Force -ErrorAction Stop
+    if ($requiresSkipNetworkProfileCheck) {
+        Write-Host "Note: Bypassing network profile checks due to Public or Unidentified network adapters..." -ForegroundColor Yellow
+        Enable-PSRemoting -SkipNetworkProfileCheck -Force -ErrorAction Stop
+        Set-WSManQuickConfig -SkipNetworkProfileCheck -Force -ErrorAction Stop
+    } else {
+        Enable-PSRemoting -Force -ErrorAction Stop
+        Set-WSManQuickConfig -Force -ErrorAction Stop
+    }
     Write-Host "✅ PowerShell Remoting has been enabled." -ForegroundColor Green
 } catch {
     Write-Warning "Failed to enable PSRemoting/WSMan: $_"
