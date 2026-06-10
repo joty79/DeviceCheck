@@ -3825,48 +3825,77 @@ function Get-DeviceCheckDiscoveredHosts {
     
     $isPS6Plus = $PSVersionTable.PSVersion.Major -ge 6
     
-    # Fast parallel scan on port 5985
+    # Fast parallel scan on port 5985 and 445
     $results = $uniqueIPs | ForEach-Object -Parallel {
         $ip = $_
         $historyMap = $using:historyIpToName
-        $tcp = [System.Net.Sockets.TcpClient]::new()
-        $cts = [System.Threading.CancellationTokenSource]::new(1000)
+        $isPS6 = $using:isPS6Plus
+        
+        $winrmConnected = $false
+        $smbConnected = $false
+        
+        # 1. Try WinRM (5985)
+        $tcp1 = [System.Net.Sockets.TcpClient]::new()
+        $cts1 = [System.Threading.CancellationTokenSource]::new(1000)
         try {
             $ipObj = [System.Net.IPAddress]::Parse($ip)
-            if ($using:isPS6Plus) {
-                $task = $tcp.ConnectAsync($ipObj, 5985, $cts.Token)
-                $task.GetAwaiter().GetResult()
+            if ($isPS6) {
+                $task1 = $tcp1.ConnectAsync($ipObj, 5985, $cts1.Token)
+                $task1.GetAwaiter().GetResult()
             } else {
-                $task = $tcp.ConnectAsync($ipObj, 5985)
-                $null = $task.Wait(1000)
+                $task1 = $tcp1.ConnectAsync($ipObj, 5985)
+                $null = $task1.Wait(1000)
             }
-            
-            if ($tcp.Connected) {
-                $dnsName = $ip
-                if ($historyMap.ContainsKey($ip)) {
-                    $dnsName = $historyMap[$ip]
-                } else {
-                    try {
-                        $dnsName = [System.Net.Dns]::GetHostEntry($ip).HostName
-                        if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                    } catch {
-                        try {
-                            $dnsRes = Resolve-DnsName -Name $ip -ErrorAction SilentlyContinue
-                            if ($dnsRes) {
-                                $dnsName = $dnsRes[0].NameHost
-                                if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                            }
-                        } catch {}
-                    }
-                }
-                [PSCustomObject]@{
-                    IP       = $ip
-                    HostName = $dnsName
-                }
-            }
+            $winrmConnected = $tcp1.Connected
         } catch {} finally {
-            $cts.Dispose()
-            $tcp.Dispose()
+            $cts1.Dispose()
+            $tcp1.Dispose()
+        }
+        
+        # 2. Try SMB (445) as fallback if WinRM is closed
+        if (-not $winrmConnected) {
+            $tcp2 = [System.Net.Sockets.TcpClient]::new()
+            $cts2 = [System.Threading.CancellationTokenSource]::new(1000)
+            try {
+                $ipObj = [System.Net.IPAddress]::Parse($ip)
+                if ($isPS6) {
+                    $task2 = $tcp2.ConnectAsync($ipObj, 445, $cts2.Token)
+                    $task2.GetAwaiter().GetResult()
+                } else {
+                    $task2 = $tcp2.ConnectAsync($ipObj, 445)
+                    $null = $task2.Wait(1000)
+                }
+                $smbConnected = $tcp2.Connected
+            } catch {} finally {
+                $cts2.Dispose()
+                $tcp2.Dispose()
+            }
+        }
+        
+        if ($winrmConnected -or $smbConnected) {
+            $dnsName = $ip
+            if ($historyMap.ContainsKey($ip)) {
+                $dnsName = $historyMap[$ip]
+            } else {
+                try {
+                    $dnsName = [System.Net.Dns]::GetHostEntry($ip).HostName
+                    if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                } catch {
+                    try {
+                        $dnsRes = Resolve-DnsName -Name $ip -ErrorAction SilentlyContinue
+                        if ($dnsRes) {
+                            $dnsName = $dnsRes[0].NameHost
+                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                        }
+                    } catch {}
+                }
+            }
+            [PSCustomObject]@{
+                IP        = $ip
+                HostName  = $dnsName
+                WinRmOpen = $winrmConnected
+                SmbOpen   = $smbConnected
+            }
         }
     } -ThrottleLimit 15
     
@@ -3889,9 +3918,11 @@ function Get-DeviceCheckDiscoveredHosts {
                 $mac = $macLookup[$res.IP]
             }
             $discovered.Add([PSCustomObject]@{
-                IP       = $res.IP
-                HostName = $res.HostName
-                MAC      = $mac
+                IP        = $res.IP
+                HostName  = $res.HostName
+                MAC       = $mac
+                WinRmOpen = $res.WinRmOpen
+                SmbOpen   = $res.SmbOpen
             })
         }
     }
@@ -4112,6 +4143,7 @@ function Invoke-ConnectionHistorySelector {
             foreach ($entry in $filteredHistory) {
                 $savedCount++
                 $isOnline = $false
+                $winrmOpen = $false
                 $currentIP = $entry.LastIPAddress
                 foreach ($d in $currentDiscovered) {
                     $nameMatch = $false
@@ -4124,12 +4156,13 @@ function Invoke-ConnectionHistorySelector {
                     }
                     if ($nameMatch -or $entry.LastIPAddress -eq $d.IP -or $macMatch) {
                         $isOnline = $true
+                        $winrmOpen = $d.WinRmOpen
                         $currentIP = $d.IP
                         break
                     }
                 }
                 
-                $onlineText = $(if ($isOnline) { " (Online)" } else { " (Offline)" })
+                $onlineText = $(if ($isOnline) { if ($winrmOpen) { " (Online)" } else { " (WinRM Disabled)" } } else { " (Offline)" })
                 $displayText = "$($entry.ComputerName) ($currentIP) - user: $($entry.UserName)$onlineText"
                 
                 $items.Add([PSCustomObject]@{
@@ -4138,6 +4171,7 @@ function Invoke-ConnectionHistorySelector {
                     Selectable = $true
                     Data       = $entry
                     IsOnline   = $isOnline
+                    WinRmOpen  = $winrmOpen
                     ResolvedIP = $currentIP
                 })
             }
@@ -4176,13 +4210,15 @@ function Invoke-ConnectionHistorySelector {
                 
                 if (-not $inHistory) {
                     $discoveredCount++
-                    $displayText = "$($d.HostName) ($($d.IP)) (Online)"
+                    $statusLabel = $(if ($d.WinRmOpen) { "(Online)" } else { "(WinRM Disabled)" })
+                    $displayText = "$($d.HostName) ($($d.IP)) $statusLabel"
                     $items.Add([PSCustomObject]@{
                         Type       = 'Discovered'
                         Text       = $displayText
                         Selectable = $true
                         Data       = $d
                         IsOnline   = $true
+                        WinRmOpen  = $d.WinRmOpen
                     })
                 }
             }
@@ -4277,9 +4313,17 @@ function Invoke-ConnectionHistorySelector {
                         $statusText = ""
                         $cleanText = $item.Text
                         if ($item.Type -in @('Saved', 'Discovered')) {
-                            $cleanText = $item.Text -replace '\s*\((Online|Offline)\)\s*$'
-                            $statusColor = $(if ($item.IsOnline) { $_C.OK } else { $_C.Fail })
-                            $statusLabel = $(if ($item.IsOnline) { "(Online)" } else { "(Offline)" })
+                            $cleanText = $item.Text -replace '\s*\((Online|Offline|WinRM Disabled)\)\s*$'
+                            if (-not $item.IsOnline) {
+                                $statusColor = $_C.Fail
+                                $statusLabel = "(Offline)"
+                            } elseif ($item.WinRmOpen) {
+                                $statusColor = $_C.OK
+                                $statusLabel = "(Online)"
+                            } else {
+                                $statusColor = $_C.Warn
+                                $statusLabel = "(WinRM Disabled)"
+                            }
                             $statusText = " $statusColor$statusLabel$($_C.Reset)$($_C.SelBg)$($_C.SelFg)$($_C.Bold)"
                         }
                         Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($cleanText)$($statusText) $($_C.Reset)$($_C.EraseLn)"
@@ -4287,7 +4331,15 @@ function Invoke-ConnectionHistorySelector {
                         if ($item.Type -eq 'Action') {
                             Add-UiFrameLine -Frame $frame -Text "    $($_C.OK)$($item.Text)$($_C.Reset)$($_C.EraseLn)"
                         } else {
-                            $onlineColor = $(if ($item.IsOnline) { " $($_C.OK)(Online)$($_C.Reset)" } else { " $($_C.Fail)(Offline)$($_C.Reset)" })
+                            $onlineColor = $(
+                                if (-not $item.IsOnline) {
+                                    " $($_C.Fail)(Offline)$($_C.Reset)"
+                                } elseif ($item.WinRmOpen) {
+                                    " $($_C.OK)(Online)$($_C.Reset)"
+                                } else {
+                                    " $($_C.Warn)(WinRM Disabled)$($_C.Reset)"
+                                }
+                            )
                             $baseText = $(if ($item.Type -eq 'Saved') {
                                 "$($item.Data.ComputerName) ($($item.ResolvedIP)) - user: $($item.Data.UserName)"
                             } else {

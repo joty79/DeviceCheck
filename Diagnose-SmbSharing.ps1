@@ -133,6 +133,8 @@ Write-Host "🔸 3. Έλεγχος Υπηρεσιών (Windows Services)..." -Fo
 
 $servicesToCheck = @(
     @{ Name = 'LanmanServer'; Desc = 'Server (SMB Share Service)' }
+    @{ Name = 'LanmanWorkstation'; Desc = 'Workstation (SMB Client Service)' }
+    @{ Name = 'lmhosts'; Desc = 'TCP/IP NetBIOS Helper' }
     @{ Name = 'fdPHost'; Desc = 'Function Discovery Provider Host' }
     @{ Name = 'FDResPub'; Desc = 'Function Discovery Resource Publication' }
     @{ Name = 'SSDPSrv'; Desc = 'SSDP Discovery' }
@@ -174,7 +176,66 @@ if ($servicesToFix.Count -gt 0) {
 }
 Write-Host ""
 
-# --- 4. Εφαρμογή Διορθώσεων ---
+# --- 4. Πρωτόκολλο SMB (SMB Protocol Configuration) ---
+Write-Host "🔸 4. Έλεγχος Πρωτοκόλλου SMB (SMB Protocol)..." -ForegroundColor Cyan
+try {
+    $smbConfig = Get-SmbServerConfiguration -ErrorAction Stop
+    $smb2Enabled = $smbConfig.EnableSMB2Protocol
+    
+    if (-not $smb2Enabled) {
+        Write-Host "   [WARN] Το πρωτόκολλο SMBv2/v3 (Server) είναι απενεργοποιημένο!" -ForegroundColor Yellow
+        $issues.Add([PSCustomObject]@{
+            Category    = 'SmbProtocol'
+            Description = "Ενεργοποίηση του πρωτοκόλλου SMBv2/v3"
+            Action      = {
+                Set-SmbServerConfiguration -EnableSMB2Protocol $true -Force -ErrorAction SilentlyContinue
+                Write-Host "   [+] Το πρωτόκολλο SMBv2/v3 ενεργοποιήθηκε." -ForegroundColor Green
+            }
+        })
+    } else {
+        Write-Host "   [OK] Το πρωτόκολλο SMBv2/v3 είναι ενεργοποιημένο." -ForegroundColor Green
+    }
+} catch {
+    Write-Warning "Αποτυχία ελέγχου SMB Server Configuration: $_"
+}
+Write-Host ""
+
+# --- 5. Πολιτική Blank Passwords (Blank Password Policy) ---
+Write-Host "🔸 5. Έλεγχος Πολιτικής Blank Passwords (LimitBlankPasswordUse)..." -ForegroundColor Cyan
+try {
+    $lsaPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
+    $valueName = "LimitBlankPasswordUse"
+    $regValue = Get-ItemProperty -Path $lsaPath -Name $valueName -ErrorAction SilentlyContinue
+    
+    $limitBlankPassword = $true
+    if ($null -ne $regValue -and $regValue.$valueName -eq 0) {
+        $limitBlankPassword = $false
+    }
+    
+    if ($limitBlankPassword) {
+        Write-Host "   [WARN] Η πολιτική 'Limit local account use of blank passwords to console logon only' είναι ενεργή (LimitBlankPasswordUse = 1)!" -ForegroundColor Yellow
+        Write-Host "          Αυτό μπλοκάρει την εμφάνιση των κοινόχρηστων φακέλων (\\PC_NAME) όταν χρησιμοποιείται λογαριασμός χωρίς κωδικό!" -ForegroundColor Yellow
+        
+        $issues.Add([PSCustomObject]@{
+            Category    = 'LimitBlankPassword'
+            Description = "Απενεργοποίηση της πολιτικής LimitBlankPasswordUse (Να επιτρέπεται η σύνδεση/εμφάνιση με κενό κωδικό)"
+            Action      = {
+                if (-not (Test-Path -Path $lsaPath)) {
+                    New-Item -Path $lsaPath -Force | Out-Null
+                }
+                New-ItemProperty -Path $lsaPath -Name $valueName -Value 0 -PropertyType DWord -Force | Out-Null
+                Write-Host "   [+] Η πολιτική LimitBlankPasswordUse απενεργοποιήθηκε επιτυχώς (ορίστηκε σε 0)." -ForegroundColor Green
+            }
+        })
+    } else {
+        Write-Host "   [OK] Η πολιτική LimitBlankPasswordUse είναι απενεργοποιημένη (επιτρέπεται η χρήση κενών κωδικών απομακρυσμένα)." -ForegroundColor Green
+    }
+} catch {
+    Write-Warning "Αποτυχία ελέγχου LimitBlankPasswordUse: $_"
+}
+Write-Host ""
+
+# --- 6. Εφαρμογή Διορθώσεων ---
 if ($issues.Count -eq 0) {
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host "✅ Όλες οι ρυθμίσεις είναι σωστές! Δεν βρέθηκαν προβλήματα." -ForegroundColor Green
