@@ -555,9 +555,17 @@ function Find-LatestSnapshotForComputerName {
     }
 
     $target = $ComputerName.Trim()
+    $isIp = $target -match '^\d+\.\d+\.\d+\.\d+$'
+
     $candidates = @(
         Get-ChildItem -LiteralPath $snapshotRoot -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like "$target-*" } |
+            Where-Object { 
+                if ($isIp) {
+                    $true
+                } else {
+                    $_.Name -like "$target-*"
+                }
+            } |
             Sort-Object LastWriteTime -Descending
     )
 
@@ -570,7 +578,21 @@ function Find-LatestSnapshotForComputerName {
         try {
             $snapshot = Get-Content -LiteralPath $latestPath -Raw | ConvertFrom-Json -ErrorAction Stop
             $snapshotName = [string](Get-NotePropertyValue -Object (Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $snapshot -Name 'Machine') -Name 'ComputerSystem') -Name 'Name')
-            if ($snapshotName.Equals($target, [System.StringComparison]::OrdinalIgnoreCase) -or $folder.Name.StartsWith("$target-", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $collector = Get-NotePropertyValue -Object $snapshot -Name 'Collector'
+            $requestedTarget = [string](Get-NotePropertyValue -Object $collector -Name 'RequestedComputerName')
+
+            $match = $false
+            if ($isIp) {
+                if ($requestedTarget.Equals($target, [System.StringComparison]::OrdinalIgnoreCase) -or $snapshotName.Equals($target, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $match = $true
+                }
+            } else {
+                if ($snapshotName.Equals($target, [System.StringComparison]::OrdinalIgnoreCase) -or $folder.Name.StartsWith("$target-", [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $match = $true
+                }
+            }
+
+            if ($match) {
                 return [PSCustomObject]@{
                     Snapshot   = $snapshot
                     LatestPath = $latestPath
@@ -3209,7 +3231,11 @@ function Invoke-SystemScan {
         
         $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $targetName -Credential $script:TargetCredential -PromptForCredential:($null -eq $script:TargetCredential)
         if ($collection.Success) {
-            Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $targetName -Credential $collection.Credential
+            $actualTargetName = $targetName
+            if ($null -ne $collection.Export -and $null -ne $collection.Export.Summary -and -not [string]::IsNullOrWhiteSpace($collection.Export.Summary.ComputerName)) {
+                $actualTargetName = $collection.Export.Summary.ComputerName
+            }
+            Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $actualTargetName -Credential $collection.Credential
         } else {
             $script:SystemScanMessage = "Remote refresh failed or cancelled: $targetName | $(Get-Date -Format 'HH:mm:ss')"
             $script:RequestForceClear = $true
@@ -3854,13 +3880,22 @@ function Add-DeviceCheckConnectionHistoryEntry {
     
     $existing = $null
     foreach ($entry in $history) {
-        if ($entry.ComputerName.ToLower() -eq $ComputerName.ToLower() -and $entry.NetworkId -eq $NetworkId) {
-            $existing = $entry
-            break
+        if ($entry.NetworkId -eq $NetworkId) {
+            if ($entry.ComputerName.ToLower() -eq $ComputerName.ToLower()) {
+                $existing = $entry
+                break
+            }
+            if ($entry.ComputerName -match '^\d+\.\d+\.\d+\.\d+$' -and ($entry.ComputerName -eq $LastIPAddress -or $entry.LastIPAddress -eq $LastIPAddress)) {
+                $existing = $entry
+                break
+            }
         }
     }
 
     if ($null -ne $existing) {
+        if ($existing.ComputerName -match '^\d+\.\d+\.\d+\.\d+$' -and $ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            $existing.ComputerName = $ComputerName
+        }
         $existing.LastIPAddress = $LastIPAddress
         if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
             $existing.MACAddress = $MACAddress
@@ -4538,9 +4573,13 @@ function Invoke-ConnectLanTarget {
                 }
                 
                 $userName = $(if ($null -ne $cachedCredential) { $cachedCredential.UserName } else { $choice.UserName })
-                Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $targetMac -UserName $userName -NetworkId $networkInfo.NetworkId
+                $actualComputerName = $target
+                if ($null -ne $cached.Snapshot -and $null -ne $cached.Snapshot.Machine -and $null -ne $cached.Snapshot.Machine.ComputerSystem -and -not [string]::IsNullOrWhiteSpace($cached.Snapshot.Machine.ComputerSystem.Name)) {
+                    $actualComputerName = $cached.Snapshot.Machine.ComputerSystem.Name
+                }
+                Add-DeviceCheckConnectionHistoryEntry -ComputerName $actualComputerName -LastIPAddress $resolvedIp -MACAddress $targetMac -UserName $userName -NetworkId $networkInfo.NetworkId
 
-                Set-ActiveSnapshotTarget -Snapshot $cached.Snapshot -SnapshotPath $cached.LatestPath -ComputerName $target -Credential $cachedCredential
+                Set-ActiveSnapshotTarget -Snapshot $cached.Snapshot -SnapshotPath $cached.LatestPath -ComputerName $actualComputerName -Credential $cachedCredential
                 try { Initialize-TuiHost } catch {}
                 try { [Console]::CursorVisible = $false } catch {}
                 return
@@ -4629,9 +4668,18 @@ function Invoke-ConnectLanTarget {
                     $userName = $collection.Export.Summary.UserName
                 }
 
-                Add-DeviceCheckConnectionHistoryEntry -ComputerName $target -LastIPAddress $resolvedIp -MACAddress $connectedMac -UserName $userName -NetworkId $networkInfo.NetworkId
+                $actualComputerName = $target
+                if ($null -ne $collection.Export) {
+                    if ($null -ne $collection.Export.Summary -and -not [string]::IsNullOrWhiteSpace($collection.Export.Summary.ComputerName)) {
+                        $actualComputerName = $collection.Export.Summary.ComputerName
+                    } elseif ($null -ne $collection.Export.Snapshot -and $null -ne $collection.Export.Snapshot.Machine -and $null -ne $collection.Export.Snapshot.Machine.ComputerSystem -and -not [string]::IsNullOrWhiteSpace($collection.Export.Snapshot.Machine.ComputerSystem.Name)) {
+                        $actualComputerName = $collection.Export.Snapshot.Machine.ComputerSystem.Name
+                    }
+                }
 
-                Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $target -Credential $collection.Credential
+                Add-DeviceCheckConnectionHistoryEntry -ComputerName $actualComputerName -LastIPAddress $resolvedIp -MACAddress $connectedMac -UserName $userName -NetworkId $networkInfo.NetworkId
+
+                Set-ActiveSnapshotTarget -Snapshot $collection.Export.Snapshot -SnapshotPath $collection.Export.LatestPath -ComputerName $actualComputerName -Credential $collection.Credential
                 try { Initialize-TuiHost } catch {}
                 try { [Console]::CursorVisible = $false } catch {}
                 return
