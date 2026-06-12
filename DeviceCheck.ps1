@@ -4272,6 +4272,10 @@ function Invoke-ConnectionHistorySelector {
     $networkId = $NetworkInfo.NetworkId
     $networkName = $NetworkInfo.ProfileName
 
+    $resolvedScriptRoot = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
+    if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
+
     [Console]::CursorVisible = $false
     try {
         $selectedIndex = -1
@@ -4411,6 +4415,50 @@ function Invoke-ConnectionHistorySelector {
                 IsOnline   = $false
             })
 
+            # Section 4: Scan Benchmark Results (if BenchmarkMode is ON)
+            if ($script:BenchmarkMode) {
+                $items.Add([PSCustomObject]@{
+                    Type       = 'Separator'
+                    Text       = ""
+                    Selectable = $false
+                })
+                $items.Add([PSCustomObject]@{
+                    Type       = 'Header'
+                    Text       = "$($_C.Bold)$($_C.Info)Scan Benchmark Results$($_C.Reset)"
+                    Selectable = $false
+                })
+                
+                $logFile = Join-Path -Path $resolvedScriptRoot -ChildPath 'network_scan_benchmark.log'
+                if (Test-Path -LiteralPath $logFile) {
+                    $logLines = Get-Content -LiteralPath $logFile -Tail 50
+                    $lastScanIndex = -1
+                    for ($i = $logLines.Count - 1; $i -ge 0; $i--) {
+                        if ($logLines[$i] -match 'Network Scan Completed') {
+                            $lastScanIndex = $i
+                            break
+                        }
+                    }
+                    if ($lastScanIndex -ne -1) {
+                        for ($i = $lastScanIndex; $i -lt $logLines.Count; $i++) {
+                            $line = $logLines[$i]
+                            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                $cleanLine = $line
+                                if ($line -match 'Network Scan Completed') {
+                                    $cleanLine = "$($_C.OK)$line$($_C.Reset)"
+                                } elseif ($line -match 'Total Time|Phase \d') {
+                                    $cleanLine = $line -replace '(Total Time|Phase \d \([^)]+\))', "$($_C.Gold)`$1$($_C.Reset)"
+                                }
+                                $items.Add([PSCustomObject]@{
+                                    Type       = 'BenchmarkLine'
+                                    Text       = "  $cleanLine"
+                                    Selectable = $false
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+
             # Initialize selectedIndex on the first selectable item if not set
             if ($selectedIndex -lt 0 -or $selectedIndex -ge $items.Count) {
                 $selectedIndex = 0
@@ -4467,6 +4515,8 @@ function Invoke-ConnectionHistorySelector {
                     Add-UiFrameLine -Frame $frame -Text "$($_C.EraseLn)"
                 } elseif ($item.Type -eq 'Placeholder') {
                     Add-UiFrameLine -Frame $frame -Text "$($item.Text)$($_C.EraseLn)"
+                } elseif ($item.Type -eq 'BenchmarkLine') {
+                    Add-UiFrameLine -Frame $frame -Text "  $($item.Text)$($_C.Reset)$($_C.EraseLn)"
                 } else {
                     if ($index -eq $selectedIndex) {
                         $statusText = ""
@@ -4610,33 +4660,6 @@ function Invoke-ConnectionHistorySelector {
                     Write-UiFrame -Frame $frame
                     
                     $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts)
-                    
-                    if ($script:BenchmarkMode) {
-                        # Display benchmark results
-                        Clear-TuiScreen
-                        $frame = New-UiFrame
-                        Add-UiFrameBanner -Frame $frame -Title 'Network Scan Benchmark' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
-                        Add-UiFrameLine -Frame $frame
-                        Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Network Scan Completed Successfully!$($_C.Reset)$($_C.EraseLn)"
-                        Add-UiFrameLine -Frame $frame -Text "  ------------------------------------$($_C.EraseLn)"
-                        
-                        $resolvedScriptRoot = $PSScriptRoot
-                        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
-                        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
-                        $logFile = Join-Path -Path $resolvedScriptRoot -ChildPath 'network_scan_benchmark.log'
-                        if (Test-Path -LiteralPath $logFile) {
-                            $lines = Get-Content -LiteralPath $logFile -Tail 15
-                            foreach ($line in $lines) {
-                                if (-not [string]::IsNullOrWhiteSpace($line)) {
-                                    Add-UiFrameLine -Frame $frame -Text "  $line$($_C.EraseLn)"
-                                }
-                            }
-                        }
-                        Add-UiFrameLine -Frame $frame -Text "  ------------------------------------$($_C.EraseLn)"
-                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press any key to return to menu...$($_C.Reset)$($_C.EraseLn)"
-                        Write-UiFrame -Frame $frame
-                        $null = Read-ConsoleKey
-                    }
                     
                     $selectedIndex = -1 # Reset selection
                     $script:RequestForceClear = $true
