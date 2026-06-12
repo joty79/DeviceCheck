@@ -31,6 +31,8 @@ if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {
 }
 $env:DEVICECHECK_CHROME_PROFILE = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'browser-profile'
 $script:BenchmarkMode = $false
+$script:LastNetworkScanResult = $null
+$script:ScriptStartTime = Get-Date
 
 function Initialize-AvailableModels {
     $script:AvailableModels = [System.Collections.Generic.List[object]]::new()
@@ -3723,12 +3725,13 @@ function Get-DeviceCheckDiscoveredHosts {
     
     if (-not $interfaces) { 
         $timeInterfaces = $swPhase.Elapsed.TotalMilliseconds
+        $logLines = @(
+            "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] Network Scan Completed (No active interfaces)"
+            "  Total Time       : $([Math]::Round($swTotal.Elapsed.TotalMilliseconds, 1)) ms"
+            "  Phase 1 (Ifaces) : $([Math]::Round($timeInterfaces, 1)) ms"
+        )
+        $script:LastNetworkScanResult = $logLines
         if ($script:BenchmarkMode) {
-            $logLines = @(
-                "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] Network Scan Completed (No active interfaces)"
-                "  Total Time       : $([Math]::Round($swTotal.Elapsed.TotalMilliseconds, 1)) ms"
-                "  Phase 1 (Ifaces) : $([Math]::Round($timeInterfaces, 1)) ms"
-            )
             $resolvedScriptRoot = $PSScriptRoot
             if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
             if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
@@ -4082,6 +4085,8 @@ function Get-DeviceCheckDiscoveredHosts {
     $logLines.Add("  Phase 7 (Reverse): $([Math]::Round($timeFinalMap, 1)) ms")
     $logLines.Add("  Scan Results     : $($discovered.Count) hosts found ($($uniqueIPs.Count) unique IPs scanned)")
     $logLines.Add("")
+    
+    $script:LastNetworkScanResult = @($logLines)
     
     if ($script:BenchmarkMode) {
         $resolvedScriptRoot = $PSScriptRoot
@@ -4438,42 +4443,52 @@ function Invoke-ConnectionHistorySelector {
                     Selectable = $false
                 })
                 
-                $logsDir = Join-Path -Path $resolvedScriptRoot -ChildPath 'logs'
-                if (Test-Path -LiteralPath $logsDir) {
-                    $latestLog = Get-ChildItem -Path $logsDir -Filter 'network_scan_*.log' -File -ErrorAction SilentlyContinue | 
-                        Sort-Object LastWriteTime -Descending | 
-                        Select-Object -First 1
-                    if ($latestLog) {
-                        $logFile = $latestLog.FullName
-                        $logLines = Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue
-                        if ($logLines) {
-                            $lastScanIndex = -1
-                            for ($i = $logLines.Count - 1; $i -ge 0; $i--) {
-                                if ($logLines[$i] -match 'Network Scan Completed') {
-                                    $lastScanIndex = $i
-                                    break
+                $logLines = $script:LastNetworkScanResult
+                if ($null -eq $logLines -or $logLines.Count -eq 0) {
+                    $logsDir = Join-Path -Path $resolvedScriptRoot -ChildPath 'logs'
+                    if (Test-Path -LiteralPath $logsDir) {
+                        $latestLog = Get-ChildItem -Path $logsDir -Filter 'network_scan_*.log' -File -ErrorAction SilentlyContinue | 
+                            Where-Object { $_.LastWriteTime -ge $script:ScriptStartTime } |
+                            Sort-Object LastWriteTime -Descending | 
+                            Select-Object -First 1
+                        if ($latestLog) {
+                            $logLines = Get-Content -LiteralPath $latestLog.FullName -ErrorAction SilentlyContinue
+                        }
+                    }
+                }
+                
+                if ($logLines) {
+                    $lastScanIndex = -1
+                    for ($i = $logLines.Count - 1; $i -ge 0; $i--) {
+                        if ($logLines[$i] -match 'Network Scan Completed') {
+                            $lastScanIndex = $i
+                            break
+                        }
+                    }
+                    if ($lastScanIndex -ne -1) {
+                        for ($i = $lastScanIndex; $i -lt $logLines.Count; $i++) {
+                            $line = $logLines[$i]
+                            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                $cleanLine = $line
+                                if ($line -match 'Network Scan Completed') {
+                                    $cleanLine = "$($_C.OK)$line$($_C.Reset)"
+                                } elseif ($line -match 'Total Time|Phase \d') {
+                                    $cleanLine = $line -replace '(Total Time|Phase \d \([^)]+\))', "$($_C.Gold)`$1$($_C.Reset)"
                                 }
-                            }
-                            if ($lastScanIndex -ne -1) {
-                                for ($i = $lastScanIndex; $i -lt $logLines.Count; $i++) {
-                                    $line = $logLines[$i]
-                                    if (-not [string]::IsNullOrWhiteSpace($line)) {
-                                        $cleanLine = $line
-                                        if ($line -match 'Network Scan Completed') {
-                                            $cleanLine = "$($_C.OK)$line$($_C.Reset)"
-                                        } elseif ($line -match 'Total Time|Phase \d') {
-                                            $cleanLine = $line -replace '(Total Time|Phase \d \([^)]+\))', "$($_C.Gold)`$1$($_C.Reset)"
-                                        }
-                                        $items.Add([PSCustomObject]@{
-                                            Type       = 'BenchmarkLine'
-                                            Text       = "  $cleanLine"
-                                            Selectable = $false
-                                        })
-                                    }
-                                }
+                                $items.Add([PSCustomObject]@{
+                                    Type       = 'BenchmarkLine'
+                                    Text       = "  $cleanLine"
+                                    Selectable = $false
+                                })
                             }
                         }
                     }
+                } else {
+                    $items.Add([PSCustomObject]@{
+                        Type       = 'BenchmarkLine'
+                        Text       = "  $($_C.Dim)(No scans run yet)$($_C.Reset)"
+                        Selectable = $false
+                    })
                 }
             }
 
