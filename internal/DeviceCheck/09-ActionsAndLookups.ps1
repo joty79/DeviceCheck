@@ -295,25 +295,6 @@ function Start-DeviceLookup {
                     } catch {}
                 }
 
-                $propertyRows = @()
-                $propertyError = $null
-                try {
-                    $propertyRows = @(
-                        Get-PnpDeviceProperty -InstanceId $DeviceBasics.InstanceId -ErrorAction Stop |
-                            Sort-Object KeyName |
-                            ForEach-Object {
-                                [PSCustomObject]@{
-                                    KeyName = $_.KeyName
-                                    Type    = $(if ($null -eq $_.Type) { $null } else { $_.Type.ToString() })
-                                    Data    = ConvertTo-PlainEvidenceValue $_.Data
-                                }
-                            }
-                    )
-                } catch {
-                    $propertyError = $_.Exception.Message
-                }
-
-                $importantData = [ordered]@{}
                 $importantKeys = @(
                     'DEVPKEY_Device_DeviceDesc',
                     'DEVPKEY_Device_BusReportedDeviceDesc',
@@ -335,6 +316,25 @@ function Start-DeviceLookup {
                     'DEVPKEY_Device_ContainerId'
                 )
 
+                $propertyRows = @()
+                $propertyError = $null
+                try {
+                    $propertyRows = @(
+                        Get-PnpDeviceProperty -InstanceId $DeviceBasics.InstanceId -KeyName $importantKeys -ErrorAction Stop |
+                            Sort-Object KeyName |
+                            ForEach-Object {
+                                [PSCustomObject]@{
+                                    KeyName = $_.KeyName
+                                    Type    = $(if ($null -eq $_.Type) { $null } else { $_.Type.ToString() })
+                                    Data    = ConvertTo-PlainEvidenceValue $_.Data
+                                }
+                            }
+                    )
+                } catch {
+                    $propertyError = $_.Exception.Message
+                }
+
+                $importantData = [ordered]@{}
                 foreach ($importantKey in $importantKeys) {
                     $match = $propertyRows | Where-Object { $_.KeyName -eq $importantKey } | Select-Object -First 1
                     if ($null -ne $match) {
@@ -342,22 +342,29 @@ function Start-DeviceLookup {
                     }
                 }
 
+                # Construct SignedDriver metadata directly from PnP properties to bypass the extremely slow Win32_PnPSignedDriver WMI query (~1000ms)
                 $signedDriver = $null
                 $signedDriverError = $null
                 try {
-                    $driver = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop |
-                        Where-Object { $_.DeviceID -eq $DeviceBasics.InstanceId } |
-                        Select-Object -First 1
-                    if ($null -ne $driver) {
+                    $descRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_DeviceDesc' } | Select-Object -First 1
+                    $mfgRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_Manufacturer' } | Select-Object -First 1
+                    $provRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_DriverProvider' } | Select-Object -First 1
+                    $verRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_DriverVersion' } | Select-Object -First 1
+                    $dateRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_DriverDate' } | Select-Object -First 1
+                    $infRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_DriverInfPath' } | Select-Object -First 1
+                    $hwRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_HardwareIds' } | Select-Object -First 1
+                    $compatRow = $propertyRows | Where-Object { $_.KeyName -eq 'DEVPKEY_Device_CompatibleIds' } | Select-Object -First 1
+
+                    if ($null -ne $descRow -or $null -ne $mfgRow -or $null -ne $provRow -or $null -ne $verRow) {
                         $signedDriver = [PSCustomObject]@{
-                            DeviceName         = ConvertTo-PlainEvidenceValue $driver.DeviceName
-                            Manufacturer       = ConvertTo-PlainEvidenceValue $driver.Manufacturer
-                            DriverProviderName = ConvertTo-PlainEvidenceValue $driver.DriverProviderName
-                            DriverVersion      = ConvertTo-PlainEvidenceValue $driver.DriverVersion
-                            DriverDate         = ConvertTo-PlainEvidenceValue $driver.DriverDate
-                            InfName            = ConvertTo-PlainEvidenceValue $driver.InfName
-                            HardwareID         = ConvertTo-PlainEvidenceValue $driver.HardwareID
-                            CompatID           = ConvertTo-PlainEvidenceValue $driver.CompatID
+                            DeviceName         = $(if ($descRow) { ConvertTo-PlainEvidenceValue $descRow.Data } else { $null })
+                            Manufacturer       = $(if ($mfgRow) { ConvertTo-PlainEvidenceValue $mfgRow.Data } else { $null })
+                            DriverProviderName = $(if ($provRow) { ConvertTo-PlainEvidenceValue $provRow.Data } else { $null })
+                            DriverVersion      = $(if ($verRow) { ConvertTo-PlainEvidenceValue $verRow.Data } else { $null })
+                            DriverDate         = $(if ($dateRow) { ConvertTo-PlainEvidenceValue $dateRow.Data } else { $null })
+                            InfName            = $(if ($infRow) { ConvertTo-PlainEvidenceValue $infRow.Data } else { $null })
+                            HardwareID         = $(if ($hwRow) { ConvertTo-PlainEvidenceValue $hwRow.Data } else { $null })
+                            CompatID           = $(if ($compatRow) { ConvertTo-PlainEvidenceValue $compatRow.Data } else { $null })
                         }
                     }
                 } catch {

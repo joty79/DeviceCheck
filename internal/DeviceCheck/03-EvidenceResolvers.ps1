@@ -1233,7 +1233,8 @@ function Get-InstalledDriverEvidenceFields {
         (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DriverInfPath')
     )
     $deviceName = Get-FirstNonEmptyEvidenceValue -Values @(
-        (Get-NotePropertyValue -Object $signedDriver -Name 'DeviceName')
+        (Get-NotePropertyValue -Object $signedDriver -Name 'DeviceName'),
+        (Get-NotePropertyValue -Object $importantProperties -Name 'DEVPKEY_Device_DeviceDesc')
     )
     $manufacturer = Get-FirstNonEmptyEvidenceValue -Values @(
         (Get-NotePropertyValue -Object $signedDriver -Name 'Manufacturer'),

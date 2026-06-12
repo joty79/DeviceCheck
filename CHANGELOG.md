@@ -8,9 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Reduced the input loop sleep time during active background scans/lookups from 150ms to 50ms in [10-Input.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/10-Input.ps1) to improve UI responsiveness and speed up background queue processing.
 - Refactored the monolithic `DeviceCheck.ps1` entrypoint into dot-sourced function groups under `internal\DeviceCheck\`. The root script now keeps startup state and the main event loop, while models/credentials, machine identity, evidence resolvers, UI formatting, inventory/snapshots, remote connection workflows, tree/details, rendering, lookup actions, and input handling live in focused files.
 
+### Optimized
+- Optimized real-time local device evidence collection ("E" hotkey) in [09-ActionsAndLookups.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/09-ActionsAndLookups.ps1) by bypassing the slow `Win32_PnPSignedDriver` WMI query (~1000ms per device) and constructing the equivalent `SignedDriver` PSCustomObject metadata directly from present PnP registry properties.
+- Optimized `Get-PnpDeviceProperty` performance by specifying `$importantKeys` via the `-KeyName` parameter to retrieve only the 18 required driver properties instead of querying all properties.
+
 ### Added
+- Added fallback resolution for driver friendly name using `DEVPKEY_Device_DeviceDesc` inside `Get-InstalledDriverEvidenceFields` in [03-EvidenceResolvers.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/03-EvidenceResolvers.ps1) if the `SignedDriver` object is missing.
 - Added `internal\Test-DeviceCheckStructure.ps1`, an executable structure guard that prevents `DeviceCheck.ps1` from silently growing back into a monolith by checking entrypoint line count, root function definitions, parser validity, part count, and per-part line budgets.
 - Added a tracked optional pre-commit hook in `.githooks\pre-commit` and a GitHub Actions workflow in `.github\workflows\devicecheck-structure.yml` so the structure guard can be enforced locally and in PR/push checks.
 - Added dynamic Benchmark Mode toggling (hotkey `B` in the `Ctrl+L` connection selector screen). When enabled, it renders detailed network scan phase durations inline below the Actions section, using the TUI's native scrolling view and persisting the setting in `config.json`.

@@ -50,7 +50,7 @@ function Read-ConsoleKey {
                     $script:selectedIndex = 0
                 }
                 Render-Frame
-                Start-Sleep -Milliseconds 150
+                Start-Sleep -Milliseconds 50
             } else {
                 Start-Sleep -Milliseconds 10
             }
