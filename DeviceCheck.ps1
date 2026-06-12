@@ -3862,82 +3862,16 @@ function Get-DeviceCheckDiscoveredHosts {
     }
     $timeArpClear = $swPhase.Elapsed.TotalMilliseconds
 
-    # 4. Trigger active subnet discovery by pinging all IPs in the subnet concurrently (fast parallel ICMP)
+    # 4. Trigger active ICMP Ping discovery only for neighbor cache and history IPs (fast parallel Ping)
     $swPhase.Restart()
-    $pingTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
     
-    foreach ($if in $interfaces) {
-        if ($if.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') {
-            $subnetPrefix = $Matches[1]
-            for ($i = 1; $i -le 254; $i++) {
-                $targetIp = "$subnetPrefix.$i"
-                if ($targetIp -eq $if.IPAddress) { continue }
-                try {
-                    $p = [System.Net.NetworkInformation.Ping]::new()
-                    $task = $p.SendPingAsync($targetIp, 250)
-                    $pingTasks.Add([PSCustomObject]@{
-                        IP     = $targetIp
-                        Pinger = $p
-                        Task   = $task
-                    })
-                } catch {}
-            }
-        }
-    }
-    
-    # Also ping history IPs to refresh active ARP cache
-    if ($historyIPs) {
-        foreach ($ip in $historyIPs) {
-            $alreadyAdded = $false
-            foreach ($pt in $pingTasks) {
-                if ($pt.IP -eq $ip) {
-                    $alreadyAdded = $true
-                    break
-                }
-            }
-            if (-not $alreadyAdded) {
-                try {
-                    $p = [System.Net.NetworkInformation.Ping]::new()
-                    $task = $p.SendPingAsync($ip, 250)
-                    $pingTasks.Add([PSCustomObject]@{
-                        IP     = $ip
-                        Pinger = $p
-                        Task   = $task
-                    })
-                } catch {}
-            }
-        }
-    }
-    
-    if ($pingTasks.Count -gt 0) {
-        $tasksArray = [System.Threading.Tasks.Task[]]::new($pingTasks.Count)
-        for ($i = 0; $i -lt $pingTasks.Count; $i++) {
-            $tasksArray[$i] = $pingTasks[$i].Task
-        }
-        try {
-            [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
-        } catch {}
-    }
-    
-    # Collect IPs that replied successfully to Ping
-    $pingSuccessfulIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($pt in $pingTasks) {
-        if ($pt.Task.IsCompleted -and -not $pt.Task.IsFaulted -and $pt.Task.Result.Status -eq 'Success') {
-            $null = $pingSuccessfulIPs.Add($pt.IP)
-        }
-        $pt.Pinger.Dispose()
-    }
-    
-    $timePing = $swPhase.Elapsed.TotalMilliseconds
-    
-    # 5. Get neighbors for these interfaces (local OS ARP cache)
-    $swPhase.Restart()
+    # Get neighbors first to know which IPs to target
     $neighbors = foreach ($if in $interfaces) {
         Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
             Where-Object { $_.State -ne 'Unreachable' -and $_.IPAddress -notmatch '^\d+\.\d+\.\d+\.255$' -and $_.LinkLayerAddress -ne '00-00-00-00-00-00' }
     }
     
-    # Filter out gateway IPs to avoid connecting to router WinRM
+    # Filter out gateway IPs to avoid connecting to router
     $gateways = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $routes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue
     if ($routes) {
@@ -3959,23 +3893,62 @@ function Get-DeviceCheckDiscoveredHosts {
         $neighborIPs = @($neighbors.IPAddress)
     }
     
-    # Combine neighbor cache IPs, ping-successful IPs, and history IPs
-    $combinedIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($ip in $neighborIPs) { $null = $combinedIPs.Add($ip) }
-    foreach ($ip in $pingSuccessfulIPs) { $null = $combinedIPs.Add($ip) }
-    foreach ($ip in $historyIPs) { $null = $combinedIPs.Add($ip) }
+    # Combine neighbor cache IPs and history IPs
+    $targetIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ip in $neighborIPs) { $null = $targetIPsSet.Add($ip) }
+    foreach ($ip in $historyIPs) { $null = $targetIPsSet.Add($ip) }
     
-    $uniqueIPs = @(
-        $combinedIPs | 
-            Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) }
+    $targetIPs = @(
+        $targetIPsSet | Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) }
     )
+    
+    $pingSuccessfulIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $pingTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
+    
+    if ($targetIPs) {
+        foreach ($ip in $targetIPs) {
+            try {
+                $p = [System.Net.NetworkInformation.Ping]::new()
+                $task = $p.SendPingAsync($ip, 250)
+                $pingTasks.Add([PSCustomObject]@{
+                    IP     = $ip
+                    Pinger = $p
+                    Task   = $task
+                })
+            } catch {}
+        }
+        
+        if ($pingTasks.Count -gt 0) {
+            $tasksArray = [System.Threading.Tasks.Task[]]::new($pingTasks.Count)
+            for ($i = 0; $i -lt $pingTasks.Count; $i++) {
+                $tasksArray[$i] = $pingTasks[$i].Task
+            }
+            try {
+                [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
+            } catch {}
+        }
+        
+        foreach ($pt in $pingTasks) {
+            if ($pt.Task.IsCompleted -and -not $pt.Task.IsFaulted -and $pt.Task.Result.Status -eq 'Success') {
+                $null = $pingSuccessfulIPs.Add($pt.IP)
+            }
+            $pt.Pinger.Dispose()
+        }
+    }
+    
+    $timePing = $swPhase.Elapsed.TotalMilliseconds
+    
+    # 5. Neighbor/Active Target Setup
+    $swPhase.Restart()
+    $uniqueIPs = $targetIPs
     $timeNeighbors = $swPhase.Elapsed.TotalMilliseconds
     
-    # 6. Fast parallel scan on port 5985 and 445
+    # 6. Fast parallel TCP scan on port 5985 and 445
     $swPhase.Restart()
-    $results = @()
+    $winrmOpenIPs = [System.Collections.Generic.List[string]]::new()
+    $smbOpenIPs = [System.Collections.Generic.List[string]]::new()
+    
     if ($uniqueIPs) {
-        # We start TCP connection tasks for both port 5985 and 445 in parallel using TcpClient.ConnectAsync
         $connections = [System.Collections.Generic.List[PSCustomObject]]::new()
         foreach ($ip in $uniqueIPs) {
             $tcp1 = [System.Net.Sockets.TcpClient]::new()
@@ -4012,9 +3985,6 @@ function Get-DeviceCheckDiscoveredHosts {
         }
         $swTimeout.Stop()
         
-        $winrmOpenIPs = [System.Collections.Generic.List[string]]::new()
-        $smbOpenIPs = [System.Collections.Generic.List[string]]::new()
-        
         foreach ($c in $connections) {
             $winrmConnected = $c.Task1.IsCompleted -and $c.TcpClient1.Connected
             $smbConnected = $c.Task2.IsCompleted -and $c.TcpClient2.Connected
@@ -4028,112 +3998,92 @@ function Get-DeviceCheckDiscoveredHosts {
             $c.TcpClient1.Dispose()
             $c.TcpClient2.Dispose()
         }
-        
-        # Ping Only Hosts (Online but WinRM & SMB closed - like DATACOMPUTER-ER)
-        $pingOnlyIPs = [System.Collections.Generic.List[string]]::new()
-        foreach ($ip in $pingSuccessfulIPs) {
-            if ($ip -notin $winrmOpenIPs -and $ip -notin $smbOpenIPs) {
-                $pingOnlyIPs.Add($ip)
-            }
-        }
-        
-        # Combine results and do reverse DNS lookup / fallback GetHostEntry for positive hits
-        $historyMap = $historyIpToName
-        $scanResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
-        
-        # WinRM Open Hosts
-        foreach ($ip in $winrmOpenIPs) {
-            $dnsName = $ip
-            if ($historyMap.ContainsKey($ip)) {
-                $dnsName = $historyMap[$ip]
-            } else {
-                try {
-                    $dnsRes = Resolve-DnsName -Name $ip -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
-                    if ($dnsRes) {
-                        $dnsName = $dnsRes[0].NameHost
-                        if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                    } else {
-                        # Fallback to GetHostEntry for online hosts (NetBIOS/LLMNR lookup)
-                        $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
-                        if ($hostEntry -and $hostEntry.HostName) {
-                            $dnsName = $hostEntry.HostName
-                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                        }
-                    }
-                } catch {}
-            }
-            $scanResultsList.Add([PSCustomObject]@{
-                IP        = $ip
-                HostName  = $dnsName
-                WinRmOpen = $true
-                SmbOpen   = $false
-            })
-        }
-        
-        # SMB Open Hosts (WinRM Closed)
-        foreach ($ip in $smbOpenIPs) {
-            $dnsName = $ip
-            if ($historyMap.ContainsKey($ip)) {
-                $dnsName = $historyMap[$ip]
-            } else {
-                try {
-                    $dnsRes = Resolve-DnsName -Name $ip -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
-                    if ($dnsRes) {
-                        $dnsName = $dnsRes[0].NameHost
-                        if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                    } else {
-                        # Fallback to GetHostEntry for online hosts (NetBIOS/LLMNR lookup)
-                        $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
-                        if ($hostEntry -and $hostEntry.HostName) {
-                            $dnsName = $hostEntry.HostName
-                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                        }
-                    }
-                } catch {}
-            }
-            $scanResultsList.Add([PSCustomObject]@{
-                IP        = $ip
-                HostName  = $dnsName
-                WinRmOpen = $false
-                SmbOpen   = $true
-            })
-        }
-        
-        # Ping Only Hosts (Online, WinRM/SMB Closed)
-        foreach ($ip in $pingOnlyIPs) {
-            $dnsName = $ip
-            if ($historyMap.ContainsKey($ip)) {
-                $dnsName = $historyMap[$ip]
-            } else {
-                try {
-                    $dnsRes = Resolve-DnsName -Name $ip -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
-                    if ($dnsRes) {
-                        $dnsName = $dnsRes[0].NameHost
-                        if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                    } else {
-                        # Fallback to GetHostEntry for online hosts (NetBIOS/LLMNR lookup)
-                        $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
-                        if ($hostEntry -and $hostEntry.HostName) {
-                            $dnsName = $hostEntry.HostName
-                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                        }
-                    }
-                } catch {}
-            }
-            $scanResultsList.Add([PSCustomObject]@{
-                IP        = $ip
-                HostName  = $dnsName
-                WinRmOpen = $false
-                SmbOpen   = $false
-            })
-        }
-        
-        $results = @($scanResultsList)
     }
     $timeTcpScan = $swPhase.Elapsed.TotalMilliseconds
     
-    # 7. Final mapping & MAC lookup
+    # 7. Asynchronous Hostname Resolution for Online Hosts
     $swPhase.Restart()
+    
+    # Online hosts are those that have WinRM open, SMB open, or replied to Ping (including DATACOMPUTER-ER)
+    $onlineIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ip in $winrmOpenIPs) { $null = $onlineIPsSet.Add($ip) }
+    foreach ($ip in $smbOpenIPs) { $null = $onlineIPsSet.Add($ip) }
+    foreach ($ip in $pingSuccessfulIPs) { $null = $onlineIPsSet.Add($ip) }
+    
+    $onlineIPs = @($onlineIPsSet)
+    $resolvedNames = @{}
+    
+    if ($onlineIPs) {
+        $resolutionTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($ip in $onlineIPs) {
+            if ($historyIpToName.ContainsKey($ip)) {
+                $resolvedNames[$ip] = $historyIpToName[$ip]
+                continue
+            }
+            # Start asynchronous NetBIOS/DNS resolution
+            try {
+                $dnsTask = [System.Net.Dns]::GetHostEntryAsync($ip)
+                $resolutionTasks.Add([PSCustomObject]@{
+                    IP   = $ip
+                    Task = $dnsTask
+                })
+            } catch {}
+        }
+        
+        if ($resolutionTasks.Count -gt 0) {
+            $resTasksArray = [System.Threading.Tasks.Task[]]::new($resolutionTasks.Count)
+            for ($i = 0; $i -lt $resolutionTasks.Count; $i++) {
+                $resTasksArray[$i] = $resolutionTasks[$i].Task
+            }
+            try {
+                [System.Threading.Tasks.Task]::WaitAll($resTasksArray, 400)
+            } catch {}
+            
+            foreach ($rt in $resolutionTasks) {
+                if ($rt.Task.IsCompleted -and -not $rt.Task.IsFaulted -and $rt.Task.Result.HostName) {
+                    $hostName = $rt.Task.Result.HostName
+                    if ($hostName -match '^([^.]+)\.') { $hostName = $Matches[1] }
+                    $resolvedNames[$rt.IP] = $hostName
+                }
+            }
+        }
+    }
+    
+    # Fallback to local DNS/IP lookup if async GetHostEntry failed or timed out
+    foreach ($ip in $onlineIPs) {
+        if (-not $resolvedNames.ContainsKey($ip)) {
+            try {
+                $dnsRes = Resolve-DnsName -Name $ip -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
+                if ($dnsRes) {
+                    $dnsName = $dnsRes[0].NameHost
+                    if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                    $resolvedNames[$ip] = $dnsName
+                } else {
+                    $resolvedNames[$ip] = $ip
+                }
+            } catch {
+                $resolvedNames[$ip] = $ip
+            }
+        }
+    }
+    
+    # Build final scan results list
+    $scanResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($ip in $onlineIPs) {
+        $name = $resolvedNames[$ip]
+        $isWinRm = $ip -in $winrmOpenIPs
+        $isSmb = $ip -in $smbOpenIPs
+        $scanResultsList.Add([PSCustomObject]@{
+            IP        = $ip
+            HostName  = $name
+            WinRmOpen = $isWinRm
+            SmbOpen   = $isSmb
+        })
+    }
+    
+    $results = @($scanResultsList)
+    
+    # Final mapping & MAC lookup
     $latestNeighbors = foreach ($if in $interfaces) {
         Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
     }

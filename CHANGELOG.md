@@ -28,9 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed hostname resolution and device visibility in the LAN connection selector:
-  - Added parallel ICMP subnet pinging to dynamically refresh the Windows OS ARP cache, avoiding stale cached states (like WinRM detection lagging) without needing a script restart. Wrapped `WaitAll` in a try/catch block to prevent AggregateException crashes from failed ping tasks.
-  - Added `GetHostEntry` fallback for online hosts to resolve local NetBIOS hostnames (e.g. `DESKTOP-GU5851U`) when DNS records are missing.
-  - Enabled discovery of active network hosts that do not have WinRM or SMB enabled (e.g. boss computer) by leveraging ICMP echo replies, rendering them as `(WinRM Disabled)`.
+  - Optimized subnet scanning to only target neighbor/history IPs to keep scans extremely fast (<1.5s), avoiding the slow 254-IP subnet pinging.
+  - Added concurrent ICMP pinging only on targeted IPs to refresh the ARP cache and detect active non-WinRM/non-SMB devices (like the boss computer), rendering them as `(WinRM Disabled)`.
+  - Added asynchronous NetBIOS resolution via parallel `GetHostEntryAsync` requests with a 400ms timeout for online hosts, resolving local machine names (e.g. `DESKTOP-GU5851U`) without blocking the main thread. Wrapped `WaitAll` calls in try/catch blocks to absorb `AggregateException` crashes.
 - Fixed a bug in the LAN connection selector where toggling Benchmark Mode to ON rendered stale timing results from a previous script session. Added `$script:ScriptStartTime` tracking and restricted `$script:LastNetworkScanResult` updates to only occur when Benchmark Mode is enabled, ensuring toggling it ON after a benchmark-disabled scan shows `(No scans run yet)` until `R` (rescan) is pressed.
 - Fixed a parameter binding error in `Invoke-ConnectionHistorySelector` where the `Join-Path` command failed with "Cannot bind argument to parameter 'Path' because it is an empty string" when `$global:PSScriptRoot` was not defined. Added robust fallback check for the active script root folder.
 - Fixed a bug in `Diagnose-SmbSharing.ps1` where the Network Discovery firewall rules group check and enabling command used the incorrect group resource ID `@FirewallAPI.dll,-27752` instead of the correct `@FirewallAPI.dll,-32752`, causing a false positive warning and preventing the rules from actually being enabled.
