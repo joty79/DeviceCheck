@@ -257,7 +257,10 @@ function Invoke-DeviceCheckSnapshotExport {
     param(
         [Parameter(Mandatory)][string]$ComputerName,
         [System.Management.Automation.PSCredential]$Credential,
-        [scriptblock]$OnProgress
+        [scriptblock]$OnProgress,
+        [switch]$Quick,
+        [switch]$ArchiveSample,
+        [string]$OutputRoot
     )
 
     $exportScript = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\Export-DeviceCheckEvidence.ps1'
@@ -270,6 +273,12 @@ function Invoke-DeviceCheckSnapshotExport {
         ComputerName = $ComputerName
         AsJson       = $true
         Verbose      = $true
+    }
+    if ($Quick) {
+        $exportParams.Quick = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OutputRoot)) {
+        $exportParams.OutputRoot = $OutputRoot
     }
     if ($null -ne $Credential) {
         $exportParams.Credential = $Credential
@@ -358,6 +367,20 @@ function Invoke-DeviceCheckSnapshotExport {
     }
 
     $snapshot = Get-Content -LiteralPath $summary.LatestPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ($ArchiveSample) {
+        $archiveAt = (Get-Date).ToString('o')
+        Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name SnapshotMode -Value 'FullArchive' -Force
+        Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name CapturePurpose -Value 'RepairShopSample' -Force
+        Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name ArchivedAt -Value $archiveAt -Force
+        Add-Member -InputObject $summary -MemberType NoteProperty -Name SnapshotMode -Value 'FullArchive' -Force
+        Add-Member -InputObject $summary -MemberType NoteProperty -Name CapturePurpose -Value 'RepairShopSample' -Force
+
+        $archiveJson = $snapshot | ConvertTo-Json -Depth 40
+        $archiveJson | Set-Content -LiteralPath $summary.LatestPath -Encoding UTF8
+        if (-not [string]::IsNullOrWhiteSpace([string]$summary.OutputPath) -and (Test-Path -LiteralPath $summary.OutputPath -PathType Leaf)) {
+            $archiveJson | Set-Content -LiteralPath $summary.OutputPath -Encoding UTF8
+        }
+    }
     return [PSCustomObject]@{
         Summary    = $summary
         Snapshot   = $snapshot

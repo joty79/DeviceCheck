@@ -433,9 +433,9 @@ function New-CollectorScriptBlock {
                                 $deviceProperties[$instId] = @(
                                     foreach ($p in $propsList) {
                                         [PSCustomObject]@{
-                                            KeyName = ConvertTo-PlainSnapshotValue $p.KeyName
-                                            Type    = ConvertTo-PlainSnapshotValue $p.Type
-                                            Data    = ConvertTo-PlainSnapshotValue $p.Data
+                                            KeyName = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $p -PropertyName 'KeyName')
+                                            Type    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $p -PropertyName 'Type')
+                                            Data    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $p -PropertyName 'Data')
                                         }
                                     }
                                 )
@@ -544,9 +544,9 @@ function New-CollectorScriptBlock {
                                 $deviceProperties[$instId] = @(
                                     foreach ($p in $propsList) {
                                         [PSCustomObject]@{
-                                            KeyName = ConvertTo-PlainSnapshotValue $p.KeyName
-                                            Type    = ConvertTo-PlainSnapshotValue $p.Type
-                                            Data    = ConvertTo-PlainSnapshotValue $p.Data
+                                            KeyName = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $p -PropertyName 'KeyName')
+                                            Type    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $p -PropertyName 'Type')
+                                            Data    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $p -PropertyName 'Data')
                                         }
                                     }
                                 )

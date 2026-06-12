@@ -60,7 +60,7 @@ $env:DEVICECHECK_TUI_PERF = '1'
 | Key | Action |
 |-----|--------|
 | `R` | Rescan machine evidence and the full present PnP device tree; shows running/complete counts |
-| `Ctrl+L` | Connect to a same-LAN/workgroup PC, collect a snapshot, and switch the main TUI tree to that target |
+| `Ctrl+L` | Connect to a same-LAN/workgroup PC, collect/open snapshots, and browse the local offline snapshot library grouped by saved network |
 | `E` | Collect local evidence for the selected device; on a category, scan that group; on the computer root, press `E` twice within 4 seconds to scan all present devices. Selected-device details refresh as soon as evidence is saved |
 | `S` | Refresh selected-device evidence, then run web/AI lookup |
 | `A` | Run the agentic driver finder for the selected device; the tree shows one agent row while full answer, trace, and links stay in the details pane |
@@ -83,7 +83,7 @@ $env:DEVICECHECK_TUI_PERF = '1'
 ### The Solution
 
 `internal\Export-DeviceCheckEvidence.ps1` collects system identity, present PnP devices, optional per-device properties, `pnputil` output, and monitor registry/WMI evidence from either the local host or a same-LAN WinRM target. `Connect-PaliosDeviceCheck.ps1` is a convenience wrapper for the known `PALIOS` desktop and writes snapshots under `%LOCALAPPDATA%\DeviceCheck\snapshots\`.
-Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. If the target PC is offline, DeviceCheck detects it and still allows you to load its cached snapshot in offline mode, dynamically disabling live refresh ("R"). Choose refresh only when you want a live WinRM rescan. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
+Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. The selector shows active online saved connections for the current network, plus an `Offline Snapshots` submenu where offline PCs are grouped by saved network. This keeps one-time shop/customer PCs available as an offline evidence corpus without crowding the daily target list or requiring manual archiving. The offline library is the local `%LOCALAPPDATA%\DeviceCheck` cache for the PC running DeviceCheck, so snapshots collected from another PC must be scanned again or copied/imported before they appear here. If the target PC is offline, DeviceCheck lets you load its cached snapshot in offline mode and dynamically disables live refresh (`R`) and archive capture (`F`). For online cached targets, `R` performs a quick snapshot refresh and `F` captures a slower full archive sample marked as `SnapshotMode = FullArchive` / `CapturePurpose = RepairShopSample`. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
 
 ```text
 NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree

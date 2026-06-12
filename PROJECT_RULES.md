@@ -56,6 +56,20 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-13
+Problem: The remote cached snapshot action screen had only open/refresh/cancel, so there was no deliberate way to capture a slower archive-grade sample before a work/customer PC left the bench.
+Root cause: Normal remote refresh and archive/sample capture were treated as the same operation, even though daily ID logging should stay fast and repair-shop sample capture can afford a heavier full snapshot.
+Guardrail/rule: Keep normal remote refresh on `R` as quick snapshot collection. Add `F = Full archive sample` only for online targets in the cached snapshot action screen. Full archive samples must run full collection, save under the normal snapshot folder, and mark the JSON collector metadata with `SnapshotMode = FullArchive` and `CapturePurpose = RepairShopSample`.
+Files affected: `internal\DeviceCheck\05-InventoryAndSnapshots.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\DeviceCheck\05-InventoryAndSnapshots.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; temp-output localhost quick smoke confirmed `QuickMode=True`; temp-output localhost archive smoke confirmed `QuickMode=False`, `SnapshotMode=FullArchive`, `CapturePurpose=RepairShopSample`, 233 devices, 233 per-device property groups, and `pnputil` output.
+
+Date: 2026-06-12
+Problem: The `Ctrl+L` LAN selector treated every saved target as an active current-network connection, so offline home targets and one-time work/customer PCs were either noisy in the active list or hard to reach later as snapshot samples.
+Root cause: The selector filtered primarily by the current network history and did not have an automatic offline snapshot view that included other saved networks or snapshot-only `latest.json` files.
+Guardrail/rule: Treat online connection targets and offline snapshot samples as separate UI surfaces. `Ctrl+L` should show active online saved connections for the current network, then a compact `Offline Snapshots` submenu grouped by saved network. That submenu is populated from the local `%LOCALAPPDATA%\DeviceCheck` history and snapshot files for the PC running DeviceCheck; snapshots collected from another PC must be scanned again or imported/synced before they appear. Offline entries from other networks must open the exact selected cached snapshot without trying stale same-subnet IPs on the current LAN or rewriting that PC into the current network history. Saved offline history entries without a local `latest.json` should remain visible as `No Snapshot` instead of disappearing silently.
+Files affected: `internal\DeviceCheck\06-RemoteConnection.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, and `Connect-PaliosDeviceCheck.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; isolated temp-cache smoke confirmed offline entries are grouped by network and saved offline history without local `latest.json` stays visible as `No Snapshot`.
+
 Date: 2026-06-12
 Problem: `DeviceCheck.ps1` had grown past 8,100 lines, making review, AI-assisted edits, and bug isolation slow and risky.
 Root cause: Most feature areas lived in one root script even though they had clear boundaries such as model selection, evidence resolvers, remote connection workflows, rendering, lookup actions, and input handling.
