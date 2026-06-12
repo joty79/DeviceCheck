@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added network scan phase benchmarking and detailed phase durations logger (`network_scan_benchmark.log`) in `Get-DeviceCheckDiscoveredHosts` to measure and log exact network scan performance stages (DNS, pings, TCP port scans, and MAC lookups).
 - Added offline target snapshot loading support. When attempting to connect to an offline or unreachable LAN target, the connection selector now checks if a local cached snapshot exists for that computer name. If a cache is found, it prompts the user to load and view the offline snapshot instead of failing with a resolution error, disabling live refresh dynamically.
 - Added an active `R` rescan hotkey in the `Invoke-ConnectionHistorySelector` LAN connection selector screen to reload discovered hosts without exiting the menu.
 - Added parallel local network scanning (`Get-DeviceCheckDiscoveredHosts`) to discover active PC hosts in the local ARP cache with WinRM port 5985 open, resolving hostnames dynamically via reverse DNS lookup.
@@ -94,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cleaned up TUI status message logic in `DeviceCheck.ps1` to prevent duplicate system summary printing: initialized the status line with a clean welcome message, and simplified system scan status messages during scan operations.
 
 ### Performance
+- **Concurrent TCP port scanning:** Refactored the TCP scan phase in `Get-DeviceCheckDiscoveredHosts` to scan ports 5985 and 445 concurrently using native .NET `TcpClient.ConnectAsync` tasks. This completely eliminates the runspace-creation overhead of `ForEach-Object -Parallel` (saving ~5.2 seconds) and reduces the port scan duration to exactly **~500ms**.
+- **Fixed and optimized parallel history DNS lookups:** Resolved a parameter binding error in `Resolve-DnsName` (removed invalid `-Timeout` parameter and used `-QuickTimeout`). Prevented the slow fallback to `[System.Net.Dns]::GetHostAddresses` when `Resolve-DnsName` throws exceptions on offline hosts, dropping the DNS resolution phase duration from 2.5 seconds to **~30-50ms**.
+- **Removed slow reverse DNS lookups:** Completely removed blocking `[System.Net.Dns]::GetHostEntry` from the reverse resolution phase in `Get-DeviceCheckDiscoveredHosts`. Reverse resolution now uses only `Resolve-DnsName -DnsOnly` which avoids the slow 4.5-second NetBIOS/LLMNR query timeouts on discovered hosts without PTR records, dropping reverse resolution time to **~70-90ms**.
 - **Reduced TUI polling loop sleep:** Decreased the idle polling sleep in `Read-ConsoleKey` from 40ms to 10ms, eliminating key repeat scroll stuttering and reducing input latency to match the ultra-fast (3.5-6ms) render loop.
 - **Single-write main frame renderer:** `Render-Frame` now builds the main TUI navigation frame with `StringBuilder` and emits it through one `[Console]::Write()` call, reducing PowerShell host write overhead during scrolling.
 - **Optional TUI perf status:** Set `$env:DEVICECHECK_TUI_PERF = '1'` before launching `DeviceCheck.ps1` to show last-frame render time, frame size, console writes, visible rows, and detail lines in the status line.
