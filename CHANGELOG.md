@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added dynamic Benchmark Mode toggling (hotkey `B` in the `Ctrl+L` connection selector screen). When enabled, it displays a beautiful TUI modal overlay showing the detailed network scan phase durations immediately after completing a scan, persisting the setting in `config.json`.
+- Added a progress notebook ([progress_notebook.md](file:///d:/Users/joty79/scripts/DeviceCheck/docs/progress_notebook.md)) under the `docs` folder to record detailed walkthroughs of major changes and progress.
 - Added network scan phase benchmarking and detailed phase durations logger (`network_scan_benchmark.log`) in `Get-DeviceCheckDiscoveredHosts` to measure and log exact network scan performance stages (DNS, pings, TCP port scans, and MAC lookups).
 - Added offline target snapshot loading support. When attempting to connect to an offline or unreachable LAN target, the connection selector now checks if a local cached snapshot exists for that computer name. If a cache is found, it prompts the user to load and view the offline snapshot instead of failing with a resolution error, disabling live refresh dynamically.
 - Added an active `R` rescan hotkey in the `Invoke-ConnectionHistorySelector` LAN connection selector screen to reload discovered hosts without exiting the menu.

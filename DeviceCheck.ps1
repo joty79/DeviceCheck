@@ -30,6 +30,7 @@ if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {
     $script:DeviceCheckCacheRoot = Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
 }
 $env:DEVICECHECK_CHROME_PROFILE = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'browser-profile'
+$script:BenchmarkMode = $false
 
 function Initialize-AvailableModels {
     $script:AvailableModels = [System.Collections.Generic.List[object]]::new()
@@ -118,10 +119,15 @@ function Initialize-AvailableModels {
     if (Test-Path -LiteralPath $configPath) {
         try {
             $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-            if ($null -ne $config -and $config.SelectedModelIds) {
-                $selectedIds = [System.Collections.Generic.HashSet[string]]::new([string[]]$config.SelectedModelIds, [System.StringComparer]::OrdinalIgnoreCase)
-                foreach ($model in $script:AvailableModels) {
-                    $model.Selected = $selectedIds.Contains($model.ApiId)
+            if ($null -ne $config) {
+                if ($config.SelectedModelIds) {
+                    $selectedIds = [System.Collections.Generic.HashSet[string]]::new([string[]]$config.SelectedModelIds, [System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($model in $script:AvailableModels) {
+                        $model.Selected = $selectedIds.Contains($model.ApiId)
+                    }
+                }
+                if ($null -ne $config.BenchmarkMode) {
+                    $script:BenchmarkMode = [bool]$config.BenchmarkMode
                 }
             }
         } catch {
@@ -140,6 +146,7 @@ function Save-ModelSelection {
         )
         $config = [pscustomobject]@{
             SelectedModelIds = $selectedIds
+            BenchmarkMode    = $script:BenchmarkMode
         }
         $configPath = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'config.json'
         $config | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding UTF8
@@ -4508,11 +4515,14 @@ function Invoke-ConnectionHistorySelector {
             Add-UiFrameLine -Frame $frame -Text "$belowMessage$($_C.EraseLn)"
             Add-UiFrameLine -Frame $frame -Text "$($_C.EraseLn)"
 
+            $benchmarkStatus = $(if ($script:BenchmarkMode) { "ON" } else { "OFF" })
             $segments = @(
                 New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
                 New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'R' -Color $_C.Info
                 New-UiShortcutSegment -Text ' = rescan   ' -Color $_C.Dim
+                New-UiShortcutSegment -Text 'B' -Color $_C.Gold
+                New-UiShortcutSegment -Text " = benchmark ($benchmarkStatus)   " -Color $_C.Dim
                 New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
                 New-UiShortcutSegment -Text ' = select   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'Del' -Color $_C.Fail
@@ -4525,6 +4535,10 @@ function Invoke-ConnectionHistorySelector {
 
             $key = Read-ConsoleKey
             switch ($key.Key) {
+                'B' {
+                    $script:BenchmarkMode = -not $script:BenchmarkMode
+                    Save-ModelSelection
+                }
                 'UpArrow' {
                     $newIdx = $selectedIndex
                     while ($newIdx -gt 0) {
@@ -4596,6 +4610,31 @@ function Invoke-ConnectionHistorySelector {
                     Write-UiFrame -Frame $frame
                     
                     $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts)
+                    
+                    if ($script:BenchmarkMode) {
+                        # Display benchmark results
+                        Clear-TuiScreen
+                        $frame = New-UiFrame
+                        Add-UiFrameBanner -Frame $frame -Title 'Network Scan Benchmark' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
+                        Add-UiFrameLine -Frame $frame
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Network Scan Completed Successfully!$($_C.Reset)$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame -Text "  ------------------------------------$($_C.EraseLn)"
+                        
+                        $logFile = Join-Path -Path $global:PSScriptRoot -ChildPath 'network_scan_benchmark.log'
+                        if (Test-Path -LiteralPath $logFile) {
+                            $lines = Get-Content -LiteralPath $logFile -Tail 15
+                            foreach ($line in $lines) {
+                                if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                    Add-UiFrameLine -Frame $frame -Text "  $line$($_C.EraseLn)"
+                                }
+                            }
+                        }
+                        Add-UiFrameLine -Frame $frame -Text "  ------------------------------------$($_C.EraseLn)"
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Press any key to return to menu...$($_C.Reset)$($_C.EraseLn)"
+                        Write-UiFrame -Frame $frame
+                        $null = Read-ConsoleKey
+                    }
+                    
                     $selectedIndex = -1 # Reset selection
                     $script:RequestForceClear = $true
                 }
