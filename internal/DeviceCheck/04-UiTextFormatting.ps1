@@ -615,16 +615,17 @@ function Get-EvidenceBatchStatusText {
     $queuedCount = $script:EvidenceBatchQueue.Count
     $total = [Math]::Max(1, [int]$state.Total)
     $completed = [Math]::Min([int]$state.Completed, $total)
-    $elapsed = [int]((Get-Date) - $state.StartedAt).TotalSeconds
+    $elapsed = ((Get-Date) - $state.StartedAt).TotalSeconds
+    $elapsedStr = "{0:N1}s" -f $elapsed
     $barWidth = 18
     $filled = [Math]::Min($barWidth, [int][Math]::Floor(($completed / $total) * $barWidth))
     $bar = ('#' * $filled) + ('-' * ($barWidth - $filled))
 
     if ($queuedCount -eq 0 -and $activeCount -eq 0 -and $completed -ge $total) {
-        return "Evidence complete: $($state.Label) [$bar] $completed/$total | ${elapsed}s"
+        return "Evidence complete: $($state.Label) [$bar] $completed/$total | $elapsedStr"
     }
 
-    return "Evidence scan: $($state.Label) [$bar] $completed/$total | active $activeCount | queued $queuedCount | ${elapsed}s"
+    return "Evidence scan: $($state.Label) [$bar] $completed/$total | active $activeCount | queued $queuedCount | $elapsedStr"
 }
 
 function Complete-EvidenceBatchIfFinished {
@@ -636,9 +637,16 @@ function Complete-EvidenceBatchIfFinished {
     $total = [Math]::Max(0, [int]$state.Total)
     if ([int]$state.Completed -lt $total) { return }
 
-    $elapsed = [int]((Get-Date) - $state.StartedAt).TotalSeconds
+    $elapsed = ((Get-Date) - $state.StartedAt).TotalSeconds
+    $elapsedStr = "{0:N2}s" -f $elapsed
     $errorText = $(if ([int]$state.Errors -gt 0) { " | $($state.Errors) errors" } else { '' })
-    $script:SystemScanMessage = "Evidence scan complete: $($state.Label) | $($state.Completed)/$total devices | ${elapsed}s$errorText | $(Get-Date -Format 'HH:mm:ss')"
+    $logMsg = "Evidence scan complete: $($state.Label) | $($state.Completed)/$total devices | $elapsedStr$errorText"
+    $script:SystemScanMessage = "$logMsg | $(Get-Date -Format 'HH:mm:ss')"
+
+    if ($null -ne $script:BenchmarkLog) {
+        $script:BenchmarkLog.Add("[$(Get-Date -Format 'HH:mm:ss.fff')] $logMsg")
+    }
+
     $script:EvidenceBatchState = $null
     $script:EvidenceBatchQueuedIds.Clear()
 }

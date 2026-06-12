@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optimized `Get-PnpDeviceProperty` performance by specifying `$importantKeys` via the `-KeyName` parameter to retrieve only the 18 required driver properties instead of querying all properties.
 
 ### Added
+- Added high-precision evidence batch scan execution time tracking with fractional seconds (using `TotalSeconds` double format instead of integer rounding) in [04-UiTextFormatting.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/04-UiTextFormatting.ps1).
+- Added automatic logging of evidence batch scan total duration, device count, and errors into the persistent `tui_benchmark.log` upon completion of a batch run.
 - Added fallback resolution for driver friendly name using `DEVPKEY_Device_DeviceDesc` inside `Get-InstalledDriverEvidenceFields` in [03-EvidenceResolvers.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/03-EvidenceResolvers.ps1) if the `SignedDriver` object is missing.
 - Added `internal\Test-DeviceCheckStructure.ps1`, an executable structure guard that prevents `DeviceCheck.ps1` from silently growing back into a monolith by checking entrypoint line count, root function definitions, parser validity, part count, and per-part line budgets.
 - Added a tracked optional pre-commit hook in `.githooks\pre-commit` and a GitHub Actions workflow in `.github\workflows\devicecheck-structure.yml` so the structure guard can be enforced locally and in PR/push checks.
