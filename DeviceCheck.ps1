@@ -4620,7 +4620,10 @@ function Invoke-ConnectionHistorySelector {
                         Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Network Scan Completed Successfully!$($_C.Reset)$($_C.EraseLn)"
                         Add-UiFrameLine -Frame $frame -Text "  ------------------------------------$($_C.EraseLn)"
                         
-                        $logFile = Join-Path -Path $global:PSScriptRoot -ChildPath 'network_scan_benchmark.log'
+                        $resolvedScriptRoot = $PSScriptRoot
+                        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
+                        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
+                        $logFile = Join-Path -Path $resolvedScriptRoot -ChildPath 'network_scan_benchmark.log'
                         if (Test-Path -LiteralPath $logFile) {
                             $lines = Get-Content -LiteralPath $logFile -Tail 15
                             foreach ($line in $lines) {
