@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed hostname resolution and device visibility in the LAN connection selector:
-  - Added parallel ICMP subnet pinging to dynamically refresh the Windows OS ARP cache, avoiding stale cached states (like WinRM detection lagging) without needing a script restart.
+  - Added parallel ICMP subnet pinging to dynamically refresh the Windows OS ARP cache, avoiding stale cached states (like WinRM detection lagging) without needing a script restart. Wrapped `WaitAll` in a try/catch block to prevent AggregateException crashes from failed ping tasks.
   - Added `GetHostEntry` fallback for online hosts to resolve local NetBIOS hostnames (e.g. `DESKTOP-GU5851U`) when DNS records are missing.
   - Enabled discovery of active network hosts that do not have WinRM or SMB enabled (e.g. boss computer) by leveraging ICMP echo replies, rendering them as `(WinRM Disabled)`.
 - Fixed a bug in the LAN connection selector where toggling Benchmark Mode to ON rendered stale timing results from a previous script session. Added `$script:ScriptStartTime` tracking and restricted `$script:LastNetworkScanResult` updates to only occur when Benchmark Mode is enabled, ensuring toggling it ON after a benchmark-disabled scan shows `(No scans run yet)` until `R` (rescan) is pressed.

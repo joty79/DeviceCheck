@@ -3914,7 +3914,9 @@ function Get-DeviceCheckDiscoveredHosts {
         for ($i = 0; $i -lt $pingTasks.Count; $i++) {
             $tasksArray[$i] = $pingTasks[$i].Task
         }
-        [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
+        try {
+            [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
+        } catch {}
     }
     
     # Collect IPs that replied successfully to Ping
