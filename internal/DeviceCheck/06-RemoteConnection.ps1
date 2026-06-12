@@ -325,6 +325,83 @@ function Get-CurrentNetworkIdentity {
     }
 }
 
+function Get-DeviceCheckHostsCache {
+    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try {
+            $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+            $hash = @{}
+            if ($null -ne $json) {
+                foreach ($prop in $json.PSObject.Properties) {
+                    $hash[$prop.Name] = $prop.Value
+                }
+            }
+            return $hash
+        } catch {}
+    }
+    return @{}
+}
+
+function Save-DeviceCheckHostsCache {
+    param([Parameter(Mandatory)]$Cache)
+    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
+    try {
+        $json = $Cache | ConvertTo-Json -Depth 4
+        $json | Set-Content -LiteralPath $path -Encoding UTF8
+    } catch {}
+}
+
+function Start-DeviceCheckBackgroundResolver {
+    param([Parameter(Mandatory)][string[]]$IPs)
+    if ($IPs.Count -eq 0) { return }
+    $cachePath = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
+    
+    $null = Start-Job -ScriptBlock {
+        param($ips, $path)
+        $cache = @{}
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            try {
+                $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+                if ($null -ne $json) {
+                    foreach ($prop in $json.PSObject.Properties) {
+                        $cache[$prop.Name] = $prop.Value
+                    }
+                }
+            } catch {}
+        }
+        $updated = $false
+        foreach ($ip in $ips) {
+            if (-not $cache.ContainsKey($ip)) {
+                try {
+                    $entry = [System.Net.Dns]::GetHostEntry($ip)
+                    if ($entry.HostName) {
+                        $name = $entry.HostName
+                        if ($name -match '^([^.]+)\.') { $name = $Matches[1] }
+                        $cache[$ip] = $name
+                        $updated = $true
+                    }
+                } catch {
+                    try {
+                        $dnsRes = Resolve-DnsName -Name $ip -QuickTimeout -ErrorAction Stop
+                        if ($dnsRes) {
+                            $name = $dnsRes[0].NameHost
+                            if ($name -match '^([^.]+)\.') { $name = $Matches[1] }
+                            $cache[$ip] = $name
+                            $updated = $true
+                        }
+                    } catch {}
+                }
+            }
+        }
+        if ($updated) {
+            try {
+                $json = $cache | ConvertTo-Json -Depth 4
+                $json | Set-Content -LiteralPath $path -Encoding UTF8
+            } catch {}
+        }
+    } -ArgumentList $IPs, $cachePath
+}
+
 function Get-DeviceCheckDiscoveredHosts {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
     
@@ -624,14 +701,22 @@ function Get-DeviceCheckDiscoveredHosts {
     
     $onlineIPs = @($onlineIPsSet)
     $resolvedNames = @{}
+    $hostsCache = Get-DeviceCheckHostsCache
     
-    if ($onlineIPs) {
+    $unresolvedIPs = [System.Collections.Generic.List[string]]::new()
+    foreach ($ip in $onlineIPs) {
+        if ($historyIpToName.ContainsKey($ip)) {
+            $resolvedNames[$ip] = $historyIpToName[$ip]
+        } elseif ($hostsCache.ContainsKey($ip)) {
+            $resolvedNames[$ip] = $hostsCache[$ip]
+        } else {
+            $unresolvedIPs.Add($ip)
+        }
+    }
+    
+    if ($unresolvedIPs.Count -gt 0) {
         $resolutionTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
-        foreach ($ip in $onlineIPs) {
-            if ($historyIpToName.ContainsKey($ip)) {
-                $resolvedNames[$ip] = $historyIpToName[$ip]
-                continue
-            }
+        foreach ($ip in $unresolvedIPs) {
             # Start asynchronous NetBIOS/DNS resolution
             try {
                 $dnsTask = [System.Net.Dns]::GetHostEntryAsync($ip)
@@ -651,17 +736,26 @@ function Get-DeviceCheckDiscoveredHosts {
                 $null = [System.Threading.Tasks.Task]::WaitAll($resTasksArray, 400)
             } catch {}
             
+            $newlyResolved = @{}
             foreach ($rt in $resolutionTasks) {
                 if ($rt.Task.IsCompleted -and -not $rt.Task.IsFaulted -and $rt.Task.Result.HostName) {
                     $hostName = $rt.Task.Result.HostName
                     if ($hostName -match '^([^.]+)\.') { $hostName = $Matches[1] }
                     $resolvedNames[$rt.IP] = $hostName
+                    $newlyResolved[$rt.IP] = $hostName
                 }
+            }
+            if ($newlyResolved.Count -gt 0) {
+                foreach ($ip in $newlyResolved.Keys) {
+                    $hostsCache[$ip] = $newlyResolved[$ip]
+                }
+                Save-DeviceCheckHostsCache -Cache $hostsCache
             }
         }
     }
     
     # Fallback to local DNS/IP lookup if async GetHostEntry failed or timed out
+    $stillUnresolved = [System.Collections.Generic.List[string]]::new()
     foreach ($ip in $onlineIPs) {
         if (-not $resolvedNames.ContainsKey($ip)) {
             try {
@@ -670,13 +764,22 @@ function Get-DeviceCheckDiscoveredHosts {
                     $dnsName = $dnsRes[0].NameHost
                     if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
                     $resolvedNames[$ip] = $dnsName
+                    $hostsCache[$ip] = $dnsName
+                    Save-DeviceCheckHostsCache -Cache $hostsCache
                 } else {
                     $resolvedNames[$ip] = $ip
+                    $stillUnresolved.Add($ip)
                 }
             } catch {
                 $resolvedNames[$ip] = $ip
+                $stillUnresolved.Add($ip)
             }
         }
+    }
+    
+    # Resolve unresolved IPs in background to populate cache for future scans
+    if ($stillUnresolved.Count -gt 0) {
+        Start-DeviceCheckBackgroundResolver -IPs @($stillUnresolved)
     }
     
     # Build final scan results list
