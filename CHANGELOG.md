@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `Diagnose-SmbSharing.ps1`, an interactive diagnostic and fix utility script to automatically audit and repair Windows LAN/SMB file sharing settings, including Private network profile category configuration, Windows Defender Firewall file sharing and network discovery rules, and LAN-related services configuration.
 
 ### Fixed
+- Fixed a pipeline leakage bug and strict-mode crash in `Get-DeviceCheckDiscoveredHosts` and `Invoke-ConnectionHistorySelector`:
+  - Discarded the `[bool]` return values of both `[System.Threading.Tasks.Task]::WaitAll` calls (on lines 3927 and 4039) using `$null = ` assignment, preventing boolean values from leaking into the output pipeline of `Get-DeviceCheckDiscoveredHosts` and polluting the discovered hosts collection.
+  - Initialized `$results = @()` locally at the start of `Get-DeviceCheckDiscoveredHosts` to prevent parent/global scope variable leakage (dynamic scope leaking).
 - Fixed hostname resolution and device visibility in the LAN connection selector:
   - Optimized subnet scanning to only target neighbor/history IPs to keep scans extremely fast (<1.5s), avoiding the slow 254-IP subnet pinging.
   - Added concurrent ICMP pinging only on targeted IPs to refresh the ARP cache and detect active non-WinRM/non-SMB devices (like the boss computer), rendering them as `(WinRM Disabled)`.

@@ -3717,6 +3717,7 @@ function Get-DeviceCheckDiscoveredHosts {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
     
     $discovered = [System.Collections.Generic.List[object]]::new()
+    $results = @()
     
     # 1. Interfaces lookup
     $swPhase = [System.Diagnostics.Stopwatch]::StartNew()
@@ -3924,7 +3925,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 $tasksArray[$i] = $pingTasks[$i].Task
             }
             try {
-                [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
+                $null = [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
             } catch {}
         }
         
@@ -4036,7 +4037,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 $resTasksArray[$i] = $resolutionTasks[$i].Task
             }
             try {
-                [System.Threading.Tasks.Task]::WaitAll($resTasksArray, 400)
+                $null = [System.Threading.Tasks.Task]::WaitAll($resTasksArray, 400)
             } catch {}
             
             foreach ($rt in $resolutionTasks) {
