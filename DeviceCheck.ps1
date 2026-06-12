@@ -23,7 +23,11 @@ $script:ActiveSearches = [ordered]@{}
 $script:EvidenceBatchQueue = [System.Collections.Generic.Queue[object]]::new()
 $script:EvidenceBatchQueuedIds = [System.Collections.Generic.HashSet[string]]::new()
 $script:EvidenceBatchState = $null
-$script:EvidenceBatchMaxConcurrent = 4
+$cpuCount = 4
+if (-not [string]::IsNullOrWhiteSpace($env:NUMBER_OF_PROCESSORS)) {
+    try { $cpuCount = [int]$env:NUMBER_OF_PROCESSORS } catch {}
+}
+$script:EvidenceBatchMaxConcurrent = [Math]::Max(4, [Math]::Min(12, $cpuCount))
 $script:RootExpanded = $true
 $script:DeviceCheckCacheRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'DeviceCheck'
 if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {

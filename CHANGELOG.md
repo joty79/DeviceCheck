@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Reduced the input loop sleep time during active background scans/lookups from 150ms to 50ms in [10-Input.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/10-Input.ps1) to improve UI responsiveness and speed up background queue processing.
+- Made the evidence scan concurrency limit scale dynamically based on the host system's logical processor count (using a range from 4 to 12 concurrent runspaces based on the NUMBER_OF_PROCESSORS environment variable) in [DeviceCheck.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/DeviceCheck.ps1) to maximize scanning throughput on multi-core PCs.
 - Refactored the monolithic `DeviceCheck.ps1` entrypoint into dot-sourced function groups under `internal\DeviceCheck\`. The root script now keeps startup state and the main event loop, while models/credentials, machine identity, evidence resolvers, UI formatting, inventory/snapshots, remote connection workflows, tree/details, rendering, lookup actions, and input handling live in focused files.
 
 ### Optimized
