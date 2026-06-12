@@ -150,6 +150,12 @@ pwsh -ExecutionPolicy Bypass -File .\internal\Resolve-HardwareIds.ps1 'USB\VID_5
 # Run Hardware ID resolver smoke tests
 pwsh -ExecutionPolicy Bypass -File .\internal\Test-HardwareIdResolver.ps1
 
+# Keep DeviceCheck.ps1 from growing back into a monolith
+pwsh -ExecutionPolicy Bypass -File .\internal\Test-DeviceCheckStructure.ps1
+
+# Optional: enforce the same structure guard before every local commit
+git config core.hooksPath .githooks
+
 # Build and test ALSA UCM USB audio profile evidence
 pwsh -ExecutionPolicy Bypass -File .\internal\Update-AlsaUcmProfiles.ps1
 pwsh -ExecutionPolicy Bypass -File .\internal\Test-AlsaUcmResolver.ps1
@@ -174,6 +180,7 @@ pwsh -ExecutionPolicy Bypass -File .\internal\Invoke-SdioDriverAudit.ps1 `
 | `internal\Update-HardwareIdDatabases.ps1` | Imports local `source\hwdata` into generated `data\hwdb`. |
 | `internal\HardwareIdResolver.psm1` | Parses and resolves PCI/USB/HID/HDAUDIO/DISPLAY/storage/ACPI/PNP IDs from the local cache. |
 | `internal\Test-HardwareIdResolver.ps1` | Smoke-tests resolver behavior for USB `VID/PID/REV/MI`, generic USB class compatible IDs, SCSI/USBSTOR/IDE storage IDs, DISPLAY monitor IDs, and HDAUDIO codec/subsystem IDs. |
+| `internal\Test-DeviceCheckStructure.ps1` | Fails when `DeviceCheck.ps1` grows beyond the entrypoint budget, regains local function definitions, or any dot-sourced part exceeds the per-file budget. |
 | `internal\MonitorEdidResolver.psm1` | Decodes raw monitor EDID bytes and reads registry, WMI, and installed-INF evidence for present DISPLAY devices. |
 | `internal\Test-MonitorEdidResolver.ps1` | Smoke-tests EDID manufacturer/product/name/date/checksum decoding with a synthetic fixture; `-IncludeLiveMonitor` adds real local monitor WMI/INF checks. |
 | `internal\Update-AlsaUcmProfiles.ps1` | Imports local ALSA UCM `USB-Audio.conf` profile rules into generated `data\hwdb`. |
@@ -185,6 +192,8 @@ pwsh -ExecutionPolicy Bypass -File .\internal\Invoke-SdioDriverAudit.ps1 `
 | `internal\New-DriverEvidenceBundle.ps1` | Composes inventory, candidate links, INF evidence, and research trust. |
 | `internal\Test-DriverCandidatePackageMetadata.ps1` | Creates/validates candidate package metadata templates. |
 | `internal\New-DriverPackageMetadataCollectionPlan.ps1` | Creates skeleton-only source adapter tasks for metadata collection. |
+
+GitHub Actions runs the same structure guard on push and pull request through `.github\workflows\devicecheck-structure.yml`. The optional tracked Git hook can run it before local commits after `git config core.hooksPath .githooks`.
 
 Generated folders such as `data\hwdb`, `devices`, `driver-candidates`, `inf-matches`, `driver-evidence`, and `driver-package-metadata` are ignored by Git.
 The adopted `source\hwdata\pci.ids`, `usb.ids`, `pnp.ids`, `source\alsa-ucm-conf\USB-Audio.conf`, and source license/readme/provenance files are tracked because they are the source input for rebuilding the generated cache; cloned study repos under `source\` remain ignored.
@@ -226,6 +235,7 @@ DeviceCheck/
 │   ├── HARDWARE_SOURCE_INTAKE.md                   # Hardware/driver source intake notes
 │   └── LOCAL_SOURCE_PROJECT_AUDIT.md               # Local source repo audit and transfer decisions
 ├── internal/
+│   ├── DeviceCheck/                                  # Dot-sourced function groups used by DeviceCheck.ps1
 │   ├── Export-DeviceCheckEvidence.ps1              # Local/remote snapshot collector
 │   ├── HardwareIdResolver.psm1                      # Offline Hardware ID parser/resolver
 │   └── InfDriverParser.psm1                         # Section-aware local INF parser
@@ -239,7 +249,7 @@ DeviceCheck/
 ├── .gitattributes        # Repository line-ending policy
 ├── Connect-PaliosDeviceCheck.ps1 # Convenience wrapper for PALIOS remote snapshot export
 ├── Enable-RemotePs.ps1     # WinRM/PSRemoting administrator configuration helper
-├── DeviceCheck.ps1         # Main interactive TUI script
+├── DeviceCheck.ps1         # Main TUI entrypoint, startup state, and event loop
 ├── Get-DriverUpdateAgent.ps1 # Gemini tool-calling driver finder
 ├── PROJECT_RULES.md        # Project-specific implementation memory
 ├── PS_UI_Blueprint.psm1    # TUI synchronized rendering engine

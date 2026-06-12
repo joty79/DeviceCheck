@@ -56,6 +56,14 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-12
+Problem: `DeviceCheck.ps1` had grown past 8,100 lines, making review, AI-assisted edits, and bug isolation slow and risky.
+Root cause: Most feature areas lived in one root script even though they had clear boundaries such as model selection, evidence resolvers, remote connection workflows, rendering, lookup actions, and input handling.
+Guardrail/rule: Keep `DeviceCheck.ps1` as the entrypoint with startup state and the main event loop. Put new reusable functions into the appropriate dot-sourced `internal\DeviceCheck\*.ps1` function group, and use `$script:DeviceCheckRepoRoot` inside those groups for repo-root paths instead of `$PSScriptRoot`.
+Executable guardrail: Run `pwsh -ExecutionPolicy Bypass -File .\internal\Test-DeviceCheckStructure.ps1` after DeviceCheck edits. The guard fails when `DeviceCheck.ps1` exceeds the entrypoint line budget, regains local function definitions, has parser errors, is missing function-group parts, or any dot-sourced part exceeds its per-file budget. Use `git config core.hooksPath .githooks` to enable the tracked local pre-commit hook, and keep `.github\workflows\devicecheck-structure.yml` as the PR/push safety net.
+Files affected: `DeviceCheck.ps1`, `internal\DeviceCheck\*.ps1`, `internal\Test-DeviceCheckStructure.ps1`, `.githooks\pre-commit`, `.github\workflows\devicecheck-structure.yml`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and every `internal\DeviceCheck\*.ps1` part; non-interactive loader smoke loaded all parts, initialized available models, and read machine evidence; local resolver/inventory smoke initialized hardware, board, ALSA, and monitor resolvers and ran `Invoke-SystemScan -Quiet`; `internal\Test-DeviceCheckStructure.ps1`.
+
 Date: 2026-06-08
 Problem: DeviceCheck needed to compare known-good installed drivers with SDIO's indexed candidates without copying SDIO source logic or treating fallback matches as exact driver proof.
 Root cause: SDIO ranks candidates from its own INF indexes and can propose same-version drivers through compatible IDs even when the installed driver matched a more specific hardware ID such as `SUBSYS+REV`. The first NEOS Realtek 5GbE sample showed SDIO candidates with status `CURRENT+WORSE` because the SDIO INF rows matched `PCI\VEN_10EC&DEV_8126&REV_01` / `PCI\VEN_10EC&DEV_8126`, not the installed exact `PCI\VEN_10EC&DEV_8126&SUBSYS_7E511462&REV_01`.

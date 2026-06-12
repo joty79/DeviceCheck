@@ -1,0 +1,17 @@
+name: DeviceCheck structure
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  structure:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate DeviceCheck structure
+        shell: pwsh
+        run: |
+          ./internal/Test-DeviceCheckStructure.ps1

@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Refactored the monolithic `DeviceCheck.ps1` entrypoint into dot-sourced function groups under `internal\DeviceCheck\`. The root script now keeps startup state and the main event loop, while models/credentials, machine identity, evidence resolvers, UI formatting, inventory/snapshots, remote connection workflows, tree/details, rendering, lookup actions, and input handling live in focused files.
+
 ### Added
+- Added `internal\Test-DeviceCheckStructure.ps1`, an executable structure guard that prevents `DeviceCheck.ps1` from silently growing back into a monolith by checking entrypoint line count, root function definitions, parser validity, part count, and per-part line budgets.
+- Added a tracked optional pre-commit hook in `.githooks\pre-commit` and a GitHub Actions workflow in `.github\workflows\devicecheck-structure.yml` so the structure guard can be enforced locally and in PR/push checks.
 - Added dynamic Benchmark Mode toggling (hotkey `B` in the `Ctrl+L` connection selector screen). When enabled, it renders detailed network scan phase durations inline below the Actions section, using the TUI's native scrolling view and persisting the setting in `config.json`.
 - Added a progress notebook ([progress_notebook.md](file:///d:/Users/joty79/scripts/DeviceCheck/docs/progress_notebook.md)) under the `docs` folder to record detailed walkthroughs of major changes and progress.
 - Added network scan phase benchmarking inside `Get-DeviceCheckDiscoveredHosts` that writes detailed phase durations into date-time stamped log files inside a dedicated `logs` folder (ignored in git) ONLY when Benchmark Mode is enabled, dynamically reading the most recent log file to render results.
@@ -34,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Optimized subnet scanning to only target neighbor/history IPs to keep scans extremely fast (<1.5s), avoiding the slow 254-IP subnet pinging.
   - Added concurrent ICMP pinging only on targeted IPs to refresh the ARP cache and detect active non-WinRM/non-SMB devices (like the boss computer), rendering them as `(WinRM Disabled)`.
   - Added asynchronous NetBIOS resolution via parallel `GetHostEntryAsync` requests with a 400ms timeout for online hosts, resolving local machine names (e.g. `DESKTOP-GU5851U`) without blocking the main thread. Wrapped `WaitAll` calls in try/catch blocks to absorb `AggregateException` crashes.
+  - Filtered out ping-only hosts that have both WinRM (5985) and SMB (445) ports closed/timed out (such as sleeping PCs in Modern Standby/low-power states or non-Windows devices), ensuring that only active, manageable Windows PCs (e.g., `se` and `datacomputer-erp`) are populated under discovered hosts.
 - Fixed a bug in the LAN connection selector where toggling Benchmark Mode to ON rendered stale timing results from a previous script session. Added `$script:ScriptStartTime` tracking and restricted `$script:LastNetworkScanResult` updates to only occur when Benchmark Mode is enabled, ensuring toggling it ON after a benchmark-disabled scan shows `(No scans run yet)` until `R` (rescan) is pressed.
 - Fixed a parameter binding error in `Invoke-ConnectionHistorySelector` where the `Join-Path` command failed with "Cannot bind argument to parameter 'Path' because it is an empty string" when `$global:PSScriptRoot` was not defined. Added robust fallback check for the active script root folder.
 - Fixed a bug in `Diagnose-SmbSharing.ps1` where the Network Discovery firewall rules group check and enabling command used the incorrect group resource ID `@FirewallAPI.dll,-27752` instead of the correct `@FirewallAPI.dll,-32752`, causing a false positive warning and preventing the rules from actually being enabled.
