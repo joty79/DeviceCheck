@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Optimized
 - Optimized real-time local device evidence collection ("E" hotkey) in [09-ActionsAndLookups.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/09-ActionsAndLookups.ps1) by bypassing the slow `Win32_PnPSignedDriver` WMI query (~1000ms per device) and constructing the equivalent `SignedDriver` PSCustomObject metadata directly from present PnP registry properties.
 - Optimized `Get-PnpDeviceProperty` performance by specifying `$importantKeys` via the `-KeyName` parameter to retrieve only the 18 required driver properties instead of querying all properties.
+- Optimized remote snapshot collection in [internal\Export-DeviceCheckEvidence.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/Export-DeviceCheckEvidence.ps1) by restricting batch properties retrieval to the 18 key properties using `-KeyName $importantKeys`, reducing remote payload size and CIM serialization time.
 
 ### Added
 - Added high-precision evidence batch scan execution time tracking with fractional seconds (using `TotalSeconds` double format instead of integer rounding) in [04-UiTextFormatting.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/04-UiTextFormatting.ps1).

@@ -168,6 +168,27 @@ function New-CollectorScriptBlock {
         $ErrorActionPreference = 'Stop'
         $VerbosePreference = 'Continue'
 
+        $importantKeys = @(
+            'DEVPKEY_Device_DeviceDesc',
+            'DEVPKEY_Device_BusReportedDeviceDesc',
+            'DEVPKEY_Device_HardwareIds',
+            'DEVPKEY_Device_CompatibleIds',
+            'DEVPKEY_Device_Manufacturer',
+            'DEVPKEY_Device_Service',
+            'DEVPKEY_Device_Class',
+            'DEVPKEY_Device_ClassGuid',
+            'DEVPKEY_Device_Driver',
+            'DEVPKEY_Device_DriverInfPath',
+            'DEVPKEY_Device_DriverInfSection',
+            'DEVPKEY_Device_DriverProvider',
+            'DEVPKEY_Device_DriverVersion',
+            'DEVPKEY_Device_DriverDate',
+            'DEVPKEY_Device_ProblemCode',
+            'DEVPKEY_Device_Parent',
+            'DEVPKEY_Device_LocationPaths',
+            'DEVPKEY_Device_ContainerId'
+        )
+
         function ConvertTo-PlainSnapshotValue {
             param($Value)
 
@@ -404,7 +425,7 @@ function New-CollectorScriptBlock {
                         }
                     }
                     if ($instanceIds.Count -gt 0) {
-                        $allProps = Get-PnpDeviceProperty -InstanceId $instanceIds -ErrorAction SilentlyContinue
+                        $allProps = Get-PnpDeviceProperty -InstanceId $instanceIds -KeyName $importantKeys -ErrorAction SilentlyContinue
                         $grouped = $allProps | Group-Object -Property InstanceId -AsHashTable -AsString
                         foreach ($instId in $instanceIds) {
                             $propsList = $grouped[$instId]
@@ -515,7 +536,7 @@ function New-CollectorScriptBlock {
                         }
                     }
                     if ($instanceIds.Count -gt 0) {
-                        $allProps = Get-PnpDeviceProperty -InstanceId $instanceIds -ErrorAction SilentlyContinue
+                        $allProps = Get-PnpDeviceProperty -InstanceId $instanceIds -KeyName $importantKeys -ErrorAction SilentlyContinue
                         $grouped = $allProps | Group-Object -Property InstanceId -AsHashTable -AsString
                         foreach ($instId in $instanceIds) {
                             $propsList = $grouped[$instId]
