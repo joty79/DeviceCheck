@@ -5,6 +5,7 @@ inf-matches/
 driver-evidence/
 driver-package-metadata/
 tui_benchmark.log
+logs/
 source/*
 !source/hwdata/
 source/hwdata/*
