@@ -3723,19 +3723,21 @@ function Get-DeviceCheckDiscoveredHosts {
     
     if (-not $interfaces) { 
         $timeInterfaces = $swPhase.Elapsed.TotalMilliseconds
-        $logLines = @(
-            "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] Network Scan Completed (No active interfaces)"
-            "  Total Time       : $([Math]::Round($swTotal.Elapsed.TotalMilliseconds, 1)) ms"
-            "  Phase 1 (Ifaces) : $([Math]::Round($timeInterfaces, 1)) ms"
-        )
-        $resolvedScriptRoot = $PSScriptRoot
-        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
-        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
-        $logsDir = Join-Path -Path $resolvedScriptRoot -ChildPath 'logs'
-        if (-not (Test-Path -LiteralPath $logsDir)) { $null = New-Item -ItemType Directory -Path $logsDir -Force }
-        $timestamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
-        $logFile = Join-Path -Path $logsDir -ChildPath "network_scan_$timestamp.log"
-        try { $logLines | Out-File -FilePath $logFile -Append -Encoding utf8 } catch {}
+        if ($script:BenchmarkMode) {
+            $logLines = @(
+                "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] Network Scan Completed (No active interfaces)"
+                "  Total Time       : $([Math]::Round($swTotal.Elapsed.TotalMilliseconds, 1)) ms"
+                "  Phase 1 (Ifaces) : $([Math]::Round($timeInterfaces, 1)) ms"
+            )
+            $resolvedScriptRoot = $PSScriptRoot
+            if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
+            if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
+            $logsDir = Join-Path -Path $resolvedScriptRoot -ChildPath 'logs'
+            if (-not (Test-Path -LiteralPath $logsDir)) { $null = New-Item -ItemType Directory -Path $logsDir -Force }
+            $timestamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+            $logFile = Join-Path -Path $logsDir -ChildPath "network_scan_$timestamp.log"
+            try { $logLines | Out-File -FilePath $logFile -Append -Encoding utf8 } catch {}
+        }
         return $discovered 
     }
     $timeInterfaces = $swPhase.Elapsed.TotalMilliseconds
@@ -4081,16 +4083,18 @@ function Get-DeviceCheckDiscoveredHosts {
     $logLines.Add("  Scan Results     : $($discovered.Count) hosts found ($($uniqueIPs.Count) unique IPs scanned)")
     $logLines.Add("")
     
-    $resolvedScriptRoot = $PSScriptRoot
-    if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
-    if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
-    $logsDir = Join-Path -Path $resolvedScriptRoot -ChildPath 'logs'
-    if (-not (Test-Path -LiteralPath $logsDir)) { $null = New-Item -ItemType Directory -Path $logsDir -Force }
-    $timestamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
-    $logFile = Join-Path -Path $logsDir -ChildPath "network_scan_$timestamp.log"
-    try {
-        $logLines | Out-File -FilePath $logFile -Append -Encoding utf8
-    } catch {}
+    if ($script:BenchmarkMode) {
+        $resolvedScriptRoot = $PSScriptRoot
+        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
+        if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
+        $logsDir = Join-Path -Path $resolvedScriptRoot -ChildPath 'logs'
+        if (-not (Test-Path -LiteralPath $logsDir)) { $null = New-Item -ItemType Directory -Path $logsDir -Force }
+        $timestamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+        $logFile = Join-Path -Path $logsDir -ChildPath "network_scan_$timestamp.log"
+        try {
+            $logLines | Out-File -FilePath $logFile -Append -Encoding utf8
+        } catch {}
+    }
     
     return $discovered
 }
