@@ -23,6 +23,7 @@ Drastically reduce network scan load times (hotkey `Ctrl+L`) from 10-20 seconds 
 4. **TUI Benchmark Mode:** Added a `$script:BenchmarkMode` setting (saved/loaded in `config.json` and toggled with the `B` key in the TUI). When enabled, it displays detailed phase timings directly inside the UI.
 5. **Robust Root Path Fallback:** Patched the `Join-Path` call in `Invoke-ConnectionHistorySelector` to use a multi-tiered fallback (`$PSScriptRoot` -> `$global:PSScriptRoot` -> `"."`) ensuring it never receives an empty string when resolved.
 6. **Inline Benchmark Rendering:** Refactored the benchmark results layout. Timing phases are now rendered cleanly as inline non-selectable items directly inside the main `Ctrl+L` connection selection list under a new `"Scan Benchmark Results"` section right below `"Actions"`, color-coded with green (`$_C.OK`) and gold (`$_C.Gold`) accents. This leverages the TUI's native scrolling view and completely removes the blocking input modal.
+7. **Dedicated Timestamped Logs Folder:** Moved benchmark scans into a dedicated `logs` directory inside the repository (ignored in `.gitignore`). Log filenames are now dynamically formatted with a date-time stamp (`network_scan_yyyy-MM-dd_HHmmss.log`) to keep individual scans separate and clean. The connection selector dynamically retrieves the most recent `network_scan_*.log` file from the `logs` folder to render timing results inline.
 
 ### Verification Results
 Scanning 15 unique IPs (with 2 online hosts) now completes in **~2.3 seconds** total:
