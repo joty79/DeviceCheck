@@ -3862,35 +3862,73 @@ function Get-DeviceCheckDiscoveredHosts {
     }
     $timeArpClear = $swPhase.Elapsed.TotalMilliseconds
 
-    # 4. Trigger active ARP discovery by pinging subnet broadcast and history hosts
+    # 4. Trigger active subnet discovery by pinging all IPs in the subnet concurrently (fast parallel ICMP)
     $swPhase.Restart()
+    $pingTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
+    
     foreach ($if in $interfaces) {
         if ($if.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') {
             $subnetPrefix = $Matches[1]
-            try {
-                $p = [System.Net.NetworkInformation.Ping]::new()
-                # Ping broadcast asynchronously to populate neighbor cache without blocking
-                $null = $p.SendAsync("$subnetPrefix.255", 250, $null)
-            } catch {}
+            for ($i = 1; $i -le 254; $i++) {
+                $targetIp = "$subnetPrefix.$i"
+                if ($targetIp -eq $if.IPAddress) { continue }
+                try {
+                    $p = [System.Net.NetworkInformation.Ping]::new()
+                    $task = $p.SendPingAsync($targetIp, 250)
+                    $pingTasks.Add([PSCustomObject]@{
+                        IP     = $targetIp
+                        Pinger = $p
+                        Task   = $task
+                    })
+                } catch {}
+            }
         }
     }
-
+    
+    # Also ping history IPs to refresh active ARP cache
     if ($historyIPs) {
-        $pingers = [System.Collections.Generic.List[System.Net.NetworkInformation.Ping]]::new()
         foreach ($ip in $historyIPs) {
-            try {
-                $p = [System.Net.NetworkInformation.Ping]::new()
-                $null = $p.SendAsync($ip, 250, $null)
-                $pingers.Add($p)
-            } catch {}
+            $alreadyAdded = $false
+            foreach ($pt in $pingTasks) {
+                if ($pt.IP -eq $ip) {
+                    $alreadyAdded = $true
+                    break
+                }
+            }
+            if (-not $alreadyAdded) {
+                try {
+                    $p = [System.Net.NetworkInformation.Ping]::new()
+                    $task = $p.SendPingAsync($ip, 250)
+                    $pingTasks.Add([PSCustomObject]@{
+                        IP     = $ip
+                        Pinger = $p
+                        Task   = $task
+                    })
+                } catch {}
+            }
         }
     }
-
-    # Wait a tiny bit for ARP replies to register in the OS cache
-    Start-Sleep -Milliseconds 300
+    
+    if ($pingTasks.Count -gt 0) {
+        $tasksArray = [System.Threading.Tasks.Task[]]::new($pingTasks.Count)
+        for ($i = 0; $i -lt $pingTasks.Count; $i++) {
+            $tasksArray[$i] = $pingTasks[$i].Task
+        }
+        [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
+    }
+    
+    # Collect IPs that replied successfully to Ping
+    $pingSuccessfulIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($pt in $pingTasks) {
+        if ($pt.Task.IsCompleted -and -not $pt.Task.IsFaulted -and $pt.Task.Result.Status -eq 'Success') {
+            $null = $pingSuccessfulIPs.Add($pt.IP)
+        }
+        $pt.Pinger.Dispose()
+    }
+    
     $timePing = $swPhase.Elapsed.TotalMilliseconds
     
-    # 5. Get neighbors for these interfaces
+    # 5. Get neighbors for these interfaces (local OS ARP cache)
     $swPhase.Restart()
     $neighbors = foreach ($if in $interfaces) {
         Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
@@ -3919,10 +3957,15 @@ function Get-DeviceCheckDiscoveredHosts {
         $neighborIPs = @($neighbors.IPAddress)
     }
     
+    # Combine neighbor cache IPs, ping-successful IPs, and history IPs
+    $combinedIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ip in $neighborIPs) { $null = $combinedIPs.Add($ip) }
+    foreach ($ip in $pingSuccessfulIPs) { $null = $combinedIPs.Add($ip) }
+    foreach ($ip in $historyIPs) { $null = $combinedIPs.Add($ip) }
+    
     $uniqueIPs = @(
-        ($neighborIPs + $historyIPs) | 
-            Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) } | 
-            Select-Object -Unique
+        $combinedIPs | 
+            Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) }
     )
     $timeNeighbors = $swPhase.Elapsed.TotalMilliseconds
     
@@ -3984,7 +4027,15 @@ function Get-DeviceCheckDiscoveredHosts {
             $c.TcpClient2.Dispose()
         }
         
-        # Combine results and do reverse DNS lookup for positive hits
+        # Ping Only Hosts (Online but WinRM & SMB closed - like DATACOMPUTER-ER)
+        $pingOnlyIPs = [System.Collections.Generic.List[string]]::new()
+        foreach ($ip in $pingSuccessfulIPs) {
+            if ($ip -notin $winrmOpenIPs -and $ip -notin $smbOpenIPs) {
+                $pingOnlyIPs.Add($ip)
+            }
+        }
+        
+        # Combine results and do reverse DNS lookup / fallback GetHostEntry for positive hits
         $historyMap = $historyIpToName
         $scanResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
         
@@ -3999,6 +4050,13 @@ function Get-DeviceCheckDiscoveredHosts {
                     if ($dnsRes) {
                         $dnsName = $dnsRes[0].NameHost
                         if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                    } else {
+                        # Fallback to GetHostEntry for online hosts (NetBIOS/LLMNR lookup)
+                        $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
+                        if ($hostEntry -and $hostEntry.HostName) {
+                            $dnsName = $hostEntry.HostName
+                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                        }
                     }
                 } catch {}
             }
@@ -4021,6 +4079,13 @@ function Get-DeviceCheckDiscoveredHosts {
                     if ($dnsRes) {
                         $dnsName = $dnsRes[0].NameHost
                         if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                    } else {
+                        # Fallback to GetHostEntry for online hosts (NetBIOS/LLMNR lookup)
+                        $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
+                        if ($hostEntry -and $hostEntry.HostName) {
+                            $dnsName = $hostEntry.HostName
+                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                        }
                     }
                 } catch {}
             }
@@ -4029,6 +4094,35 @@ function Get-DeviceCheckDiscoveredHosts {
                 HostName  = $dnsName
                 WinRmOpen = $false
                 SmbOpen   = $true
+            })
+        }
+        
+        # Ping Only Hosts (Online, WinRM/SMB Closed)
+        foreach ($ip in $pingOnlyIPs) {
+            $dnsName = $ip
+            if ($historyMap.ContainsKey($ip)) {
+                $dnsName = $historyMap[$ip]
+            } else {
+                try {
+                    $dnsRes = Resolve-DnsName -Name $ip -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
+                    if ($dnsRes) {
+                        $dnsName = $dnsRes[0].NameHost
+                        if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                    } else {
+                        # Fallback to GetHostEntry for online hosts (NetBIOS/LLMNR lookup)
+                        $hostEntry = [System.Net.Dns]::GetHostEntry($ip)
+                        if ($hostEntry -and $hostEntry.HostName) {
+                            $dnsName = $hostEntry.HostName
+                            if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
+                        }
+                    }
+                } catch {}
+            }
+            $scanResultsList.Add([PSCustomObject]@{
+                IP        = $ip
+                HostName  = $dnsName
+                WinRmOpen = $false
+                SmbOpen   = $false
             })
         }
         
