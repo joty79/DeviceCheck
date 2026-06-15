@@ -71,6 +71,7 @@ $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPa
 try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
 $script:SystemScanMessage = "Welcome to DeviceCheck Manager. Navigate the tree to inspect device properties."
 $script:TargetMode = 'Local'
+$global:TargetMode = 'Local'
 $script:TargetComputerName = Get-MachineDisplayName -MachineEvidence $script:MachineEvidence
 $script:TargetCredential = $null
 $script:CredentialCache = @{}

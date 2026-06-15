@@ -255,6 +255,7 @@ function Set-ActiveSnapshotTarget {
     $script:EvidenceBatchState = $null
 
     $script:TargetMode = 'RemoteSnapshot'
+    $global:TargetMode = 'RemoteSnapshot'
     $script:TargetComputerName = $ComputerName
     $script:TargetCredential = $Credential
     if ($null -ne $Credential -and -not [string]::IsNullOrWhiteSpace($ComputerName)) {
@@ -1843,6 +1844,7 @@ function Invoke-ConnectLanTarget {
             Write-UiFrame -Frame $frame
             
             $script:TargetMode = 'Local'
+            $global:TargetMode = 'Local'
             $script:TargetCredential = $null
             $script:TargetSnapshot = $null
             $script:TargetSnapshotPath = $null

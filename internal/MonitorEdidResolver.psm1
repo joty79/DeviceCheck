@@ -493,7 +493,11 @@ function Clear-MonitorWmiModuleCache {
 }
 
 function Initialize-MonitorWmiModuleCache {
-    if ($global:TargetMode -and $global:TargetMode -ne 'Local') {
+    $targetMode = 'Local'
+    if (Get-Variable -Name 'TargetMode' -Scope Global -ErrorAction SilentlyContinue) {
+        $targetMode = $global:TargetMode
+    }
+    if ($targetMode -ne 'Local') {
         return
     }
     if ($null -eq $script:GlobalWmiMonitorIDs) {

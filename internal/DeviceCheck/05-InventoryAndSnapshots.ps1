@@ -234,6 +234,7 @@ function Invoke-SystemScan {
 
     $scanStarted = Get-Date
     $script:TargetMode = 'Local'
+    $global:TargetMode = 'Local'
     $script:TargetSnapshot = $null
     $script:TargetSnapshotPath = $null
     $script:TargetComputerName = $env:COMPUTERNAME
