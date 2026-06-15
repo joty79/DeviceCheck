@@ -118,10 +118,23 @@ function Invoke-OfflineSnapshotSelector {
     $mode = 'Networks'
     $selectedNetwork = $null
     $selectedIndex = -1
+    $needsReload = $true
+    $offlineEntries = $null
 
     while ($true) {
         Lock-ViewportToWindow
-        $offlineEntries = @(Get-DeviceCheckOfflineMenuEntries -AllHistory $AllHistory -CurrentDiscovered $DiscoveredHosts -CurrentNetworkId $NetworkInfo.NetworkId)
+
+        # Measure Prep
+        $swPrep = [System.Diagnostics.Stopwatch]::StartNew()
+        if ($needsReload) {
+            $offlineEntries = @(Get-DeviceCheckOfflineMenuEntries -AllHistory $AllHistory -CurrentDiscovered $DiscoveredHosts -CurrentNetworkId $NetworkInfo.NetworkId)
+            $needsReload = $false
+        }
+        $prepMs = $swPrep.Elapsed.TotalMilliseconds
+        $swPrep.Stop()
+
+        # Measure Render
+        $swRender = [System.Diagnostics.Stopwatch]::StartNew()
         $items = [System.Collections.Generic.List[object]]::new()
 
         if ($mode -eq 'Networks') {
@@ -216,8 +229,19 @@ function Invoke-OfflineSnapshotSelector {
             (New-UiShortcutSegment -Text ' = back' -Color $_C.Dim)
         )
         Write-UiFrame -Frame $frame
+        $renderMs = $swRender.Elapsed.TotalMilliseconds
+        $swRender.Stop()
 
+        $swKey = [System.Diagnostics.Stopwatch]::StartNew()
         $key = Read-ConsoleKey
+        $keyReadMs = $swKey.Elapsed.TotalMilliseconds
+        $swKey.Stop()
+
+        if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
+            continue
+        }
+
+        $swProcess = [System.Diagnostics.Stopwatch]::StartNew()
         switch ($key.Key) {
             'UpArrow' {
                 for ($i = $selectedIndex - 1; $i -ge 0; $i--) {
@@ -252,6 +276,7 @@ function Invoke-OfflineSnapshotSelector {
                     Save-DeviceCheckConnectionHistory -History $updatedHistory
                     $AllHistory = $updatedHistory
                     $selectedIndex = -1
+                    $needsReload = $true
                 }
             }
             'Enter' {
@@ -289,5 +314,19 @@ function Invoke-OfflineSnapshotSelector {
                 }
             }
         }
+        $processMs = $swProcess.Elapsed.TotalMilliseconds
+        $swProcess.Stop()
+
+        # Log benchmark entry
+        $now = [datetime]::Now
+        $repeatDelayMs = $(if ($script:LastKeyTimestamp -ne [datetime]::MinValue) {
+            ($now - $script:LastKeyTimestamp).TotalMilliseconds
+        } else {
+            0
+        })
+        $script:LastKeyTimestamp = $now
+
+        $logEntry = "[$(Get-Date -Format 'HH:mm:ss.fff')] [Offline-Menu] Key: $($key.Key) (char: '$($key.KeyChar)') | KeyRead: $([Math]::Round($keyReadMs, 1))ms | EventProcess: $([Math]::Round($processMs, 1))ms | Render: $([Math]::Round($renderMs, 1))ms | Prep: $([Math]::Round($prepMs, 1))ms | KeyDelay: $([Math]::Round($repeatDelayMs, 1))ms"
+        $script:BenchmarkLog.Add($logEntry)
     }
 }
