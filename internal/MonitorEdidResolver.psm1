@@ -249,34 +249,44 @@ function Get-MonitorWmiEvidence {
         }
     }
 
+    if ($null -eq $script:GlobalWmiMonitorIDs) {
+        $script:GlobalWmiMonitorIDs = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue)
+    }
+    if ($null -eq $script:GlobalWmiMonitorBasics) {
+        $script:GlobalWmiMonitorBasics = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue)
+    }
+    if ($null -eq $script:GlobalWmiMonitorConnections) {
+        $script:GlobalWmiMonitorConnections = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue)
+    }
+    if ($null -eq $script:GlobalWmiMonitorModes) {
+        $script:GlobalWmiMonitorModes = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue)
+    }
+
     $wmiId = $null
     $wmiBasic = $null
     $wmiConn = $null
     $wmiModes = $null
 
-    try {
-        $wmiId = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue |
+    if ($script:GlobalWmiMonitorIDs) {
+        $wmiId = $script:GlobalWmiMonitorIDs |
             Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
             Select-Object -First 1
-    } catch {}
-
-    try {
-        $wmiBasic = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue |
+    }
+    if ($script:GlobalWmiMonitorBasics) {
+        $wmiBasic = $script:GlobalWmiMonitorBasics |
             Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
             Select-Object -First 1
-    } catch {}
-
-    try {
-        $wmiConn = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue |
+    }
+    if ($script:GlobalWmiMonitorConnections) {
+        $wmiConn = $script:GlobalWmiMonitorConnections |
             Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
             Select-Object -First 1
-    } catch {}
-
-    try {
-        $wmiModes = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue |
+    }
+    if ($script:GlobalWmiMonitorModes) {
+        $wmiModes = $script:GlobalWmiMonitorModes |
             Where-Object { $_.InstanceName -like "*$InstanceId*" -or $InstanceId -like "*$($_.InstanceName -replace '_\d+$', '')*" } |
             Select-Object -First 1
-    } catch {}
+    }
 
     if ($null -eq $wmiId -and $null -eq $wmiBasic -and $null -eq $wmiConn -and $null -eq $wmiModes) {
         return $null
@@ -475,4 +485,11 @@ function Get-MonitorInfEvidence {
     return $null
 }
 
-Export-ModuleMember -Function ConvertFrom-EdidBytes, Get-MonitorEdidFromRegistry, Get-MonitorWmiEvidence, Get-MonitorInfEvidence
+function Clear-MonitorWmiModuleCache {
+    $script:GlobalWmiMonitorIDs = $null
+    $script:GlobalWmiMonitorBasics = $null
+    $script:GlobalWmiMonitorConnections = $null
+    $script:GlobalWmiMonitorModes = $null
+}
+
+Export-ModuleMember -Function ConvertFrom-EdidBytes, Get-MonitorEdidFromRegistry, Get-MonitorWmiEvidence, Get-MonitorInfEvidence, Clear-MonitorWmiModuleCache

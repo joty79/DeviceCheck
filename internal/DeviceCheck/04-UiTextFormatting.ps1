@@ -32,7 +32,7 @@ function Get-NotePropertyValue {
         [string]$Name
     )
 
-    if ($null -eq $Object) { return $null }
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) { return $null }
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     return $property.Value
@@ -274,8 +274,17 @@ function Get-HardwareIdBreakdownLines {
         [object]$Evidence = $null
     )
 
+    if ([string]::IsNullOrWhiteSpace($HardwareId)) {
+        return @()
+    }
+
+    $cacheKey = "$HardwareId`-$Width"
+    if ($null -ne $script:HardwareIdBreakdownCache -and $script:HardwareIdBreakdownCache.ContainsKey($cacheKey)) {
+        return $script:HardwareIdBreakdownCache[$cacheKey]
+    }
+
     $lines = [System.Collections.Generic.List[string]]::new()
-    if ([string]::IsNullOrWhiteSpace($HardwareId) -or $script:HardwareIdResolverState -ne 'Ready') {
+    if ($script:HardwareIdResolverState -ne 'Ready') {
         return @()
     }
 
@@ -581,7 +590,11 @@ function Get-HardwareIdBreakdownLines {
         # Silent fail
     }
 
-    return @($lines)
+    $result = @($lines)
+    if ($null -ne $script:HardwareIdBreakdownCache) {
+        $script:HardwareIdBreakdownCache[$cacheKey] = $result
+    }
+    return $result
 }
 
 

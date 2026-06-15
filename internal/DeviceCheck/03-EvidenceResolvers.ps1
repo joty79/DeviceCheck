@@ -48,6 +48,7 @@ function Initialize-HardwareIdResolver {
 
     $script:HardwareIdResolverState = 'Unavailable'
     $script:HardwareIdResolverError = ''
+    $script:HardwareIdBreakdownCache = @{}
 
     try {
         $modulePath = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\HardwareIdResolver.psm1'
@@ -598,6 +599,10 @@ function Get-MonitorWmiIdentityForResolution {
         return $null
     }
 
+    if (Test-RemoteSnapshotTargetActive) {
+        return $null
+    }
+
     $candidateSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $candidates = [System.Collections.Generic.List[string]]::new()
 
@@ -651,6 +656,10 @@ function Get-MonitorInfIdentityForResolution {
     )
 
     if ($script:MonitorEdidResolverState -ne 'Ready') {
+        return $null
+    }
+
+    if (Test-RemoteSnapshotTargetActive) {
         return $null
     }
 
@@ -1513,5 +1522,13 @@ function Invalidate-EvidenceCache {
     } else {
         $script:EvidenceCacheMemory.Clear()
         $script:SdioAuditCacheMemory.Clear()
+        if ($null -ne $script:MonitorEdidIdentityCache) { $script:MonitorEdidIdentityCache.Clear() }
+        if ($null -ne $script:MonitorWmiEvidenceCache) { $script:MonitorWmiEvidenceCache.Clear() }
+        if ($null -ne $script:MonitorInfEvidenceCache) { $script:MonitorInfEvidenceCache.Clear() }
+        if ($null -ne $script:HardwareIdResolutionDetailCache) { $script:HardwareIdResolutionDetailCache.Clear() }
+        if ($null -ne $script:HardwareIdBreakdownCache) { $script:HardwareIdBreakdownCache.Clear() }
+        if (Get-Command -Name 'Clear-MonitorWmiModuleCache' -ErrorAction SilentlyContinue) {
+            Clear-MonitorWmiModuleCache
+        }
     }
 }

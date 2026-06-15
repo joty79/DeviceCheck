@@ -777,3 +777,11 @@ Root cause: To resolve the friendly retail model name, `Get-MonitorInfEvidence` 
 Guardrail/rule: Do not run synchronous recursive file loops or heavy text scans inside the detail panel rendering path. Optimize any system INF folder scans by using the compiled C#-native `Select-String` cmdlet to find matching files in one pass (~70ms), and parse only the single matched file. Furthermore, restrict host system INF directory scans to `Local` target mode only by inspecting `$global:TargetMode`.
 Files affected: `internal\MonitorEdidResolver.psm1`, `PROJECT_RULES.md`, `CHANGELOG.md`.
 Validation/tests run: PowerShell parser validation via `internal\Test-DeviceCheckStructure.ps1` and unit tests in `internal\Test-MonitorEdidResolver.ps1`.
+
+Date: 2026-06-15
+Problem: Selecting monitor and network adapter devices in the main TUI tree caused up to ~837ms lag when selected for the first time, on both host and remote/snapshot targets.
+Root cause: 1) `Get-MonitorWmiEvidence` queried the `root\wmi` namespace dynamically (4 separate CIM class queries) for each hardware ID candidate on every frame render. 2) Monitor WMI/INF queries ran locally even for remote snapshot targets. 3) `Get-HardwareIdBreakdownLines` performed database lookups on every single frame render. 4) Caching did not clean up correctly, and strict mode prevented simple direct property lookups without fallback.
+Guardrail/rule: Cache hardware ID breakdown lines in `$script:HardwareIdBreakdownCache` to avoid repeat lookups. Query WMI monitor classes in bulk at most once and cache them in module scope (`$script:GlobalWmiMonitorIDs`, etc.). Automatically bypass local WMI and INF monitor queries on remote snapshot targets. Clear all resolver and module caches in `Invalidate-EvidenceCache` when a rescan is triggered.
+Files affected: `internal\DeviceCheck\03-EvidenceResolvers.ps1`, `internal\DeviceCheck\04-UiTextFormatting.ps1`, `internal\MonitorEdidResolver.psm1`, `PROJECT_RULES.md`, `CHANGELOG.md`.
+Validation/tests run: PowerShell parser validation via `internal\Test-DeviceCheckStructure.ps1` and unit tests in `internal\Test-MonitorEdidResolver.ps1`, `internal\Test-HardwareIdResolver.ps1`, `internal\Test-AlsaUcmResolver.ps1`, and `internal\Test-HardwareIdentityHarness.ps1`.
+

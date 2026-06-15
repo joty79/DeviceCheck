@@ -18,6 +18,7 @@ function Get-JsonObjectPropertyValue {
     return $property.Value
 }
 
+
 function Get-HardwareIdCacheRoot {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     return (Join-Path $repoRoot 'data\hwdb')
