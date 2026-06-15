@@ -407,27 +407,48 @@ function Get-MonitorInfEvidence {
         }
     }
 
+    $targetMode = 'Local'
+    if (Get-Variable -Name 'TargetMode' -Scope Global -ErrorAction SilentlyContinue) {
+        $targetMode = $global:TargetMode
+    }
+    if ($targetMode -ne 'Local') {
+        # Bypass local INF folder scans for remote snapshot and offline targets
+        $HardwareIds = $null
+    }
+
     if ($HardwareIds) {
         $cleanIds = @($HardwareIds | ForEach-Object { ($_ -replace '^MONITOR\\', '') })
         try {
-            $oemInfs = Get-ChildItem -Path $infDir -Filter 'oem*.inf' -ErrorAction SilentlyContinue
-            foreach ($inf in $oemInfs) {
-                $lines = Get-Content -LiteralPath $inf.FullName -ErrorAction SilentlyContinue
-                if (-not $lines) { continue }
-                foreach ($line in $lines) {
-                    foreach ($id in $cleanIds) {
-                        if ($line -match ('Monitor\\' + [regex]::Escape($id)) -or $line -match [regex]::Escape($id)) {
-                            if ($line -match '^\s*%([^%]+)%\s*=\s*([A-Za-z0-9_.-]+)') {
-                                $token = $Matches[1].Trim()
-                                $section = $Matches[2].Trim()
-                                foreach ($strLine in $lines) {
-                                    if ($strLine -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*"(.*)"') -or
-                                        $strLine -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*(.*)')) {
-                                        return [pscustomobject]@{
-                                            ModelName = $Matches[1].Trim('"').Trim()
-                                            InfPath   = $inf.FullName
-                                            IsGeneric = $false
-                                            Source    = "Found in monitor INF ($($inf.Name))"
+            $patterns = [System.Collections.Generic.List[string]]::new()
+            foreach ($id in $cleanIds) {
+                $escaped = [regex]::Escape($id)
+                $patterns.Add("Monitor\\$escaped")
+                $patterns.Add("^$escaped")
+            }
+            $patternStr = $patterns -join '|'
+
+            # Fast path: use compiled C# Select-String to pinpoint the matching oem*.inf file
+            $match = Select-String -Path (Join-Path -Path $infDir -ChildPath 'oem*.inf') -Pattern $patternStr -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $match) {
+                $matchedInfPath = $match.Path
+                $lines = Get-Content -LiteralPath $matchedInfPath -ErrorAction SilentlyContinue
+                if ($lines) {
+                    # Once matched, parse only this specific file to extract the friendly model name
+                    foreach ($line in $lines) {
+                        foreach ($id in $cleanIds) {
+                            if ($line -match ('Monitor\\' + [regex]::Escape($id)) -or $line -match [regex]::Escape($id)) {
+                                if ($line -match '^\s*%([^%]+)%\s*=\s*([A-Za-z0-9_.-]+)') {
+                                    $token = $Matches[1].Trim()
+                                    $section = $Matches[2].Trim()
+                                    foreach ($strLine in $lines) {
+                                        if ($strLine -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*"(.*)"') -or
+                                            $strLine -match ('^\s*' + [regex]::Escape($token) + '\s*=\s*(.*)')) {
+                                            return [pscustomobject]@{
+                                                ModelName = $Matches[1].Trim('"').Trim()
+                                                InfPath   = $matchedInfPath
+                                                IsGeneric = $false
+                                                Source    = "Found in monitor INF ($(Split-Path -Leaf $matchedInfPath))"
+                                            }
                                         }
                                     }
                                 }
