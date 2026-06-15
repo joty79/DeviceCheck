@@ -682,6 +682,21 @@ $runInfo = $null
 $logPath = $ExistingLog
 $source = 'ExistingLog'
 if ($RunSdio) {
+    # If using defaults and they don't exist, check local SDIO folder fallbacks
+    $exeDir = Split-Path -Parent $SdioExe
+    if ($DriverPackRoot -eq '\\palios\SDIO\drivers' -and -not (Test-Path -LiteralPath $DriverPackRoot -ErrorAction SilentlyContinue)) {
+        $localDrivers = Join-Path $exeDir 'drivers'
+        if (Test-Path -LiteralPath $localDrivers -PathType Container) {
+            $DriverPackRoot = $localDrivers
+        }
+    }
+    if ($IndexRoot -eq '\\palios\SDIO\indexes\SDIO' -and -not (Test-Path -LiteralPath $IndexRoot -ErrorAction SilentlyContinue)) {
+        $localIndexes = Join-Path $exeDir 'indexes\SDIO'
+        if (Test-Path -LiteralPath $localIndexes -PathType Container) {
+            $IndexRoot = $localIndexes
+        }
+    }
+
     $runInfo = Invoke-SdioReadOnlyAuditRun -ExePath $SdioExe -DriverRoot $DriverPackRoot -IndexDirectory $IndexRoot -RunRoot $runRoot
     $logPath = $runInfo.LogPath
     $source = 'SdioRun'
