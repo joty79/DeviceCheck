@@ -492,4 +492,22 @@ function Clear-MonitorWmiModuleCache {
     $script:GlobalWmiMonitorModes = $null
 }
 
-Export-ModuleMember -Function ConvertFrom-EdidBytes, Get-MonitorEdidFromRegistry, Get-MonitorWmiEvidence, Get-MonitorInfEvidence, Clear-MonitorWmiModuleCache
+function Initialize-MonitorWmiModuleCache {
+    if ($global:TargetMode -and $global:TargetMode -ne 'Local') {
+        return
+    }
+    if ($null -eq $script:GlobalWmiMonitorIDs) {
+        $script:GlobalWmiMonitorIDs = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue)
+    }
+    if ($null -eq $script:GlobalWmiMonitorBasics) {
+        $script:GlobalWmiMonitorBasics = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue)
+    }
+    if ($null -eq $script:GlobalWmiMonitorConnections) {
+        $script:GlobalWmiMonitorConnections = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue)
+    }
+    if ($null -eq $script:GlobalWmiMonitorModes) {
+        $script:GlobalWmiMonitorModes = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue)
+    }
+}
+
+Export-ModuleMember -Function ConvertFrom-EdidBytes, Get-MonitorEdidFromRegistry, Get-MonitorWmiEvidence, Get-MonitorInfEvidence, Clear-MonitorWmiModuleCache, Initialize-MonitorWmiModuleCache

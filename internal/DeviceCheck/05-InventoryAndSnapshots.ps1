@@ -241,6 +241,9 @@ function Invoke-SystemScan {
     $script:MachineCacheRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath "machines\$($script:MachineEvidence.MachineId)"
     try { $null = New-Item -ItemType Directory -Path $script:MachineCacheRoot -Force } catch {}
     Invalidate-EvidenceCache  # clear all in-memory evidence on rescan
+    if (Get-Command -Name 'Initialize-MonitorWmiModuleCache' -ErrorAction SilentlyContinue) {
+        Initialize-MonitorWmiModuleCache
+    }
 
     $script:categories = Get-DeviceCategories -Quiet:$Quiet
     $deviceCount = 0

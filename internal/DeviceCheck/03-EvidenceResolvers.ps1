@@ -149,6 +149,9 @@ function Initialize-MonitorEdidResolver {
 
         Import-Module -Name $modulePath -Force -ErrorAction Stop
         $script:MonitorEdidResolverState = 'Ready'
+        if (Get-Command -Name 'Initialize-MonitorWmiModuleCache' -ErrorAction SilentlyContinue) {
+            Initialize-MonitorWmiModuleCache
+        }
     }
     catch {
         $script:MonitorEdidResolverError = $_.Exception.Message
