@@ -1,5 +1,10 @@
 Set-StrictMode -Version Latest
 
+$script:GlobalWmiMonitorIDs = $null
+$script:GlobalWmiMonitorBasics = $null
+$script:GlobalWmiMonitorConnections = $null
+$script:GlobalWmiMonitorModes = $null
+
 function ConvertFrom-EdidManufacturerCode {
     param(
         [byte] $High,
