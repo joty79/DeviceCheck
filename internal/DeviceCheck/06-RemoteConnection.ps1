@@ -8,7 +8,7 @@ function Read-TuiLine {
     )
 
     $inputVal = $DefaultValue
-    
+
     try {
         [Console]::CursorVisible = $true
         while ($true) {
@@ -20,7 +20,7 @@ function Read-TuiLine {
                 Start-Sleep -Milliseconds 10
                 continue
             }
-            
+
             switch ($key.Key) {
                 'Enter' {
                     return $inputVal
@@ -136,7 +136,7 @@ function Show-RemoteSnapshotCollectionScreen {
         $null = $frame.AppendLine('')
         $null = $frame.AppendLine("  $($_C.Dim)This can take a few seconds on LAN. Press ESC to cancel.$($_C.Reset)$($_C.EraseLn)")
     }
-    
+
     Write-UiFrame -Frame $frame
 }
 
@@ -180,23 +180,23 @@ function Invoke-RemoteSnapshotCollectionScreen {
     } catch {
         $message = $_.Exception.Message
         Remove-DeviceCheckStoredCredential -ComputerName $ComputerName
-        
+
         $renderErrorBlock = {
             param()
             Clear-TuiScreen
             $width = Get-UiWidth
             $frame = New-Object System.Text.StringBuilder
             Add-UiFrameBanner -Frame $frame -Title "Cannot connect to $ComputerName" -Subtitle 'The target may be asleep, offline, blocked by firewall, or rejecting credentials.' -Width $width
-            
+
             $null = $frame.AppendLine('')
             $null = $frame.AppendLine("  $($_C.Fail)Connection failed.$($_C.Reset)$($_C.EraseLn)")
             $null = $frame.AppendLine('')
-            
+
             foreach ($line in (Wrap-PlainText -Text $message -Width ([Math]::Max(50, $width - 6)) -MaxLines 8)) {
                 $null = $frame.AppendLine("  $($_C.Warn)$line$($_C.Reset)$($_C.EraseLn)")
             }
             $null = $frame.AppendLine('')
-            
+
             if ($script:RemoteConnectionLog -and $script:RemoteConnectionLog.Count -gt 0) {
                 $null = $frame.AppendLine("  $($_C.Bold)$($_C.White)Connection Log:$($_C.Reset)$($_C.EraseLn)")
                 foreach ($logLine in $script:RemoteConnectionLog) {
@@ -204,13 +204,13 @@ function Invoke-RemoteSnapshotCollectionScreen {
                 }
                 $null = $frame.AppendLine('')
             }
-            
+
             $null = $frame.AppendLine("  $($_C.Dim)No target switch was made. Wake the PC / check WinRM, then try again.$($_C.Reset)$($_C.EraseLn)")
             $null = $frame.AppendLine('')
             $null = $frame.AppendLine("  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)")
             $null = $frame.AppendLine('')
             $null = $frame.AppendLine("$($_E)[J")
-            
+
             try { [Console]::Write($frame.ToString()) } catch { $frame.ToString() | Write-Host }
         }
 
@@ -317,8 +317,8 @@ function Get-CurrentNetworkIdentity {
             $ipInfo = Get-NetIPAddress -InterfaceIndex $profile.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
         }
         if ($null -eq $ipInfo) {
-            $ipInfo = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
-                Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' } | 
+            $ipInfo = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' } |
                 Select-Object -First 1
         }
         if ($ipInfo -and $ipInfo.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') {
@@ -336,58 +336,84 @@ function Get-CurrentNetworkIdentity {
 }
 
 function Get-DeviceCheckHostsCache {
+    param([string]$NetworkId)
     $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
+    $hash = @{}
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         try {
             $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
-            $hash = @{}
-            if ($null -ne $json) {
-                foreach ($prop in $json.PSObject.Properties) {
-                    $hash[$prop.Name] = $prop.Value
+            if ($null -ne $json -and $json.PSObject.Properties[$NetworkId]) {
+                $netObj = $json.PSObject.Properties[$NetworkId].Value
+                if ($null -ne $netObj) {
+                    foreach ($p in $netObj.PSObject.Properties) { $hash[$p.Name] = $p.Value }
                 }
             }
-            return $hash
         } catch {}
     }
-    return @{}
+    return $hash
 }
 
 function Save-DeviceCheckHostsCache {
-    param([Parameter(Mandatory)]$Cache)
+    param([Parameter(Mandatory)]$Cache, [Parameter(Mandatory)][string]$NetworkId)
     $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
     try {
-        $json = $Cache | ConvertTo-Json -Depth 4
-        $json | Set-Content -LiteralPath $path -Encoding UTF8
+        $fullCache = @{}
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if ($null -ne $json) {
+                foreach ($p in $json.PSObject.Properties) {
+                    if ($p.Name -match '\|') { $fullCache[$p.Name] = $p.Value }
+                }
+            }
+        }
+        $fullCache[$NetworkId] = $Cache
+        ($fullCache | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $path -Encoding UTF8
     } catch {}
 }
 
 function Start-DeviceCheckBackgroundResolver {
-    param([Parameter(Mandatory)][string[]]$IPs)
+    param(
+        [Parameter(Mandatory)][string[]]$IPs,
+        [Parameter(Mandatory)][string]$NetworkId
+    )
     if ($IPs.Count -eq 0) { return }
     $cachePath = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
-    
+
     $null = Start-Job -ScriptBlock {
-        param($ips, $path)
-        $cache = @{}
+        param($ips, $path, $networkId)
+        $fullCache = @{}
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             try {
                 $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
                 if ($null -ne $json) {
                     foreach ($prop in $json.PSObject.Properties) {
-                        $cache[$prop.Name] = $prop.Value
+                        if ($prop.Name -match '\|') {
+                            $fullCache[$prop.Name] = $prop.Value
+                        }
                     }
                 }
             } catch {}
         }
+
+        $netCache = @{}
+        if ($fullCache.ContainsKey($networkId)) {
+            $netObj = $fullCache[$networkId]
+            if ($null -ne $netObj) {
+                foreach ($prop in $netObj.PSObject.Properties) {
+                    $netCache[$prop.Name] = $prop.Value
+                }
+            }
+        }
+
         $updated = $false
         foreach ($ip in $ips) {
-            if (-not $cache.ContainsKey($ip)) {
+            if (-not $netCache.ContainsKey($ip)) {
                 try {
                     $entry = [System.Net.Dns]::GetHostEntry($ip)
                     if ($entry.HostName) {
                         $name = $entry.HostName
                         if ($name -match '^([^.]+)\.') { $name = $Matches[1] }
-                        $cache[$ip] = $name
+                        $netCache[$ip] = $name
                         $updated = $true
                     }
                 } catch {
@@ -396,7 +422,7 @@ function Start-DeviceCheckBackgroundResolver {
                         if ($dnsRes) {
                             $name = $dnsRes[0].NameHost
                             if ($name -match '^([^.]+)\.') { $name = $Matches[1] }
-                            $cache[$ip] = $name
+                            $netCache[$ip] = $name
                             $updated = $true
                         }
                     } catch {}
@@ -405,25 +431,26 @@ function Start-DeviceCheckBackgroundResolver {
         }
         if ($updated) {
             try {
-                $json = $cache | ConvertTo-Json -Depth 4
+                $fullCache[$networkId] = $netCache
+                $json = $fullCache | ConvertTo-Json -Depth 4
                 $json | Set-Content -LiteralPath $path -Encoding UTF8
             } catch {}
         }
-    } -ArgumentList $IPs, $cachePath
+    } -ArgumentList $IPs, $cachePath, $networkId
 }
 
 function Get-DeviceCheckDiscoveredHosts {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
-    
+
     $discovered = [System.Collections.Generic.List[object]]::new()
     $results = @()
-    
+
     # 1. Interfaces lookup
     $swPhase = [System.Diagnostics.Stopwatch]::StartNew()
-    $interfaces = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+    $interfaces = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' }
-    
-    if (-not $interfaces) { 
+
+    if (-not $interfaces) {
         $timeInterfaces = $swPhase.Elapsed.TotalMilliseconds
         $logLines = @(
             "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] Network Scan Completed (No active interfaces)"
@@ -443,7 +470,7 @@ function Get-DeviceCheckDiscoveredHosts {
         } else {
             $script:LastNetworkScanResult = $null
         }
-        return $discovered 
+        return $discovered
     }
     $timeInterfaces = $swPhase.Elapsed.TotalMilliseconds
 
@@ -452,37 +479,40 @@ function Get-DeviceCheckDiscoveredHosts {
     $historyIPs = @()
     $historyIpToName = @{}
     $history = Get-DeviceCheckConnectionHistory
-    
+    $currentNetwork = Get-CurrentNetworkIdentity
+    $currentNetworkId = $currentNetwork.NetworkId
+
     $dnsDetailsLog = [System.Collections.Generic.List[string]]::new()
-    
+
     if ($history) {
         $ipList = [System.Collections.Generic.List[string]]::new()
-        
-        # Add static IP history entries instantly
+
+        # Add static IP history entries instantly if they match the current network ID
         foreach ($entry in $history) {
-            if ($entry.LastIPAddress -match '^\d+\.\d+\.\d+\.\d+$') {
+            if ($entry.NetworkId -eq $currentNetworkId -and $entry.LastIPAddress -match '^\d+\.\d+\.\d+\.\d+$') {
                 $ipList.Add($entry.LastIPAddress)
                 $historyIpToName[$entry.LastIPAddress] = $entry.ComputerName
             }
         }
-        
-        # Filter hostnames that need DNS lookup
-        $hostsToResolve = $history | Where-Object { 
-            -not [string]::IsNullOrWhiteSpace($_.ComputerName) -and 
-            $_.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$' 
+
+        # Filter hostnames that need DNS lookup from the current network
+        $hostsToResolve = $history | Where-Object {
+            $_.NetworkId -eq $currentNetworkId -and
+            -not [string]::IsNullOrWhiteSpace($_.ComputerName) -and
+            $_.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$'
         } | Select-Object -ExpandProperty ComputerName -Unique
-        
+
         if ($hostsToResolve) {
             $isPS6Plus = $PSVersionTable.PSVersion.Major -ge 6
             $hasResolveDnsName = $null -ne (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)
-            
+
             $resolvedResults = $hostsToResolve | ForEach-Object -Parallel {
                 $hostName = $_
                 $ips = [System.Collections.Generic.List[string]]::new()
                 $swSingle = [System.Diagnostics.Stopwatch]::StartNew()
                 $methodUsed = "None"
                 $hasResolveDns = $using:hasResolveDnsName
-                
+
                 if ($hasResolveDns) {
                     try {
                         $methodUsed = "Resolve-DnsName"
@@ -495,11 +525,11 @@ function Get-DeviceCheckDiscoveredHosts {
                             }
                         }
                     } catch {
-                        # Resolve-DnsName failed (e.g. host offline). 
+                        # Resolve-DnsName failed (e.g. host offline).
                         # methodUsed is already "Resolve-DnsName", which prevents the slow GetHostAddresses fallback.
                     }
                 }
-                
+
                 if ($ips.Count -eq 0 -and $methodUsed -eq "None") {
                     try {
                         $dnsIps = [System.Net.Dns]::GetHostAddresses($hostName)
@@ -511,7 +541,7 @@ function Get-DeviceCheckDiscoveredHosts {
                         }
                     } catch {}
                 }
-                
+
                 $singleMs = $swSingle.Elapsed.TotalMilliseconds
                 if ($ips.Count -gt 0) {
                     [PSCustomObject]@{
@@ -531,7 +561,7 @@ function Get-DeviceCheckDiscoveredHosts {
                     }
                 }
             } -ThrottleLimit 10
-            
+
             if ($resolvedResults) {
                 foreach ($res in $resolvedResults) {
                     if ($null -ne $res) {
@@ -564,13 +594,13 @@ function Get-DeviceCheckDiscoveredHosts {
 
     # 4. Trigger active ICMP Ping discovery only for neighbor cache and history IPs (fast parallel Ping)
     $swPhase.Restart()
-    
+
     # Get neighbors first to know which IPs to target
     $neighbors = foreach ($if in $interfaces) {
-        Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+        Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object { $_.State -ne 'Unreachable' -and $_.IPAddress -notmatch '^\d+\.\d+\.\d+\.255$' -and $_.LinkLayerAddress -ne '00-00-00-00-00-00' }
     }
-    
+
     # Filter out gateway IPs to avoid connecting to router
     $gateways = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $routes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue
@@ -581,30 +611,30 @@ function Get-DeviceCheckDiscoveredHosts {
             }
         }
     }
-    
+
     # Filter out local machine IPs to avoid self-discovery
     $localIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($if in $interfaces) {
         $null = $localIPs.Add($if.IPAddress)
     }
-    
+
     $neighborIPs = @()
     if ($neighbors) {
         $neighborIPs = @($neighbors.IPAddress)
     }
-    
+
     # Combine neighbor cache IPs and history IPs
     $targetIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($ip in $neighborIPs) { $null = $targetIPsSet.Add($ip) }
     foreach ($ip in $historyIPs) { $null = $targetIPsSet.Add($ip) }
-    
+
     $targetIPs = @(
         $targetIPsSet | Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) }
     )
-    
+
     $pingSuccessfulIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $pingTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
-    
+
     if ($targetIPs) {
         foreach ($ip in $targetIPs) {
             try {
@@ -617,7 +647,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 })
             } catch {}
         }
-        
+
         if ($pingTasks.Count -gt 0) {
             $tasksArray = [System.Threading.Tasks.Task[]]::new($pingTasks.Count)
             for ($i = 0; $i -lt $pingTasks.Count; $i++) {
@@ -627,7 +657,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 $null = [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
             } catch {}
         }
-        
+
         foreach ($pt in $pingTasks) {
             if ($pt.Task.IsCompleted -and -not $pt.Task.IsFaulted -and $pt.Task.Result.Status -eq 'Success') {
                 $null = $pingSuccessfulIPs.Add($pt.IP)
@@ -635,19 +665,19 @@ function Get-DeviceCheckDiscoveredHosts {
             $pt.Pinger.Dispose()
         }
     }
-    
+
     $timePing = $swPhase.Elapsed.TotalMilliseconds
-    
+
     # 5. Neighbor/Active Target Setup
     $swPhase.Restart()
     $uniqueIPs = $targetIPs
     $timeNeighbors = $swPhase.Elapsed.TotalMilliseconds
-    
+
     # 6. Fast parallel TCP scan on port 5985 and 445
     $swPhase.Restart()
     $winrmOpenIPs = [System.Collections.Generic.List[string]]::new()
     $smbOpenIPs = [System.Collections.Generic.List[string]]::new()
-    
+
     if ($uniqueIPs) {
         $connections = [System.Collections.Generic.List[PSCustomObject]]::new()
         foreach ($ip in $uniqueIPs) {
@@ -669,7 +699,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 $tcp2.Dispose()
             }
         }
-        
+
         # Wait up to 500ms for connection tasks to complete
         $swTimeout = [System.Diagnostics.Stopwatch]::StartNew()
         while ($swTimeout.ElapsedMilliseconds -lt 500) {
@@ -684,35 +714,35 @@ function Get-DeviceCheckDiscoveredHosts {
             Start-Sleep -Milliseconds 20
         }
         $swTimeout.Stop()
-        
+
         foreach ($c in $connections) {
             $winrmConnected = $c.Task1.IsCompleted -and $c.TcpClient1.Connected
             $smbConnected = $c.Task2.IsCompleted -and $c.TcpClient2.Connected
-            
+
             if ($winrmConnected) {
                 $winrmOpenIPs.Add($c.IP)
             } elseif ($smbConnected) {
                 $smbOpenIPs.Add($c.IP)
             }
-            
+
             $c.TcpClient1.Dispose()
             $c.TcpClient2.Dispose()
         }
     }
     $timeTcpScan = $swPhase.Elapsed.TotalMilliseconds
-    
+
     # 7. Asynchronous Hostname Resolution for Online Hosts
     $swPhase.Restart()
-    
+
     # Online hosts are those that have WinRM open or SMB open (excluding ping-only hosts to filter out sleeping PCs in Modern Standby or non-Windows devices)
     $onlineIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($ip in $winrmOpenIPs) { $null = $onlineIPsSet.Add($ip) }
     foreach ($ip in $smbOpenIPs) { $null = $onlineIPsSet.Add($ip) }
-    
+
     $onlineIPs = @($onlineIPsSet)
     $resolvedNames = @{}
-    $hostsCache = Get-DeviceCheckHostsCache
-    
+    $hostsCache = Get-DeviceCheckHostsCache -NetworkId $currentNetworkId
+
     $unresolvedIPs = [System.Collections.Generic.List[string]]::new()
     foreach ($ip in $onlineIPs) {
         if ($historyIpToName.ContainsKey($ip)) {
@@ -723,7 +753,7 @@ function Get-DeviceCheckDiscoveredHosts {
             $unresolvedIPs.Add($ip)
         }
     }
-    
+
     if ($unresolvedIPs.Count -gt 0) {
         $resolutionTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
         foreach ($ip in $unresolvedIPs) {
@@ -736,7 +766,7 @@ function Get-DeviceCheckDiscoveredHosts {
                 })
             } catch {}
         }
-        
+
         if ($resolutionTasks.Count -gt 0) {
             $resTasksArray = [System.Threading.Tasks.Task[]]::new($resolutionTasks.Count)
             for ($i = 0; $i -lt $resolutionTasks.Count; $i++) {
@@ -745,7 +775,7 @@ function Get-DeviceCheckDiscoveredHosts {
             try {
                 $null = [System.Threading.Tasks.Task]::WaitAll($resTasksArray, 400)
             } catch {}
-            
+
             $newlyResolved = @{}
             foreach ($rt in $resolutionTasks) {
                 if ($rt.Task.IsCompleted -and -not $rt.Task.IsFaulted -and $rt.Task.Result.HostName) {
@@ -759,11 +789,11 @@ function Get-DeviceCheckDiscoveredHosts {
                 foreach ($ip in $newlyResolved.Keys) {
                     $hostsCache[$ip] = $newlyResolved[$ip]
                 }
-                Save-DeviceCheckHostsCache -Cache $hostsCache
+                Save-DeviceCheckHostsCache -Cache $hostsCache -NetworkId $currentNetworkId
             }
         }
     }
-    
+
     # Fallback to local DNS/IP lookup if async GetHostEntry failed or timed out
     $stillUnresolved = [System.Collections.Generic.List[string]]::new()
     foreach ($ip in $onlineIPs) {
@@ -775,7 +805,7 @@ function Get-DeviceCheckDiscoveredHosts {
                     if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
                     $resolvedNames[$ip] = $dnsName
                     $hostsCache[$ip] = $dnsName
-                    Save-DeviceCheckHostsCache -Cache $hostsCache
+                    Save-DeviceCheckHostsCache -Cache $hostsCache -NetworkId $currentNetworkId
                 } else {
                     $resolvedNames[$ip] = $ip
                     $stillUnresolved.Add($ip)
@@ -786,12 +816,12 @@ function Get-DeviceCheckDiscoveredHosts {
             }
         }
     }
-    
+
     # Resolve unresolved IPs in background to populate cache for future scans
     if ($stillUnresolved.Count -gt 0) {
-        Start-DeviceCheckBackgroundResolver -IPs @($stillUnresolved)
+        Start-DeviceCheckBackgroundResolver -IPs @($stillUnresolved) -NetworkId $currentNetworkId
     }
-    
+
     # Build final scan results list
     $scanResultsList = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($ip in $onlineIPs) {
@@ -805,9 +835,9 @@ function Get-DeviceCheckDiscoveredHosts {
             SmbOpen   = $isSmb
         })
     }
-    
+
     $results = @($scanResultsList)
-    
+
     # Final mapping & MAC lookup
     $latestNeighbors = foreach ($if in $interfaces) {
         Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
@@ -820,7 +850,7 @@ function Get-DeviceCheckDiscoveredHosts {
             }
         }
     }
-    
+
     foreach ($res in $results) {
         if ($null -ne $res) {
             $mac = 'Unknown'
@@ -837,9 +867,9 @@ function Get-DeviceCheckDiscoveredHosts {
         }
     }
     $timeFinalMap = $swPhase.Elapsed.TotalMilliseconds
-    
+
     $totalMs = $swTotal.Elapsed.TotalMilliseconds
-    
+
     # Write details and phases to benchmark log
     $logLines = [System.Collections.Generic.List[string]]::new()
     $logLines.Add("[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] Network Scan Completed")
@@ -858,7 +888,7 @@ function Get-DeviceCheckDiscoveredHosts {
     $logLines.Add("  Phase 7 (Reverse): $([Math]::Round($timeFinalMap, 1)) ms")
     $logLines.Add("  Scan Results     : $($discovered.Count) hosts found ($($uniqueIPs.Count) unique IPs scanned)")
     $logLines.Add("")
-    
+
     if ($script:BenchmarkMode) {
         $script:LastNetworkScanResult = @($logLines)
         $resolvedScriptRoot = $script:DeviceCheckRepoRoot
@@ -874,7 +904,7 @@ function Get-DeviceCheckDiscoveredHosts {
     } else {
         $script:LastNetworkScanResult = $null
     }
-    
+
     return $discovered
 }
 
@@ -919,7 +949,7 @@ function Add-DeviceCheckConnectionHistoryEntry {
             $history.Add($item)
         }
     }
-    
+
     $existing = $null
     foreach ($entry in $history) {
         if ($entry.NetworkId -eq $NetworkId) {
@@ -981,6 +1011,30 @@ function Test-DeviceCheckHistoryEntryOnline {
     )
 
     foreach ($d in @($DiscoveredHosts)) {
+        # Check for absolute mismatches first:
+        # 1. MAC mismatch: both are known, but different
+        $macMismatch = $false
+        if (-not [string]::IsNullOrWhiteSpace($Entry.MACAddress) -and $Entry.MACAddress -ne 'Unknown' -and
+            -not [string]::IsNullOrWhiteSpace($d.MAC) -and $d.MAC -ne 'Unknown') {
+            if ($Entry.MACAddress.Replace(':', '-').ToLower() -ne $d.MAC.Replace(':', '-').ToLower()) {
+                $macMismatch = $true
+            }
+        }
+
+        # 2. Hostname mismatch: both are known hostnames (not IPs), but different
+        $nameMismatch = $false
+        if (-not [string]::IsNullOrWhiteSpace($Entry.ComputerName) -and $Entry.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$' -and
+            -not [string]::IsNullOrWhiteSpace($d.HostName) -and $d.HostName -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            if ($Entry.ComputerName.ToLower() -ne $d.HostName.ToLower()) {
+                $nameMismatch = $true
+            }
+        }
+
+        # If it's a mismatch, this discovered host is NOT our history entry
+        if ($macMismatch -or $nameMismatch) {
+            continue
+        }
+
         $nameMatch = $false
         if (-not [string]::IsNullOrWhiteSpace($Entry.ComputerName) -and -not [string]::IsNullOrWhiteSpace($d.HostName)) {
             $nameMatch = ($Entry.ComputerName.ToLower() -eq $d.HostName.ToLower())
@@ -1084,7 +1138,7 @@ function Resolve-HistoryTargetAddress {
     )
 
     Write-Verbose "Resolving address for target $ComputerName..."
-    
+
     # 1. Try to resolve the hostname directly via DNS/LLMNR
     try {
         $ips = [System.Net.Dns]::GetHostAddresses($ComputerName)
@@ -1110,11 +1164,11 @@ function Resolve-HistoryTargetAddress {
     # 2. Check local ARP cache
     if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
         $normMAC = $MACAddress.Replace(':', '-').ToUpper()
-        $neighbors = Get-NetNeighbor -ErrorAction SilentlyContinue | 
-            Where-Object { 
+        $neighbors = Get-NetNeighbor -ErrorAction SilentlyContinue |
+            Where-Object {
                 $nMac = $_.LinkLayerAddress
                 if ($nMac) { $nMac = $nMac.Replace(':', '-').ToUpper() }
-                $nMac -eq $normMAC -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet' 
+                $nMac -eq $normMAC -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet'
             }
         if ($neighbors) {
             $arpIp = $neighbors[0].IPAddress
@@ -1127,6 +1181,18 @@ function Resolve-HistoryTargetAddress {
     # 3. Fallback to last known IP
     if (-not [string]::IsNullOrWhiteSpace($LastIPAddress)) {
         if (Test-PortOpen -ComputerName $LastIPAddress -Port 5985) {
+            # If MACAddress is known, verify the MAC of $LastIPAddress matches
+            if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
+                $neighbor = Get-NetNeighbor -IPAddress $LastIPAddress -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($neighbor -and $neighbor.LinkLayerAddress) {
+                    $foundMac = $neighbor.LinkLayerAddress.Replace(':', '-').ToUpper()
+                    $normMac = $MACAddress.Replace(':', '-').ToUpper()
+                    if ($foundMac -ne $normMac) {
+                        Write-Verbose "MAC mismatch for fallback IP $LastIPAddress (expected $normMac, got $foundMac). Skipping."
+                        return $null
+                    }
+                }
+            }
             return $LastIPAddress
         }
     }
@@ -1164,7 +1230,7 @@ function Invoke-ConnectionHistorySelector {
 
         while ($true) {
             Lock-ViewportToWindow
-            
+
             # Measure Prep
             $swPrep = [System.Diagnostics.Stopwatch]::StartNew()
             if ($needsReload) {
@@ -1202,7 +1268,7 @@ function Invoke-ConnectionHistorySelector {
             # Measure Render
             $swRender = [System.Diagnostics.Stopwatch]::StartNew()
             $items = [System.Collections.Generic.List[object]]::new()
-            
+
             # Section 1: Saved Connections
             $items.Add([PSCustomObject]@{
                 Type       = 'Header'
@@ -1277,31 +1343,51 @@ function Invoke-ConnectionHistorySelector {
                     Selectable = $false
                 })
             }
-            
+
             $items.Add([PSCustomObject]@{
                 Type       = 'Separator'
                 Text       = ""
                 Selectable = $false
             })
-            
+
             # Section 3: Discovered PCs
             $items.Add([PSCustomObject]@{
                 Type       = 'Header'
                 Text       = "$($_C.Bold)$($_C.Info)Discovered PCs on Network$($_C.Reset)"
                 Selectable = $false
             })
-            
+
             $discoveredCount = 0
             foreach ($d in $currentDiscovered) {
-                # Check if already in history
+                # Check if already in history as an active/saved connection
                 $inHistory = $false
                 foreach ($entry in $filteredHistory) {
-                    if ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower() -or $entry.LastIPAddress -eq $d.IP) {
+                    $macMismatch = $false
+                    if (-not [string]::IsNullOrWhiteSpace($entry.MACAddress) -and $entry.MACAddress -ne 'Unknown' -and
+                        -not [string]::IsNullOrWhiteSpace($d.MAC) -and $d.MAC -ne 'Unknown') {
+                        if ($entry.MACAddress.Replace(':', '-').ToLower() -ne $d.MAC.Replace(':', '-').ToLower()) {
+                            $macMismatch = $true
+                        }
+                    }
+                    $nameMismatch = $false
+                    if (-not [string]::IsNullOrWhiteSpace($entry.ComputerName) -and $entry.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$' -and
+                        -not [string]::IsNullOrWhiteSpace($d.HostName) -and $d.HostName -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+                        if ($entry.ComputerName.ToLower() -ne $d.HostName.ToLower()) {
+                            $nameMismatch = $true
+                        }
+                    }
+
+                    if ($macMismatch -or $nameMismatch) {
+                        continue
+                    }
+
+                    if ($entry.ComputerName.ToLower() -eq $d.HostName.ToLower() -or
+                        ($entry.LastIPAddress -eq $d.IP -and $entry.NetworkId -eq $networkId)) {
                         $inHistory = $true
                         break
                     }
                 }
-                
+
                 if (-not $inHistory) {
                     $discoveredCount++
                     $statusLabel = $(if ($d.WinRmOpen) { "(Online)" } else { "(WinRM Disabled)" })
@@ -1316,7 +1402,7 @@ function Invoke-ConnectionHistorySelector {
                     })
                 }
             }
-            
+
             if ($discoveredCount -eq 0) {
                 $items.Add([PSCustomObject]@{
                     Type       = 'Placeholder'
@@ -1324,20 +1410,20 @@ function Invoke-ConnectionHistorySelector {
                     Selectable = $false
                 })
             }
-            
+
             $items.Add([PSCustomObject]@{
                 Type       = 'Separator'
                 Text       = ""
                 Selectable = $false
             })
-            
+
             # Section 4: Options/Actions
             $items.Add([PSCustomObject]@{
                 Type       = 'Header'
                 Text       = "$($_C.Bold)$($_C.Info)Actions$($_C.Reset)"
                 Selectable = $false
             })
-            
+
             $items.Add([PSCustomObject]@{
                 Type       = 'Action'
                 Text       = "[Connect to new target...]"
@@ -1358,9 +1444,9 @@ function Invoke-ConnectionHistorySelector {
                     Text       = "$($_C.Bold)$($_C.Info)Scan Benchmark Results$($_C.Reset)"
                     Selectable = $false
                 })
-                
+
                 # Using cached $logLines
-                
+
                 if ($logLines) {
                     $lastScanIndex = -1
                     for ($i = $logLines.Count - 1; $i -ge 0; $i--) {
@@ -1609,9 +1695,9 @@ function Invoke-ConnectionHistorySelector {
                     Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Active Network: $networkName$($_C.Reset)$($_C.EraseLn)"
                     Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
                     Write-UiFrame -Frame $frame
-                    
+
                     $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts)
-                    
+
                     $selectedIndex = -1 # Reset selection
                     $script:RequestForceClear = $true
                     $needsReload = $true
@@ -1701,7 +1787,7 @@ function Invoke-ConnectLanTarget {
     Reset-AllEvidenceScanConfirmation
     try { [Console]::CursorVisible = $true } catch {}
     $script:RequestForceClear = $true
-    
+
     while ($true) {
         # Render scanning loading screens
         Clear-TuiScreen
@@ -1725,8 +1811,24 @@ function Invoke-ConnectLanTarget {
 
         $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -DiscoveredHosts $discoveredHosts
         if ($null -eq $choice) {
-            $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
+            # Switch back to local host machine instead of previous logged target
+            $script:TargetMode = 'Local'
+            $global:TargetMode = 'Local'
+            $script:TargetCredential = $null
+            $script:TargetSnapshot = $null
+            $script:TargetSnapshotPath = $null
+            Invoke-SystemScan -Quiet
+
+            $script:selectedIndex = 0
+            $script:DetailScrollOffset = 0
+            $script:DetailCursorIndex = 0
+            $script:ActivePane = 'Tree'
+            $script:VisibleRowsDirty = $true
+            $script:visibleRows = Update-VisibleRows
+            $script:VisibleRowsDirty = $false
             $script:RequestForceClear = $true
+
+            $script:SystemScanMessage = "Connect cancelled. Switched back to local host. | $(Get-Date -Format 'HH:mm:ss')"
             try { Initialize-TuiHost } catch {}
             try { [Console]::CursorVisible = $false } catch {}
             return
@@ -1779,7 +1881,7 @@ function Invoke-ConnectLanTarget {
             $target = $choice.ComputerName
             $targetMac = $choice.MAC
             $resolvedIp = $choice.LastIP
-            
+
             Clear-TuiScreen
             $frame = New-UiFrame
             Add-UiFrameBanner -Frame $frame -Title "Connecting to $target" -Subtitle "Locating device on network '$networkName'..." -Width (Get-UiWidth)
@@ -1797,7 +1899,7 @@ function Invoke-ConnectLanTarget {
                 } else {
                     $script:SystemScanMessage = "Could not locate target PC '$target' on LAN. Verify it is online. | $(Get-Date -Format 'HH:mm:ss')"
                     $script:RequestForceClear = $true
-                    
+
                     $renderErrorBlock = {
                         param()
                         Clear-TuiScreen
@@ -1842,7 +1944,7 @@ function Invoke-ConnectLanTarget {
             Add-UiFrameLine -Frame $frame
             Add-UiFrameLine -Frame $frame -Text "  $($_C.OK)Re-initializing local system scan...$($_C.Reset)$($_C.EraseLn)"
             Write-UiFrame -Frame $frame
-            
+
             $script:TargetMode = 'Local'
             $global:TargetMode = 'Local'
             $script:TargetCredential = $null
@@ -1917,7 +2019,7 @@ function Invoke-ConnectLanTarget {
                 $null = $frame.Append("  Select option: $currentInput")
                 Write-UiFrame -Frame $frame
             }
-            
+
             $choiceSub = Read-TuiLine -RenderBlock $renderChoiceBlock -DefaultValue ''
             if ($null -eq $choiceSub) {
                 $script:SystemScanMessage = "Connect cancelled. | $(Get-Date -Format 'HH:mm:ss')"
@@ -1926,7 +2028,7 @@ function Invoke-ConnectLanTarget {
                 try { [Console]::CursorVisible = $false } catch {}
                 continue
             }
-            
+
             if ([string]::IsNullOrWhiteSpace($choiceSub)) {
                 $cachedCredential = $script:TargetCredential
                 if ($null -eq $cachedCredential) {
@@ -1941,7 +2043,7 @@ function Invoke-ConnectLanTarget {
                 if ($null -eq $cachedCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
                     $cachedCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
                 }
-                
+
                 $userName = $(if ($null -ne $cachedCredential) { $cachedCredential.UserName } else { $choice.UserName })
                 $actualComputerName = $target
                 if ($null -ne $cached.Snapshot -and $null -ne $cached.Snapshot.Machine -and $null -ne $cached.Snapshot.Machine.ComputerSystem -and -not [string]::IsNullOrWhiteSpace($cached.Snapshot.Machine.ComputerSystem.Name)) {
@@ -2029,7 +2131,7 @@ function Invoke-ConnectLanTarget {
             if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
                 $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
             }
-            
+
             $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential) -Quick:(-not $archiveSampleRequested) -ArchiveSample:$archiveSampleRequested
             if ($null -ne $collection -and $collection.Success) {
                 $connectedMac = "Unknown"

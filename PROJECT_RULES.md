@@ -56,6 +56,13 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-16
+Problem: 1. Connecting to a LAN target at work (e.g. `datacomputer2`) maps or displays it as a home LAN PC (e.g. `PALIOS`) when both share the same IP (e.g. `192.168.1.7`) via DHCP or static lease. 2. Pressing Escape while viewing a remote target or saved snapshot exits the script completely to shell instead of going back to the connection selector. 3. Pressing Escape in the "Ctrl+L" connection selector menu should switch target mode back to the local host machine instead of staying on the previously logged remote target.
+Root cause: 1. The local network scanning history retrieval and hostname resolution cache mapped IP addresses globally without scoping them to the active NetworkId. 2. Escape was hardcoded to set `$running = $false` on all targets in the main event loop. 3. The connection selector cancel path did not reset target mode properties to local host and trigger a local scan.
+Guardrail/rule: 1. Scope connection history scanning and name-resolution caches in `Get-DeviceCheckDiscoveredHosts` strictly to the current NetworkId. Implement MAC/name checks on matches. 2. Escape key on remote targets (`TargetMode -eq 'RemoteSnapshot'`) must call `Invoke-ConnectLanTarget` to return to target selection, preserving exit to shell only for local host targets. 3. Escape key / cancellation inside the `Ctrl+L` selector must reset `$script:TargetMode = 'Local'` and trigger `Invoke-SystemScan -Quiet` to clean active state and refresh the view.
+Files affected: `DeviceCheck.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `DeviceCheck.ps1` and all dot-sourced files; `internal\Test-DeviceCheckStructure.ps1` structural check succeeded; verified Escape key behavior on local target (exits script), remote targets (redirects to LAN connection selector), and inside connection selector (resets target back to local host).
+
 Date: 2026-06-13
 Problem: The remote cached snapshot action screen had only open/refresh/cancel, so there was no deliberate way to capture a slower archive-grade sample before a work/customer PC left the bench.
 Root cause: Normal remote refresh and archive/sample capture were treated as the same operation, even though daily ID logging should stay fast and repair-shop sample capture can afford a heavier full snapshot.

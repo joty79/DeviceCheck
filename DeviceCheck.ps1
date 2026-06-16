@@ -339,7 +339,12 @@ try {
                 $script:RequestForceClear = $true
             }
             'Escape' {
-                $running = $false
+                if ($script:TargetMode -eq 'RemoteSnapshot') {
+                    Invoke-ConnectLanTarget
+                    $selectedIndex = $script:selectedIndex
+                } else {
+                    $running = $false
+                }
             }
             'q' {
                 $running = $false
