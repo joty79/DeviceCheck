@@ -104,6 +104,18 @@ NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree
 # Generic remote target
 $cred = Get-Credential 'PALIOS\joty79'
 .\internal\Export-DeviceCheckEvidence.ps1 -ComputerName PALIOS -Credential $cred
+
+# Run once on the target PC to enable WinRM and prepare a usable local admin
+.\Enable-RemotePs.ps1
+
+# Run again after the snapshot and answer Y when it offers to remove dcadmin and profile folders
+.\Enable-RemotePs.ps1
+
+# Force-create the temporary local admin used for snapshots
+.\Enable-RemotePs.ps1 -CreateDeviceCheckUser -DeviceCheckUserName dcadmin
+
+# Remove the temporary local admin and matching profile folders after finishing snapshots
+.\Enable-RemotePs.ps1 -RemoveDeviceCheckUser -DeviceCheckUserName dcadmin
 ```
 
 | Parameter | Details |
@@ -115,6 +127,7 @@ $cred = Get-Credential 'PALIOS\joty79'
 | `-NoSave` | Runs the collector and prints a summary without writing a snapshot file. |
 
 `TrustedHosts` updates are target-specific only; the scripts refuse wildcard trust entries and never store passwords.
+`Enable-RemotePs.ps1` checks whether the target has an enabled local administrator account. If the only administrator is a Microsoft Account, it offers to create a temporary local admin such as `dcadmin`; pressing Enter at the password prompt creates it passwordless, matching the shop/workbench default. Running the helper again later detects the temporary user and matching profile folders such as `C:\Users\dcadmin*`, then asks whether to remove them. The helper also keeps `LimitBlankPasswordUse = 0` so passwordless local accounts can work over the LAN when that workflow is intentionally used.
 In the first TUI remote slice, `R` refreshes the active remote snapshot using the in-session credential when available; selected-device `E`, `S`, and `A` actions remain local-target only until remote per-device actions are wired safely.
 The first full PALIOS LAN snapshot completed through a Windows PowerShell 5.1 WinRM endpoint in about 10 seconds, collecting 127 present devices, 9 monitor registry entries, and connected-device `pnputil` output.
 

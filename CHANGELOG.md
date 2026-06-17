@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Updated `Enable-RemotePs.ps1` cleanup to detect and remove matching temporary profile folders such as `C:\Users\dcadmin` and `C:\Users\dcadmin.*`, including stale folders left after the local user has already been removed.
+- Updated `Enable-RemotePs.ps1` so running the helper again after a snapshot detects an existing temporary `dcadmin` user, asks whether to remove it, and exits after cleanup when confirmed.
+- Updated `Enable-RemotePs.ps1` to detect when a target PC has no enabled local administrator account suitable for the DeviceCheck WinRM workflow, prompt for creating a temporary local admin such as `dcadmin`, support explicit `-CreateDeviceCheckUser`, and add `-RemoveDeviceCheckUser` cleanup.
+- Kept passwordless local-account remoting as the intentional shop/workbench default in `Enable-RemotePs.ps1`: pressing Enter at the temporary-user password prompt creates a no-password local admin, and the helper keeps `LimitBlankPasswordUse = 0`.
 - Reduced the input loop sleep time during active background scans/lookups from 150ms to 50ms in [10-Input.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/10-Input.ps1) to improve UI responsiveness and speed up background queue processing.
 - Made the evidence scan concurrency limit scale dynamically based on the host system's logical processor count (using a range from 4 to 12 concurrent runspaces based on the NUMBER_OF_PROCESSORS environment variable) in [DeviceCheck.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/DeviceCheck.ps1) to maximize scanning throughput on multi-core PCs.
 - Refactored the monolithic `DeviceCheck.ps1` entrypoint into dot-sourced function groups under `internal\DeviceCheck\`. The root script now keeps startup state and the main event loop, while models/credentials, machine identity, evidence resolvers, UI formatting, inventory/snapshots, remote connection workflows, tree/details, rendering, lookup actions, and input handling live in focused files.
@@ -51,6 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `Diagnose-SmbSharing.ps1`, an interactive diagnostic and fix utility script to automatically audit and repair Windows LAN/SMB file sharing settings, including Private network profile category configuration, Windows Defender Firewall file sharing and network discovery rules, and LAN-related services configuration.
 
 ### Fixed
+- Added an ADSI WinNT fallback for `Enable-RemotePs.ps1` temporary user creation, group membership, and removal when LocalAccounts cmdlets fail under PowerShell 7.x with module-loading errors.
+- Fixed the ADSI fallback user-existence check in `Enable-RemotePs.ps1` so missing WinNT users are not treated as existing, preventing false "dcadmin already exists" messages followed by group-membership failures.
+- Fixed `Enable-RemotePs.ps1` temporary user creation on Windows where `New-LocalUser -Description` rejects descriptions longer than 48 characters; the helper now uses a shorter description and verifies the account exists before printing success or adding it to local groups.
 - Changed Escape key behavior in [DeviceCheck.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/DeviceCheck.ps1) to switch back to the `Ctrl+L` connection selector menu instead of exiting to shell when viewing a remote snapshot or PC target. Exiting to shell via Escape is now preserved only when on the local host target, while `q` remains a fast quit from any target.
 - Fixed DHCP IP address conflicts between home and work networks when devices share the same IP (e.g., `192.168.1.7` assigned to a work PC and statically mapped to `PALIOS` at home) in [06-RemoteConnection.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/06-RemoteConnection.ps1):
   - Scoped history scan targeting and IP-to-Hostname resolving cache in `Get-DeviceCheckDiscoveredHosts` to the current NetworkId.

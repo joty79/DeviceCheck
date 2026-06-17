@@ -56,6 +56,48 @@ Quick lookup:
 
 ### Decision Log
 
+Date: 2026-06-17
+Problem: After removing `dcadmin`, the account was gone but `C:\Users\dcadmin` and `C:\Users\dcadmin.<COMPUTERNAME>` profile folders remained because the account had been used for multiple WinRM test logons.
+Root cause: `Enable-RemotePs.ps1` cleanup removed only the local account and did not clean Windows user profiles or leftover profile directories. On Windows, deleting a local user does not necessarily remove `C:\Users\<user>*` profile folders.
+Guardrail/rule: DeviceCheck temporary-user cleanup must remove both the account and its matching profile data. Prefer `Win32_UserProfile` removal for non-loaded profiles, then remove only safe leftover folders under `%SystemDrive%\Users` whose leaf is exactly the temporary username or starts with `<username>.`. Before recursive deletion, verify the resolved full path stays inside the Users root and matches the expected temporary-user naming pattern.
+Files affected: `Enable-RemotePs.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `Enable-RemotePs.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; `git ls-files --eol` confirmed LF endings; non-admin smoke confirmed the script stops early with the administrator warning when not elevated; non-destructive path-safety smoke confirmed only `C:\Users\dcadmin` and `C:\Users\dcadmin.*` match, while unrelated user folders and paths outside `C:\Users` do not. Elevated profile cleanup still required on the laptop.
+
+Date: 2026-06-17
+Problem: After a successful remote snapshot, the user wants to remove the temporary `dcadmin` account without remembering a separate cleanup switch or manual command.
+Root cause: `Enable-RemotePs.ps1` had explicit `-RemoveDeviceCheckUser` cleanup, but the natural workflow is to run the same helper again on the target PC after the snapshot and let it detect/offer cleanup.
+Guardrail/rule: The normal `.\Enable-RemotePs.ps1` flow should detect the configured temporary DeviceCheck user (default `dcadmin`) before setup, ask whether to remove it, and exit after removal when confirmed. Keep `-RemoveDeviceCheckUser` for non-interactive cleanup, and allow `-CreateDeviceCheckUser`/`-NoUserPrompt` to bypass the cleanup prompt when automation needs setup behavior.
+Files affected: `Enable-RemotePs.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `Enable-RemotePs.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; `git ls-files --eol` confirmed LF endings; non-admin smoke confirmed the script stops early with the administrator warning when not elevated. Elevated target cleanup still required on the laptop.
+
+Date: 2026-06-17
+Problem: Running only `.\Enable-RemotePs.ps1` on the target laptop still printed `Local user 'dcadmin' already exists`, then failed to add `dcadmin` to `Administrators` and `Remote Management Users` because the principal did not actually exist.
+Root cause: The ADSI WinNT user-existence fallback created a `DirectoryEntry` for `WinNT://COMPUTER/user,user` and treated that object as proof of existence. The WinNT provider can return a lazy object for a missing account; the failure appears later when the account is used.
+Guardrail/rule: Do not treat an ADSI `DirectoryEntry` object as existence proof. For WinNT users, use `[System.DirectoryServices.DirectoryEntry]::Exists()` with exception-as-missing and/or enumerate `WinNT://COMPUTER,computer` children for an exact `SchemaClassName = User` and case-insensitive `Name` match.
+Files affected: `Enable-RemotePs.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `Enable-RemotePs.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; missing-user ADSI existence smoke confirmed `[System.DirectoryServices.DirectoryEntry]::Exists()` returns false for a definitely missing local user when exceptions are treated as missing; non-admin smoke confirmed the script stops early with the administrator warning when not elevated. Elevated target rerun still required on the laptop.
+
+Date: 2026-06-17
+Problem: On the target laptop, `Enable-RemotePs.ps1` failed again during temporary user creation under PowerShell 7.6.2 with `Could not load type 'Microsoft.PowerShell.Telemetry.Internal.TelemetryAPI' from assembly 'System.Management.Automation, Version=7.6.0.500'`.
+Root cause: The Windows `LocalAccounts` cmdlets can load unreliably through the PowerShell 7.x compatibility path on some systems. `New-LocalUser` failed before creating the user, and relying on a Windows PowerShell 5.1 relaunch is not acceptable for fresh/customer PCs where the user runs the helper from PowerShell 7 and the Windows PowerShell host may have unrelated first-run/setup problems.
+Guardrail/rule: For setup helpers that create/delete local Windows users, keep the primary `LocalAccounts` cmdlet path simple but include an ADSI `WinNT://` fallback for create, group membership, and removal. Prefer this PowerShell 7-compatible fallback over relaunching Windows PowerShell 5.1 or using `net user`, because it handles passwordless users, secure-string conversion, and quoting more reliably inside the current host.
+Files affected: `Enable-RemotePs.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `Enable-RemotePs.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; harmless ADSI bind checks for the local computer and Administrators group succeeded from PowerShell 7; non-admin smoke confirmed the script stops early with the administrator warning when not elevated. Elevated target rerun still required on the laptop.
+
+Date: 2026-06-17
+Problem: Creating the temporary DeviceCheck WinRM admin failed on a customer/work laptop when the user entered password `1234`. `New-LocalUser` rejected the `Description` argument because Windows local user descriptions are limited to 48 characters, but the script still printed a misleading created message and then group membership failed because the user did not exist.
+Root cause: The helper used a 53-character description and trusted the cmdlet path too optimistically before verifying that the account existed.
+Guardrail/rule: Keep `New-LocalUser -Description` values at 48 characters or fewer. After creating local users in setup helpers, re-query the account before printing success or adding group memberships so validation failures cannot produce false success.
+Files affected: `Enable-RemotePs.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `Enable-RemotePs.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; non-admin smoke confirmed the script stops early with the administrator warning when not elevated. Elevated target rerun still required on the laptop.
+
+Date: 2026-06-17
+Problem: Work/customer PCs and the user's own formatted PCs often use local accounts with no password by default. When a target is signed in with a Microsoft Account and has no enabled local administrator account, WinRM may be enabled but DeviceCheck still lacks a reliable local credential for snapshot collection.
+Root cause: `Enable-RemotePs.ps1` enabled WinRM but did not detect MicrosoftAccount-only administrator setups or offer a complete create/use/remove lifecycle for a temporary local WinRM admin. During follow-up, a generic security-hardening instinct briefly treated blank-password remote logon as something to keep blocked, which contradicts the established shop/workbench baseline.
+Guardrail/rule: In DeviceCheck's shop/workbench WinRM setup, passwordless local accounts are an intentional supported default. `Enable-RemotePs.ps1` should detect usable enabled local admins, warn when only Microsoft Account admins are present, offer or force-create a temporary local admin such as `dcadmin`, allow Enter/no password when creating it, keep `LimitBlankPasswordUse = 0`, and provide `-RemoveDeviceCheckUser` cleanup after snapshots. Do not silently create users by default; prompt unless `-CreateDeviceCheckUser` is explicit.
+Files affected: `Enable-RemotePs.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `Enable-RemotePs.ps1`; verified `New-LocalUser` supports the `-NoPassword` parameter set; non-admin smoke confirmed the script stops early with the administrator warning when not elevated.
+
 Date: 2026-06-16
 Problem: 1. Connecting to a LAN target at work (e.g. `datacomputer2`) maps or displays it as a home LAN PC (e.g. `PALIOS`) when both share the same IP (e.g. `192.168.1.7`) via DHCP or static lease. 2. Pressing Escape while viewing a remote target or saved snapshot exits the script completely to shell instead of going back to the connection selector. 3. Pressing Escape in the "Ctrl+L" connection selector menu should switch target mode back to the local host machine instead of staying on the previously logged remote target.
 Root cause: 1. The local network scanning history retrieval and hostname resolution cache mapped IP addresses globally without scoping them to the active NetworkId. 2. Escape was hardcoded to set `$running = $false` on all targets in the main event loop. 3. The connection selector cancel path did not reset target mode properties to local host and trigger a local scan.
@@ -791,4 +833,3 @@ Root cause: 1) `Get-MonitorWmiEvidence` queried the `root\wmi` namespace dynamic
 Guardrail/rule: Cache hardware ID breakdown lines in `$script:HardwareIdBreakdownCache` to avoid repeat lookups. Query WMI monitor classes in bulk at most once and cache them in module scope (`$script:GlobalWmiMonitorIDs`, etc.). Pre-warm this WMI cache synchronously/asynchronously at startup and rescan to avoid first-time selection render lags. Automatically bypass local WMI and INF monitor queries on remote snapshot targets. Clear all resolver and module caches in `Invalidate-EvidenceCache` when a rescan is triggered.
 Files affected: `internal\DeviceCheck\03-EvidenceResolvers.ps1`, `internal\DeviceCheck\04-UiTextFormatting.ps1`, `internal\DeviceCheck\05-InventoryAndSnapshots.ps1`, `internal\MonitorEdidResolver.psm1`, `PROJECT_RULES.md`, `CHANGELOG.md`.
 Validation/tests run: PowerShell parser validation via `internal\Test-DeviceCheckStructure.ps1` and unit tests in `internal\Test-MonitorEdidResolver.ps1`, `internal\Test-HardwareIdResolver.ps1`, `internal\Test-AlsaUcmResolver.ps1`, and `internal\Test-HardwareIdentityHarness.ps1`.
-
