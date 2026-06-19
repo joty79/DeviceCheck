@@ -611,12 +611,17 @@ try {
     Write-Warning "Failed to enable PSRemoting/WSMan: $_"
 }
 
-# 4. Configure WinRM service to start automatically
+# 4. Configure WinRM service to start automatically (and disable Delayed Start)
 Write-Host "Configuring WinRM Service..." -ForegroundColor White
 try {
     Set-Service -Name "WinRM" -StartupType "Automatic" -ErrorAction Stop
+    # Disable Delayed Auto Start if it was set
+    $registryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\WinRM"
+    if (Test-Path -Path $registryPath) {
+        Set-ItemProperty -Path $registryPath -Name "DelayedAutoStart" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+    }
     Start-Service -Name "WinRM" -ErrorAction SilentlyContinue
-    Write-Host "✅ WinRM Service set to Automatic." -ForegroundColor Green
+    Write-Host "✅ WinRM Service set to Automatic (non-delayed)." -ForegroundColor Green
 } catch {
     Write-Warning "Failed to configure WinRM service: $_"
 }

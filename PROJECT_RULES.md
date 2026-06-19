@@ -833,3 +833,10 @@ Root cause: 1) `Get-MonitorWmiEvidence` queried the `root\wmi` namespace dynamic
 Guardrail/rule: Cache hardware ID breakdown lines in `$script:HardwareIdBreakdownCache` to avoid repeat lookups. Query WMI monitor classes in bulk at most once and cache them in module scope (`$script:GlobalWmiMonitorIDs`, etc.). Pre-warm this WMI cache synchronously/asynchronously at startup and rescan to avoid first-time selection render lags. Automatically bypass local WMI and INF monitor queries on remote snapshot targets. Clear all resolver and module caches in `Invalidate-EvidenceCache` when a rescan is triggered.
 Files affected: `internal\DeviceCheck\03-EvidenceResolvers.ps1`, `internal\DeviceCheck\04-UiTextFormatting.ps1`, `internal\DeviceCheck\05-InventoryAndSnapshots.ps1`, `internal\MonitorEdidResolver.psm1`, `PROJECT_RULES.md`, `CHANGELOG.md`.
 Validation/tests run: PowerShell parser validation via `internal\Test-DeviceCheckStructure.ps1` and unit tests in `internal\Test-MonitorEdidResolver.ps1`, `internal\Test-HardwareIdResolver.ps1`, `internal\Test-AlsaUcmResolver.ps1`, and `internal\Test-HardwareIdentityHarness.ps1`.
+
+Date: 2026-06-19
+Problem: During boot with high disk usage, WinRM service starts late even when set to Automatic because SCM defaults to Delayed Start, or Set-Service on Windows client OS preserves the DelayedAutoStart flag.
+Root cause: Set-Service -StartupType Automatic does not clear the DelayedAutoStart registry flag.
+Guardrail/rule: When configuring WinRM startup type in `Enable-RemotePs.ps1`, explicitly write `DelayedAutoStart = 0` to `HKLM:\SYSTEM\CurrentControlSet\Services\WinRM` to guarantee non-delayed startup.
+Files affected: `Enable-RemotePs.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Local registry check confirms DelayedAutoStart is 0, parser validation via structure test.

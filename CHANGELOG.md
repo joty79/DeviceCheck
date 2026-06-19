@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Updated `Enable-RemotePs.ps1` to configure the WinRM service to start automatically and explicitly disable Delayed Start (setting `DelayedAutoStart = 0` in the registry) so the service starts as early as possible during boot.
 - Updated `Enable-RemotePs.ps1` cleanup to detect and remove matching temporary profile folders such as `C:\Users\dcadmin` and `C:\Users\dcadmin.*`, including stale folders left after the local user has already been removed.
 - Updated `Enable-RemotePs.ps1` so running the helper again after a snapshot detects an existing temporary `dcadmin` user, asks whether to remove it, and exits after cleanup when confirmed.
 - Updated `Enable-RemotePs.ps1` to detect when a target PC has no enabled local administrator account suitable for the DeviceCheck WinRM workflow, prompt for creating a temporary local admin such as `dcadmin`, support explicit `-CreateDeviceCheckUser`, and add `-RemoveDeviceCheckUser` cleanup.
