@@ -1,6 +1,47 @@
 # Part of DeviceCheck.ps1. Dot-sourced by the root entrypoint; keep script-scope state shared.
 # Purpose: Offline snapshot submenu helpers for the LAN connection selector.
 
+function Get-DeviceCheckLatestSnapshotEntries {
+    $snapshotsRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'snapshots'
+    if (-not (Test-Path -LiteralPath $snapshotsRoot -PathType Container)) {
+        return @()
+    }
+
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($file in @(Get-ChildItem -Path $snapshotsRoot -Recurse -Filter 'latest.json' -File -ErrorAction SilentlyContinue)) {
+        try {
+            $snapshot = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+            $collector = Get-NotePropertyValue -Object $snapshot -Name 'Collector'
+            $machine = Get-NotePropertyValue -Object $snapshot -Name 'Machine'
+            $computerSystem = Get-NotePropertyValue -Object $machine -Name 'ComputerSystem'
+            $computerName = [string](Get-NotePropertyValue -Object $collector -Name 'TargetComputerName')
+            if ([string]::IsNullOrWhiteSpace($computerName)) {
+                $computerName = [string](Get-NotePropertyValue -Object $computerSystem -Name 'Name')
+            }
+            if ([string]::IsNullOrWhiteSpace($computerName)) {
+                $computerName = $file.Directory.Name
+            }
+
+            $devicesRoot = Get-NotePropertyValue -Object $snapshot -Name 'Devices'
+            $deviceCount = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')
+            if ([string]::IsNullOrWhiteSpace($deviceCount)) {
+                $deviceCount = [string](@((Get-NotePropertyValue -Object $devicesRoot -Name 'Present')).Count)
+            }
+
+            $entries.Add([PSCustomObject]@{
+                ComputerName    = $computerName
+                RequestedTarget = [string](Get-NotePropertyValue -Object $collector -Name 'RequestedComputerName')
+                FinishedAt      = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
+                DeviceCount     = $deviceCount
+                SnapshotPath    = $file.FullName
+                Snapshot        = $snapshot
+            })
+        } catch {}
+    }
+
+    return @($entries | Sort-Object FinishedAt -Descending)
+}
+
 function Get-DeviceCheckOfflineMenuEntries {
     param(
         [Parameter(Mandatory)]$AllHistory,
@@ -23,7 +64,7 @@ function Get-DeviceCheckOfflineMenuEntries {
 
         $networkLabel = Get-DeviceCheckNetworkLabel -NetworkId $entry.NetworkId
         $cached = Find-LatestSnapshotForComputerName -ComputerName $entry.ComputerName
-        if ($null -eq $cached -and -not [string]::IsNullOrWhiteSpace($entry.LastIPAddress)) {
+        if ($null -eq $cached -and (Test-DeviceCheckIPv4Address -Address $entry.LastIPAddress)) {
             $cached = Find-LatestSnapshotForComputerName -ComputerName $entry.LastIPAddress
         }
 
@@ -31,9 +72,14 @@ function Get-DeviceCheckOfflineMenuEntries {
         $finishedAt = 'not captured'
         $snapshotPath = $null
         $hasSnapshot = $false
+        $displayIPAddress = $(if (Test-DeviceCheckIPv4Address -Address $entry.LastIPAddress) { $entry.LastIPAddress } else { 'Unknown' })
         if ($null -ne $cached) {
             $collector = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Collector'
             $finishedAt = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
+            $requestedTarget = [string](Get-NotePropertyValue -Object $collector -Name 'RequestedComputerName')
+            if (Test-DeviceCheckIPv4Address -Address $requestedTarget) {
+                $displayIPAddress = $requestedTarget
+            }
             $devicesRoot = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Devices'
             $deviceCount = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')
             if ([string]::IsNullOrWhiteSpace($deviceCount)) {
@@ -44,10 +90,18 @@ function Get-DeviceCheckOfflineMenuEntries {
             $null = $snapshotPathKeys.Add($snapshotPath)
         }
 
+        if (
+            $entry.NetworkId -eq $CurrentNetworkId -and
+            (Test-DeviceCheckIPv4Address -Address $displayIPAddress) -and
+            (Test-PortOpen -ComputerName $displayIPAddress -Port 5985 -TimeoutMs 300)
+        ) {
+            continue
+        }
+
         $entries.Add([PSCustomObject]@{
             Type          = $(if ($hasSnapshot) { 'OfflineSnapshot' } else { 'OfflineHistory' })
             ComputerName  = $entry.ComputerName
-            LastIPAddress = $entry.LastIPAddress
+            LastIPAddress = $displayIPAddress
             MACAddress    = $entry.MACAddress
             UserName      = $entry.UserName
             NetworkId     = $entry.NetworkId
@@ -81,7 +135,7 @@ function Get-DeviceCheckOfflineMenuEntries {
         }
 
         $requested = $snapshotEntry.RequestedTarget
-        if ([string]::IsNullOrWhiteSpace($requested)) { $requested = 'snapshot' }
+        if (-not (Test-DeviceCheckIPv4Address -Address $requested)) { $requested = 'snapshot' }
         $entries.Add([PSCustomObject]@{
             Type          = 'OfflineSnapshot'
             ComputerName  = $snapshotEntry.ComputerName

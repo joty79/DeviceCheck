@@ -265,6 +265,134 @@ function New-CollectorScriptBlock {
             return [PSCustomObject]$result
         }
 
+        function Get-CimListOrEmpty {
+            param([string]$ClassName)
+
+            try {
+                return @(Get-CimInstance -ClassName $ClassName -ErrorAction Stop)
+            } catch {
+                return @()
+            }
+        }
+
+        function ConvertTo-UInt64OrNull {
+            param($Value)
+
+            if ($null -eq $Value) { return $null }
+            $text = [string]$Value
+            if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+
+            [UInt64]$parsed = 0
+            if ([UInt64]::TryParse($text.Trim(), [ref]$parsed)) {
+                return $parsed
+            }
+            return $null
+        }
+
+        function Get-MemoryTypeName {
+            param($Value)
+
+            $code = ConvertTo-UInt64OrNull -Value $Value
+            if ($null -eq $code) { return '' }
+
+            switch ([int]$code) {
+                20 { 'DDR' }
+                21 { 'DDR2' }
+                22 { 'DDR2 FB-DIMM' }
+                24 { 'DDR3' }
+                26 { 'DDR4' }
+                34 { 'DDR5' }
+                35 { 'LPDDR5' }
+                default { "Type $code" }
+            }
+        }
+
+        function Get-MemoryFormFactorName {
+            param($Value)
+
+            $code = ConvertTo-UInt64OrNull -Value $Value
+            if ($null -eq $code) { return '' }
+
+            switch ([int]$code) {
+                8 { 'DIMM' }
+                12 { 'SODIMM' }
+                default { "FormFactor $code" }
+            }
+        }
+
+        function Get-MachineMemorySnapshot {
+            param($ComputerSystem)
+
+            $physicalMemory = @(Get-CimListOrEmpty -ClassName 'Win32_PhysicalMemory')
+            $memoryArrays = @(Get-CimListOrEmpty -ClassName 'Win32_PhysicalMemoryArray')
+            [UInt64]$installedBytes = 0
+            $slotsUsed = 0
+
+            $modules = @(
+                foreach ($module in $physicalMemory) {
+                    $capacity = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -InputObject $module -PropertyName 'Capacity')
+                    if ($null -ne $capacity -and $capacity -gt 0) {
+                        $installedBytes += $capacity
+                        $slotsUsed++
+                    }
+
+                    $smbiosType = Get-ObjectPropertyValue -InputObject $module -PropertyName 'SMBIOSMemoryType'
+                    $formFactor = Get-ObjectPropertyValue -InputObject $module -PropertyName 'FormFactor'
+                    [PSCustomObject]@{
+                        BankLabel            = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'BankLabel')
+                        DeviceLocator        = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'DeviceLocator')
+                        Capacity             = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'Capacity')
+                        Manufacturer         = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'Manufacturer')
+                        PartNumber           = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'PartNumber')
+                        SerialNumber         = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'SerialNumber')
+                        Speed                = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'Speed')
+                        ConfiguredClockSpeed = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'ConfiguredClockSpeed')
+                        MemoryType           = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'MemoryType')
+                        SMBIOSMemoryType     = ConvertTo-PlainSnapshotValue $smbiosType
+                        SMBIOSMemoryTypeName = Get-MemoryTypeName -Value $smbiosType
+                        FormFactor           = ConvertTo-PlainSnapshotValue $formFactor
+                        FormFactorName       = Get-MemoryFormFactorName -Value $formFactor
+                        DataWidth            = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'DataWidth')
+                        TotalWidth           = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'TotalWidth')
+                        InterleavePosition   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'InterleavePosition')
+                        Tag                  = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $module -PropertyName 'Tag')
+                    }
+                }
+            )
+
+            $totalSlots = 0
+            $arrays = @(
+                foreach ($array in $memoryArrays) {
+                    $memoryDevices = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -InputObject $array -PropertyName 'MemoryDevices')
+                    if ($null -ne $memoryDevices -and $memoryDevices -gt 0) {
+                        $totalSlots += [int]$memoryDevices
+                    }
+
+                    [PSCustomObject]@{
+                        Location      = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $array -PropertyName 'Location')
+                        Use           = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $array -PropertyName 'Use')
+                        MemoryDevices = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $array -PropertyName 'MemoryDevices')
+                        MaxCapacity   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $array -PropertyName 'MaxCapacity')
+                        MaxCapacityEx = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $array -PropertyName 'MaxCapacityEx')
+                    }
+                }
+            )
+
+            if ($totalSlots -le 0) {
+                $totalSlots = $slotsUsed
+            }
+
+            return [PSCustomObject]@{
+                SchemaVersion      = 1
+                TotalPhysicalBytes = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $ComputerSystem -PropertyName 'TotalPhysicalMemory')
+                InstalledBytes     = $(if ($installedBytes -gt 0) { [string]$installedBytes } else { $null })
+                SlotsUsed          = $slotsUsed
+                TotalSlots         = $totalSlots
+                Modules            = @($modules)
+                Arrays             = @($arrays)
+            }
+        }
+
         function Get-PnpDevicePropertiesSafe {
             param([string]$InstanceId)
 
@@ -364,6 +492,7 @@ function New-CollectorScriptBlock {
             $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
             $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
             $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+            $memory = Get-MachineMemorySnapshot -ComputerSystem $computerSystem
 
             $identitySeed = @(
                 Get-ObjectPropertyValue -InputObject $computerProduct -PropertyName 'UUID'
@@ -381,6 +510,7 @@ function New-CollectorScriptBlock {
                 BIOS                  = Get-CimSnapshot -InputObject $bios -PropertyNames @('Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate', 'SerialNumber')
                 OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
                 Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')
+                Memory                = $memory
             }
         }
 
@@ -479,6 +609,7 @@ function New-CollectorScriptBlock {
         $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
         $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
         $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+        $memory = Get-MachineMemorySnapshot -ComputerSystem $computerSystem
 
         $identitySeed = @(
             Get-ObjectPropertyValue -InputObject $computerProduct -PropertyName 'UUID'
@@ -611,6 +742,7 @@ function New-CollectorScriptBlock {
                 BIOS                  = Get-CimSnapshot -InputObject $bios -PropertyNames @('Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate', 'SerialNumber')
                 OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
                 Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')
+                Memory                = $memory
             }
             Devices       = [PSCustomObject]@{
                 Count      = @($devices).Count

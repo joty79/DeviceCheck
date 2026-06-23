@@ -144,6 +144,7 @@ function Invoke-RemoteSnapshotCollectionScreen {
     param(
         [Parameter(Mandatory)][string]$ComputerName,
         [System.Management.Automation.PSCredential]$Credential,
+        [string]$DefaultUserName,
         [switch]$PromptForCredential,
         [switch]$Quick,
         [switch]$ArchiveSample
@@ -151,7 +152,7 @@ function Invoke-RemoteSnapshotCollectionScreen {
 
     try {
         Clear-TuiScreen
-        $defaultUserName = "$ComputerName\joty79"
+        if ([string]::IsNullOrWhiteSpace($DefaultUserName)) { $DefaultUserName = "$ComputerName\joty79" }
         $captureSubtitle = $(if ($ArchiveSample) {
                 'Collecting full archive sample over WinRM.'
             } elseif ($Quick) {
@@ -160,8 +161,8 @@ function Invoke-RemoteSnapshotCollectionScreen {
                 'Collecting full remote snapshot over WinRM.'
             })
         if ($PromptForCredential -or $null -eq $Credential) {
-            Show-RemoteSnapshotCollectionScreen -ComputerName $ComputerName -UserName $defaultUserName -Subtitle 'Enter credentials for this LAN target.'
-            $Credential = New-DeviceCheckCredentialFromPrompt -ComputerName $ComputerName -DefaultUserName $defaultUserName
+            Show-RemoteSnapshotCollectionScreen -ComputerName $ComputerName -UserName $DefaultUserName -Subtitle 'Enter credentials for this LAN target.'
+            $Credential = New-DeviceCheckCredentialFromPrompt -ComputerName $ComputerName -DefaultUserName $DefaultUserName
             Clear-TuiScreen
         }
 
@@ -520,7 +521,10 @@ function Get-DeviceCheckDiscoveredHosts {
                         if ($resolved) {
                             foreach ($r in $resolved) {
                                 if ($r.IPAddress) {
-                                    $ips.Add($r.IPAddress)
+                                    $parsed = $null
+                                    if ([System.Net.IPAddress]::TryParse([string]$r.IPAddress, [ref]$parsed) -and $parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                                        $ips.Add($r.IPAddress)
+                                    }
                                 }
                             }
                         }
@@ -536,7 +540,9 @@ function Get-DeviceCheckDiscoveredHosts {
                         if ($dnsIps) {
                             $methodUsed = "GetHostAddresses"
                             foreach ($ip in $dnsIps) {
-                                $ips.Add($ip.IPAddressToString)
+                                if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                                    $ips.Add($ip.IPAddressToString)
+                                }
                             }
                         }
                     } catch {}
@@ -942,6 +948,10 @@ function Add-DeviceCheckConnectionHistoryEntry {
     )
 
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
+    if (-not (Test-DeviceCheckIPv4Address -Address $LastIPAddress)) {
+        $LastIPAddress = $null
+    }
+
     $historyList = Get-DeviceCheckConnectionHistory
     $history = [System.Collections.Generic.List[object]]::new()
     if ($null -ne $historyList) {
@@ -968,7 +978,9 @@ function Add-DeviceCheckConnectionHistoryEntry {
         if ($existing.ComputerName -match '^\d+\.\d+\.\d+\.\d+$' -and $ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$') {
             $existing.ComputerName = $ComputerName
         }
-        $existing.LastIPAddress = $LastIPAddress
+        if (-not [string]::IsNullOrWhiteSpace($LastIPAddress)) {
+            $existing.LastIPAddress = $LastIPAddress
+        }
         if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
             $existing.MACAddress = $MACAddress
         }
@@ -1063,47 +1075,6 @@ function Test-DeviceCheckHistoryEntryOnline {
     }
 }
 
-function Get-DeviceCheckLatestSnapshotEntries {
-    $snapshotsRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'snapshots'
-    if (-not (Test-Path -LiteralPath $snapshotsRoot -PathType Container)) {
-        return @()
-    }
-
-    $entries = [System.Collections.Generic.List[object]]::new()
-    foreach ($file in @(Get-ChildItem -Path $snapshotsRoot -Recurse -Filter 'latest.json' -File -ErrorAction SilentlyContinue)) {
-        try {
-            $snapshot = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
-            $collector = Get-NotePropertyValue -Object $snapshot -Name 'Collector'
-            $machine = Get-NotePropertyValue -Object $snapshot -Name 'Machine'
-            $computerSystem = Get-NotePropertyValue -Object $machine -Name 'ComputerSystem'
-            $computerName = [string](Get-NotePropertyValue -Object $collector -Name 'TargetComputerName')
-            if ([string]::IsNullOrWhiteSpace($computerName)) {
-                $computerName = [string](Get-NotePropertyValue -Object $computerSystem -Name 'Name')
-            }
-            if ([string]::IsNullOrWhiteSpace($computerName)) {
-                $computerName = $file.Directory.Name
-            }
-
-            $devicesRoot = Get-NotePropertyValue -Object $snapshot -Name 'Devices'
-            $deviceCount = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')
-            if ([string]::IsNullOrWhiteSpace($deviceCount)) {
-                $deviceCount = [string](@((Get-NotePropertyValue -Object $devicesRoot -Name 'Present')).Count)
-            }
-
-            $entries.Add([PSCustomObject]@{
-                ComputerName    = $computerName
-                RequestedTarget = [string](Get-NotePropertyValue -Object $collector -Name 'RequestedComputerName')
-                FinishedAt      = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
-                DeviceCount     = $deviceCount
-                SnapshotPath    = $file.FullName
-                Snapshot        = $snapshot
-            })
-        } catch {}
-    }
-
-    return @($entries | Sort-Object FinishedAt -Descending)
-}
-
 function Test-PortOpen {
     param(
         [string]$ComputerName,
@@ -1130,6 +1101,38 @@ function Test-PortOpen {
     }
 }
 
+function Test-DeviceCheckIPv4Address {
+    param([AllowEmptyString()][string]$Address)
+
+    if ([string]::IsNullOrWhiteSpace($Address)) {
+        return $false
+    }
+
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($Address, [ref]$parsed)) {
+        return $false
+    }
+
+    return $parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork
+}
+
+function Get-DeviceCheckIPv4Addresses {
+    param($Addresses)
+
+    foreach ($address in @($Addresses)) {
+        $addressText = $null
+        if ($address -is [System.Net.IPAddress]) {
+            $addressText = $address.IPAddressToString
+        } else {
+            $addressText = [string]$address
+        }
+
+        if (Test-DeviceCheckIPv4Address -Address $addressText) {
+            $addressText
+        }
+    }
+}
+
 function Resolve-HistoryTargetAddress {
     param(
         [string]$ComputerName,
@@ -1142,8 +1145,7 @@ function Resolve-HistoryTargetAddress {
     # 1. Try to resolve the hostname directly via DNS/LLMNR
     try {
         $ips = [System.Net.Dns]::GetHostAddresses($ComputerName)
-        if ($ips) {
-            $resolvedIp = $ips[0].IPAddressToString
+        foreach ($resolvedIp in @(Get-DeviceCheckIPv4Addresses -Addresses $ips)) {
             if (Test-PortOpen -ComputerName $resolvedIp -Port 5985) {
                 return $resolvedIp
             }
@@ -1154,8 +1156,10 @@ function Resolve-HistoryTargetAddress {
         $resolved = Resolve-DnsName -Name $ComputerName -ErrorAction SilentlyContinue
         if ($resolved) {
             foreach ($r in $resolved) {
-                if ($r.IPAddress -and (Test-PortOpen -ComputerName $r.IPAddress -Port 5985)) {
-                    return $r.IPAddress
+                foreach ($resolvedIp in @(Get-DeviceCheckIPv4Addresses -Addresses $r.IPAddress)) {
+                    if (Test-PortOpen -ComputerName $resolvedIp -Port 5985) {
+                        return $resolvedIp
+                    }
                 }
             }
         }
@@ -1164,7 +1168,7 @@ function Resolve-HistoryTargetAddress {
     # 2. Check local ARP cache
     if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
         $normMAC = $MACAddress.Replace(':', '-').ToUpper()
-        $neighbors = Get-NetNeighbor -ErrorAction SilentlyContinue |
+        $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object {
                 $nMac = $_.LinkLayerAddress
                 if ($nMac) { $nMac = $nMac.Replace(':', '-').ToUpper() }
@@ -1172,7 +1176,7 @@ function Resolve-HistoryTargetAddress {
             }
         if ($neighbors) {
             $arpIp = $neighbors[0].IPAddress
-            if (Test-PortOpen -ComputerName $arpIp -Port 5985) {
+            if ((Test-DeviceCheckIPv4Address -Address $arpIp) -and (Test-PortOpen -ComputerName $arpIp -Port 5985)) {
                 return $arpIp
             }
         }
@@ -1180,6 +1184,10 @@ function Resolve-HistoryTargetAddress {
 
     # 3. Fallback to last known IP
     if (-not [string]::IsNullOrWhiteSpace($LastIPAddress)) {
+        if (-not (Test-DeviceCheckIPv4Address -Address $LastIPAddress)) {
+            return $null
+        }
+
         if (Test-PortOpen -ComputerName $LastIPAddress -Port 5985) {
             # If MACAddress is known, verify the MAC of $LastIPAddress matches
             if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
@@ -2119,20 +2127,21 @@ function Invoke-ConnectLanTarget {
 
         try {
             $existingCredential = $script:TargetCredential
-            if ($null -eq $existingCredential) {
-                $existingCredential = $script:CredentialCache[$target.ToLower()]
+            if ($null -eq $existingCredential) { $existingCredential = $script:CredentialCache[$target.ToLower()] }
+            if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) { $existingCredential = $script:CredentialCache[$resolvedIp.ToLower()] }
+            if ($null -eq $existingCredential) { $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $target }
+            if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) { $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp }
+            $expectedUser = [string]$choice.UserName
+            if ($null -ne $existingCredential -and -not [string]::IsNullOrWhiteSpace($expectedUser) -and $expectedUser -ne 'Unknown') {
+                $cachedLeaf = ($existingCredential.UserName -split '\\')[-1]
+                $expectedLeaf = ($expectedUser -split '\\')[-1]
+                if (-not $cachedLeaf.Equals($expectedLeaf, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    Remove-DeviceCheckStoredCredential -ComputerName $target; if (-not [string]::IsNullOrWhiteSpace($resolvedIp)) { Remove-DeviceCheckStoredCredential -ComputerName $resolvedIp }; $existingCredential = $null
+                }
             }
-            if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
-                $existingCredential = $script:CredentialCache[$resolvedIp.ToLower()]
-            }
-            if ($null -eq $existingCredential) {
-                $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $target
-            }
-            if ($null -eq $existingCredential -and -not [string]::IsNullOrWhiteSpace($resolvedIp)) {
-                $existingCredential = Get-DeviceCheckStoredCredential -ComputerName $resolvedIp
-            }
+            $promptUserName = $(if (-not [string]::IsNullOrWhiteSpace($expectedUser) -and $expectedUser -ne 'Unknown') { if ($expectedUser -match '\\') { $expectedUser } else { "$target\$expectedUser" } } else { $null })
 
-            $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -PromptForCredential:($null -eq $existingCredential) -Quick:(-not $archiveSampleRequested) -ArchiveSample:$archiveSampleRequested
+            $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -DefaultUserName $promptUserName -PromptForCredential:($null -eq $existingCredential) -Quick:(-not $archiveSampleRequested) -ArchiveSample:$archiveSampleRequested
             if ($null -ne $collection -and $collection.Success) {
                 $connectedMac = "Unknown"
                 try {
@@ -2168,6 +2177,8 @@ function Invoke-ConnectLanTarget {
                 try { [Console]::CursorVisible = $false } catch {}
                 return
             } else {
+                Remove-DeviceCheckStoredCredential -ComputerName $target
+                if (-not [string]::IsNullOrWhiteSpace($resolvedIp)) { Remove-DeviceCheckStoredCredential -ComputerName $resolvedIp }
                 $script:SystemScanMessage = "Connect cancelled or failed: $target | $(Get-Date -Format 'HH:mm:ss')"
                 $script:RequestForceClear = $true
                 try { Initialize-TuiHost } catch {}

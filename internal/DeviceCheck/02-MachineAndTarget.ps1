@@ -71,6 +71,264 @@ function Get-CimFirstOrNull {
     }
 }
 
+function Get-CimListOrEmpty {
+    param([string]$ClassName)
+
+    try {
+        return @(Get-CimInstance -ClassName $ClassName -ErrorAction Stop)
+    } catch {
+        return @()
+    }
+}
+
+function ConvertTo-UInt64OrNull {
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+
+    [UInt64]$parsed = 0
+    if ([UInt64]::TryParse($text.Trim(), [ref]$parsed)) {
+        return $parsed
+    }
+    return $null
+}
+
+function Get-MemoryTypeName {
+    param($Value)
+
+    $code = ConvertTo-UInt64OrNull -Value $Value
+    if ($null -eq $code) { return '' }
+
+    switch ([int]$code) {
+        20 { 'DDR' }
+        21 { 'DDR2' }
+        22 { 'DDR2 FB-DIMM' }
+        24 { 'DDR3' }
+        26 { 'DDR4' }
+        34 { 'DDR5' }
+        35 { 'LPDDR5' }
+        default { "Type $code" }
+    }
+}
+
+function Get-MemoryFormFactorName {
+    param($Value)
+
+    $code = ConvertTo-UInt64OrNull -Value $Value
+    if ($null -eq $code) { return '' }
+
+    switch ([int]$code) {
+        8 { 'DIMM' }
+        12 { 'SODIMM' }
+        default { "FormFactor $code" }
+    }
+}
+
+function Get-MachineMemoryEvidence {
+    param($ComputerSystem)
+
+    $physicalMemory = @(Get-CimListOrEmpty -ClassName 'Win32_PhysicalMemory')
+    $memoryArrays = @(Get-CimListOrEmpty -ClassName 'Win32_PhysicalMemoryArray')
+    [UInt64]$installedBytes = 0
+    $slotsUsed = 0
+
+    $modules = @(
+        foreach ($module in $physicalMemory) {
+            $capacity = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $module -PropertyName 'Capacity')
+            if ($null -ne $capacity -and $capacity -gt 0) {
+                $installedBytes += $capacity
+                $slotsUsed++
+            }
+
+            $smbiosType = Get-ObjectPropertyValue -Object $module -PropertyName 'SMBIOSMemoryType'
+            $formFactor = Get-ObjectPropertyValue -Object $module -PropertyName 'FormFactor'
+            [PSCustomObject]@{
+                BankLabel            = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'BankLabel')
+                DeviceLocator        = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'DeviceLocator')
+                Capacity             = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'Capacity')
+                Manufacturer         = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'Manufacturer')
+                PartNumber           = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'PartNumber')
+                SerialNumber         = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'SerialNumber')
+                Speed                = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'Speed')
+                ConfiguredClockSpeed = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'ConfiguredClockSpeed')
+                MemoryType           = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'MemoryType')
+                SMBIOSMemoryType     = ConvertTo-PlainEvidenceValue $smbiosType
+                SMBIOSMemoryTypeName = Get-MemoryTypeName -Value $smbiosType
+                FormFactor           = ConvertTo-PlainEvidenceValue $formFactor
+                FormFactorName       = Get-MemoryFormFactorName -Value $formFactor
+                DataWidth            = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'DataWidth')
+                TotalWidth           = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'TotalWidth')
+                InterleavePosition   = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'InterleavePosition')
+                Tag                  = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $module -PropertyName 'Tag')
+            }
+        }
+    )
+
+    $totalSlots = 0
+    $arrays = @(
+        foreach ($array in $memoryArrays) {
+            $memoryDevices = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $array -PropertyName 'MemoryDevices')
+            if ($null -ne $memoryDevices -and $memoryDevices -gt 0) {
+                $totalSlots += [int]$memoryDevices
+            }
+
+            [PSCustomObject]@{
+                Location      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $array -PropertyName 'Location')
+                Use           = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $array -PropertyName 'Use')
+                MemoryDevices = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $array -PropertyName 'MemoryDevices')
+                MaxCapacity   = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $array -PropertyName 'MaxCapacity')
+                MaxCapacityEx = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $array -PropertyName 'MaxCapacityEx')
+            }
+        }
+    )
+
+    if ($totalSlots -le 0) {
+        $totalSlots = $slotsUsed
+    }
+
+    return [PSCustomObject]@{
+        SchemaVersion      = 1
+        TotalPhysicalBytes = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $ComputerSystem -PropertyName 'TotalPhysicalMemory')
+        InstalledBytes     = $(if ($installedBytes -gt 0) { [string]$installedBytes } else { $null })
+        SlotsUsed          = $slotsUsed
+        TotalSlots         = $totalSlots
+        Modules            = @($modules)
+        Arrays             = @($arrays)
+    }
+}
+
+function Format-MemoryBytesText {
+    param($Bytes)
+
+    $parsed = ConvertTo-UInt64OrNull -Value $Bytes
+    if ($null -eq $parsed -or $parsed -le 0) { return '' }
+
+    if ($parsed -ge 1GB) {
+        $gb = [double]$parsed / 1GB
+        $rounded = [Math]::Round($gb)
+        if ([Math]::Abs($gb - $rounded) -lt 0.05) {
+            return ('{0:N0} GB' -f $rounded)
+        }
+        return ('{0:N2} GB' -f $gb)
+    }
+
+    if ($parsed -ge 1MB) {
+        return ('{0:N0} MB' -f ([double]$parsed / 1MB))
+    }
+
+    return "$parsed bytes"
+}
+
+function Get-MemoryDisplayBytes {
+    param(
+        $Memory,
+        $ComputerSystem
+    )
+
+    $installed = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $Memory -PropertyName 'InstalledBytes')
+    if ($null -ne $installed -and $installed -gt 0) {
+        return $installed
+    }
+
+    $total = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $Memory -PropertyName 'TotalPhysicalBytes')
+    if ($null -ne $total -and $total -gt 0) {
+        return $total
+    }
+
+    return ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $ComputerSystem -PropertyName 'TotalPhysicalMemory')
+}
+
+function Get-MemoryTypeDisplayText {
+    param($Memory)
+
+    $types = @(
+        @(Get-ObjectPropertyValue -Object $Memory -PropertyName 'Modules') |
+            ForEach-Object {
+                $type = [string](Get-ObjectPropertyValue -Object $_ -PropertyName 'SMBIOSMemoryTypeName')
+                if (-not [string]::IsNullOrWhiteSpace($type) -and $type -notmatch '^Type\s+0$') {
+                    $type.Trim()
+                }
+            } |
+            Select-Object -Unique
+    )
+
+    return ($types -join '/')
+}
+
+function Format-MemorySummaryText {
+    param(
+        $Memory,
+        $ComputerSystem
+    )
+
+    $capacity = Format-MemoryBytesText -Bytes (Get-MemoryDisplayBytes -Memory $Memory -ComputerSystem $ComputerSystem)
+    if ([string]::IsNullOrWhiteSpace($capacity)) { return '' }
+
+    $slotsUsed = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $Memory -PropertyName 'SlotsUsed')
+    $totalSlots = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $Memory -PropertyName 'TotalSlots')
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $parts.Add($capacity)
+
+    if ($null -ne $slotsUsed -and $slotsUsed -gt 0 -and $null -ne $totalSlots -and $totalSlots -gt 0) {
+        $parts.Add("($slotsUsed/$totalSlots slots)")
+    }
+
+    $typeText = Get-MemoryTypeDisplayText -Memory $Memory
+    if (-not [string]::IsNullOrWhiteSpace($typeText)) {
+        $parts.Add($typeText)
+    }
+
+    return ($parts -join ' ')
+}
+
+function Format-MemorySpeedText {
+    param($Memory)
+
+    $speeds = @(
+        @(Get-ObjectPropertyValue -Object $Memory -PropertyName 'Modules') |
+            ForEach-Object {
+                $configured = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $_ -PropertyName 'ConfiguredClockSpeed')
+                $speed = ConvertTo-UInt64OrNull -Value (Get-ObjectPropertyValue -Object $_ -PropertyName 'Speed')
+                if ($null -ne $configured -and $configured -gt 0) {
+                    $configured
+                } elseif ($null -ne $speed -and $speed -gt 0) {
+                    $speed
+                }
+            } |
+            Select-Object -Unique
+    )
+
+    if ($speeds.Count -eq 0) { return '' }
+    return (($speeds | Sort-Object | ForEach-Object { "$_ MHz" }) -join ' / ')
+}
+
+function Format-MemoryPartNumberText {
+    param($Memory)
+
+    $partNumbers = @(
+        @(Get-ObjectPropertyValue -Object $Memory -PropertyName 'Modules') |
+            ForEach-Object {
+                $part = [string](Get-ObjectPropertyValue -Object $_ -PropertyName 'PartNumber')
+                if (-not [string]::IsNullOrWhiteSpace($part)) {
+                    ($part -replace '\s+', ' ').Trim()
+                }
+            }
+    )
+
+    if ($partNumbers.Count -eq 0) { return '' }
+
+    $groups = @($partNumbers | Group-Object | Sort-Object Name)
+    return (($groups | ForEach-Object {
+        if ($_.Count -gt 1) {
+            "$($_.Name) x$($_.Count)"
+        } else {
+            $_.Name
+        }
+    }) -join ', ')
+}
+
 function Get-DeviceManagerClassName {
     param([AllowEmptyString()][string]$ClassName)
 
@@ -88,6 +346,7 @@ function Get-MachineEvidence {
     $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
     $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
     $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+    $memory = Get-MachineMemoryEvidence -ComputerSystem $computerSystem
 
     $fingerprintParts = @(
         (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Manufacturer')
@@ -116,6 +375,7 @@ function Get-MachineEvidence {
             Model        = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Model')
             Name         = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Name')
             SystemType   = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'SystemType')
+            TotalPhysicalMemory = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'TotalPhysicalMemory')
         }
         ComputerSystemProduct = [PSCustomObject]@{
             Vendor            = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerProduct -PropertyName 'Vendor')
@@ -148,6 +408,7 @@ function Get-MachineEvidence {
             BuildNumber    = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $operatingSystem -PropertyName 'BuildNumber')
             OSArchitecture = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $operatingSystem -PropertyName 'OSArchitecture')
         }
+        Memory                = $memory
     }
 }
 

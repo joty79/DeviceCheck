@@ -293,6 +293,19 @@ function Get-DetailDisplayLines {
         Add-KeyValueLines -Lines $lines -Key 'BaseBoard' -Value "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -Width $Width
         Add-KeyValueLines -Lines $lines -Key 'Processor' -Value $machine.Processor.Name -Width $Width
         Add-KeyValueLines -Lines $lines -Key 'BIOS' -Value "$($machine.BIOS.Manufacturer) $($machine.BIOS.SMBIOSBIOSVersion)" -Width $Width
+        $memory = Get-NotePropertyValue -Object $machine -Name 'Memory'
+        $ramText = Format-MemorySummaryText -Memory $memory -ComputerSystem $machine.ComputerSystem
+        if (-not [string]::IsNullOrWhiteSpace($ramText)) {
+            Add-KeyValueLines -Lines $lines -Key 'RAM' -Value $ramText -Width $Width
+        }
+        $ramSpeed = Format-MemorySpeedText -Memory $memory
+        if (-not [string]::IsNullOrWhiteSpace($ramSpeed)) {
+            Add-KeyValueLines -Lines $lines -Key 'RAM Speed' -Value $ramSpeed -Width $Width
+        }
+        $ramPart = Format-MemoryPartNumberText -Memory $memory
+        if (-not [string]::IsNullOrWhiteSpace($ramPart)) {
+            Add-KeyValueLines -Lines $lines -Key 'RAM Part' -Value $ramPart -Width $Width
+        }
 
         $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
         if ($allDevices.Count -gt 0) {

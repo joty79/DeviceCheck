@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Added
+- Added RAM hardware evidence to local and remote snapshots using `Win32_PhysicalMemory` and `Win32_PhysicalMemoryArray`, and surfaced compact Computer Info lines for installed RAM capacity, used/total slots, memory type, speed, and part number.
 - Added automatic offline snapshot browsing to the `Ctrl+L` LAN connection selector in [06-RemoteConnection.ps1](file:///d:/Users/joty79/scripts/DeviceCheck/internal/DeviceCheck/06-RemoteConnection.ps1): the menu now shows active online targets for the current network separately from an `Offline Snapshots` submenu grouped by saved network, populated from saved history and existing `latest.json` snapshot files so one-time shop PCs remain reachable as offline evidence samples without manual archiving.
 - Added `No Snapshot` entries in the offline submenu for saved offline history targets that do not have a local `latest.json`, making missing local cache state visible instead of silently hiding those PCs.
 - Added `F = Full archive sample` to the cached remote snapshot action screen for online targets. `R` now performs a quick refresh, while `F` runs a slower full capture and marks the saved snapshot with `SnapshotMode = FullArchive` and `CapturePurpose = RepairShopSample`.
@@ -56,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `Diagnose-SmbSharing.ps1`, an interactive diagnostic and fix utility script to automatically audit and repair Windows LAN/SMB file sharing settings, including Private network profile category configuration, Windows Defender Firewall file sharing and network discovery rules, and LAN-related services configuration.
 
 ### Fixed
+- Fixed LAN history resolution so IPv6 link-local addresses such as `fe80::...%12` are not saved as a target's last address, and offline snapshot rows recover the captured IPv4 target from the snapshot when an older history entry is already polluted. The offline library now performs a quick WinRM probe against the recovered IPv4 so reachable targets do not remain mislabeled as offline.
+- Fixed stale credential reuse for LAN targets whose saved user changed, so an old `dcadmin` DPAPI credential is discarded when the current history says the target should use local `user`, and the credential prompt defaults to that history user instead of `joty79`.
 - Added an ADSI WinNT fallback for `Enable-RemotePs.ps1` temporary user creation, group membership, and removal when LocalAccounts cmdlets fail under PowerShell 7.x with module-loading errors.
 - Fixed the ADSI fallback user-existence check in `Enable-RemotePs.ps1` so missing WinNT users are not treated as existing, preventing false "dcadmin already exists" messages followed by group-membership failures.
 - Fixed `Enable-RemotePs.ps1` temporary user creation on Windows where `New-LocalUser -Description` rejects descriptions longer than 48 characters; the helper now uses a shorter description and verifies the account exists before printing success or adding it to local groups.
