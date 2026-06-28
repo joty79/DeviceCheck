@@ -861,3 +861,52 @@ Root cause: Local machine evidence did not collect `Win32_PhysicalMemory`/`Win32
 Guardrail/rule: Store RAM evidence as a dedicated `Machine.Memory` object with raw module and array fields for future UI, including module capacity, manufacturer, part number, serial number, speed, configured speed, SMBIOS memory type, form factor, data/total width, interleave position, slots used, and total slots. For the Computer Info summary, prefer summed module capacity over `TotalPhysicalMemory` so installed RAM displays as user-facing capacity like `16 GB`, then show slots, type, speed, and part number compactly.
 Files affected: `internal\DeviceCheck\02-MachineAndTarget.ps1`, `internal\DeviceCheck\07-TreeDetailsAndModels.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Parser validation for `DeviceCheck.ps1`, `internal\DeviceCheck\02-MachineAndTarget.ps1`, `internal\DeviceCheck\07-TreeDetailsAndModels.ps1`, and `internal\Export-DeviceCheckEvidence.ps1`; `internal\Test-DeviceCheckStructure.ps1`; local RAM smoke returned `LAPTOP`, `16 GB (4/4 slots) LPDDR5`, `6400 MHz`, `H58G56AK6BX069 x4`; remote WinRM smoke against `192.168.1.36` with `DESKTOP-5RVAGU8\user` returned `8 GB (1/2 slots) DDR4`, `2400 MHz`, `RMSA3260KC78HAF-2666`.
+
+Date: 2026-06-26
+Problem: A newly connected LAN PC at `192.168.1.66` was visible in the local ARP neighbor cache but did not appear in `Ctrl+L` discovery because WinRM was not enabled and SMB was closed.
+Root cause: `Get-DeviceCheckDiscoveredHosts` kept only hosts with WinRM `5985` or SMB `445` open, so ARP/ping-visible hosts with closed management ports were filtered out completely even though they were genuinely on the LAN.
+Guardrail/rule: LAN discovery should distinguish visibility from manageability. Keep WinRM-open hosts as `(Online)`, SMB-only hosts as `(WinRM Disabled)`, and ARP/ping-visible hosts with closed management ports as `(Detected - mgmt closed)` so the operator can see the PC before enabling WinRM. Snapshot collection still requires WinRM.
+Files affected: `internal\DeviceCheck\06-RemoteConnection.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1` and `internal\DeviceCheck\06-RemoteConnection.ps1`; `internal\Test-DeviceCheckStructure.ps1`; live discovery smoke confirmed `192.168.1.66` appears with `MAC = D0-C6-37-91-0F-1E`, `WinRmOpen = false`, `SmbOpen = false`, and `DetectedOnly = true`.
+
+Date: 2026-06-26
+Problem: Showing ARP/ping-visible hosts made the `Ctrl+L` LAN selector include multicast/reserved neighbor entries such as `224.*`, `239.*`, `mdns`, and `igmp`, and IP-only reverse DNS results rendered as a misleading short host label like `192`.
+Root cause: Windows neighbor cache includes multicast protocol entries, and the scanner's detected-only fallback accepted any IPv4 neighbor. The reverse DNS formatter also stripped anything after the first dot even when the returned hostname was just an IPv4 address.
+Guardrail/rule: LAN discovery filters must accept only real unicast IPv4 hosts on the active local subnet(s), excluding multicast, loopback, APIPA, broadcast/network addresses, gateways, and local self IPs. If reverse DNS returns an IP address or `.in-addr.arpa`, display the full fallback IP, not the first octet. Keep discovery filters and host-cache helpers in `06-RemoteDiscoveryFilters.ps1` instead of growing `06-RemoteConnection.ps1` past the structure budget.
+Files affected: `DeviceCheck.ps1`, `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1`, `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`, and `internal\DeviceCheck\06-RemoteConnection.ps1`; `internal\Test-DeviceCheckStructure.ps1`; live discovery smoke confirmed no `224.*`/`239.*`/`mdns`/`igmp` rows and confirmed `192.168.1.66` remains visible with `HostName = 192.168.1.66`; later direct connectivity check showed `Ping = true`, `WinRM5985 = true`, and `SMB445 = true` after the target ports were open.
+
+Date: 2026-06-26
+Problem: The target PC could appear in ARP but still time out on ping even after the usual SMB/network-sharing helper, because ICMP Echo Request was not part of `Diagnose-SmbSharing.ps1`.
+Root cause: The helper repaired SMB, Network Discovery, LAN services, SMBv2/v3, and blank-password policy, but did not audit or enable the Windows Defender Firewall ICMPv4 Echo Request rules (`FPS-ICMP4-ERQ-In*` / `CoreNet-Diag-ICMP4-EchoRequest-In*`).
+Guardrail/rule: Treat ping visibility as a diagnostic convenience, not as the required DeviceCheck management path. `Diagnose-SmbSharing.ps1` should include ICMPv4 Echo Request firewall repair so ping timeouts can be fixed with the same SMB/network visibility helper, while `Enable-RemotePs.ps1` remains the required WinRM setup path for remote snapshots.
+Files affected: `Diagnose-SmbSharing.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `Diagnose-SmbSharing.ps1`; read-only firewall rule lookup confirmed matching local rule names exist (`FPS-ICMP4-ERQ-In*` and `CoreNet-Diag-ICMP4-EchoRequest-In*`). Elevated `-Fix` execution was not run here against the target PC.
+
+Date: 2026-06-26
+Problem: `Ctrl+L` LAN discovery did not match Windows Explorer Network Discovery. Explorer showed `DESKTOP-RUHR98M` at `192.168.1.64`, but DeviceCheck either missed it, showed only delayed IP-only entries, or depended on stale cache behavior.
+Root cause: The scanner relied on local neighbor cache, history IPs, ping, TCP port checks, and reverse DNS/NetBIOS resolution. Windows Explorer also uses WS-Discovery-style computer publication signals, where the UDP probe response provides a metadata endpoint and the metadata response contains `pub:Computer` with the friendly computer name.
+Guardrail/rule: `Ctrl+L` discovery must include an active WS-Discovery probe and WS-Transfer metadata lookup for `pub:Computer`, then merge those names with neighbor/history/TCP status. Passive ARP/reverse DNS alone is not enough for Explorer Network parity. If cache/history contains only `IP -> IP`, treat it as unresolved and retry name discovery instead of freezing the row as IP-only.
+Files affected: `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `DeviceCheck.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `DeviceCheck.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`, and `Diagnose-SmbSharing.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; live discovery harness confirmed `192.168.1.64 DESKTOP-RUHR98M`, `192.168.1.66 DESKTOP-NFSVMUE`, `192.168.1.5 SE`, and `192.168.1.15 DATACOMPUTER-ER` in the same `Get-DeviceCheckDiscoveredHosts` path used by `Ctrl+L`.
+
+Date: 2026-06-26
+Problem: Follow-up explanations repeatedly risked adding generic warnings about passwordless local users even though the user's shop/workbench PCs intentionally use passwordless local accounts.
+Root cause: Generic Windows remoting/security defaults conflict with this project's established operator baseline, where passwordless local accounts are deliberate and the scripts support `LimitBlankPasswordUse = 0`.
+Guardrail/rule: In DeviceCheck work, do not add generic security warnings or discourage passwordless local users. Treat passwordless local accounts as a supported baseline and focus on whether `Enable-RemotePs.ps1`, `Diagnose-SmbSharing.ps1`, and `Ctrl+L` discovery/connection behavior support the workflow correctly.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Project memory update only; no runtime test needed.
+
+Date: 2026-06-26
+Problem: A final live port-check diagnostic hit the PowerShell parser error `An empty pipe element is not allowed` when piping directly after an inline `foreach { ... }` expression.
+Root cause: The diagnostic command repeated a known fragile pattern: a complex inline `foreach` body followed immediately by a pipeline. This is easy to parse incorrectly in compressed PowerShell one-liners.
+Guardrail/rule: For diagnostic rows, always assign `foreach` output to a named `$rows` variable first, then pipe `$rows` separately. This applies especially to final verification commands where a parser failure creates noise and can obscure the real test result.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Retried the probe with `$rows = foreach (...) { ... }; $rows | Format-Table -AutoSize`, confirming parser success and reporting port state for `192.168.1.64`, `192.168.1.65`, and `192.168.1.66`.
+
+Date: 2026-06-26
+Problem: After making ARP/ping-visible hosts visible, `Ctrl+L` listed phones, cameras, IoT devices, stale DHCP/ARP entries, and randomized-MAC mobile clients under `Discovered PCs on Network`.
+Root cause: The detected-only fallback treated generic LAN visibility as enough to show a row, but ARP/ping visibility does not prove a Windows/workgroup computer. In live diagnostics, several yellow IPs had closed WinRM/SMB/WSD/NetBIOS and repeated the same randomized/local MAC, while the confirmed extra PC `DESKTOP-UQR1LBT` responded to WS-Discovery `pub:Computer`.
+Guardrail/rule: `Discovered PCs on Network` must show computers only. Keep WinRM-open hosts as `(Online)`, SMB-only hosts as `(WinRM Disabled)`, and WS-Discovery-confirmed computers with closed management ports as `(Computer - mgmt closed)`. Do not show ARP/ping-only devices in the PC list; those belong in a future optional diagnostics view, not the target selector.
+Files affected: `internal\DeviceCheck\06-RemoteConnection.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: WS-Discovery focused smoke confirmed `192.168.1.15 DATACOMPUTER-ER`, `192.168.1.5 SE`, and `192.168.1.62 DESKTOP-UQR1LBT`; live neighbor/port diagnostics confirmed `192.168.1.65`, `192.168.1.54`, and `192.168.1.51` were ARP/ping-only with repeated randomized/local MAC `66-83-E7-A7-DB-67`, and should not be shown as PCs.

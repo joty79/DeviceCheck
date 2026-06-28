@@ -83,7 +83,7 @@ $env:DEVICECHECK_TUI_PERF = '1'
 ### The Solution
 
 `internal\Export-DeviceCheckEvidence.ps1` collects system identity, present PnP devices, optional per-device properties, `pnputil` output, and monitor registry/WMI evidence from either the local host or a same-LAN WinRM target. `Connect-PaliosDeviceCheck.ps1` is a convenience wrapper for the known `PALIOS` desktop and writes snapshots under `%LOCALAPPDATA%\DeviceCheck\snapshots\`.
-Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. The selector shows active online saved connections for the current network, plus an `Offline Snapshots` submenu where offline PCs are grouped by saved network. This keeps one-time shop/customer PCs available as an offline evidence corpus without crowding the daily target list or requiring manual archiving. The offline library is the local `%LOCALAPPDATA%\DeviceCheck` cache for the PC running DeviceCheck, so snapshots collected from another PC must be scanned again or copied/imported before they appear here. If the target PC is offline, DeviceCheck lets you load its cached snapshot in offline mode and dynamically disables live refresh (`R`) and archive capture (`F`). For online cached targets, `R` performs a quick snapshot refresh and `F` captures a slower full archive sample marked as `SnapshotMode = FullArchive` / `CapturePurpose = RepairShopSample`. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
+Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. The selector shows active online saved connections for the current network, plus an `Offline Snapshots` submenu where offline PCs are grouped by saved network. Discovery combines active WS-Discovery probes (the same family of network-discovery signals Windows Explorer uses), local neighbor/cache/history IPs, ping, reverse name lookup, and TCP checks. WS-Discovery metadata is used to recover computer names such as `DESKTOP-RUHR98M` even before WinRM is enabled. Discovered LAN hosts with WinRM open show as `(Online)`, SMB-only hosts show as `(WinRM Disabled)`, and WS-Discovery-confirmed computers with closed management ports show as `(Computer - mgmt closed)`. ARP/ping-only devices such as phones, cameras, TVs, and stale DHCP entries are not shown in the PC list; multicast/reserved neighbor entries such as `224.*` and `239.*` are filtered out. This keeps one-time shop/customer PCs available as an offline evidence corpus without crowding the daily target list or requiring manual archiving. The offline library is the local `%LOCALAPPDATA%\DeviceCheck` cache for the PC running DeviceCheck, so snapshots collected from another PC must be scanned again or copied/imported before they appear here. If the target PC is offline, DeviceCheck lets you load its cached snapshot in offline mode and dynamically disables live refresh (`R`) and archive capture (`F`). For online cached targets, `R` performs a quick snapshot refresh and `F` captures a slower full archive sample marked as `SnapshotMode = FullArchive` / `CapturePurpose = RepairShopSample`. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
 
 ```text
 NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree
@@ -108,6 +108,9 @@ $cred = Get-Credential 'PALIOS\joty79'
 # Run once on the target PC to enable WinRM and prepare a usable local admin
 .\Enable-RemotePs.ps1
 
+# Optional on the target PC: repair SMB/network discovery/ping visibility
+.\Diagnose-SmbSharing.ps1
+
 # Run again after the snapshot and answer Y when it offers to remove dcadmin and profile folders
 .\Enable-RemotePs.ps1
 
@@ -128,6 +131,7 @@ $cred = Get-Credential 'PALIOS\joty79'
 
 `TrustedHosts` updates are target-specific only; the scripts refuse wildcard trust entries and never store passwords.
 `Enable-RemotePs.ps1` checks whether the target has an enabled local administrator account. If the only administrator is a Microsoft Account, it offers to create a temporary local admin such as `dcadmin`; pressing Enter at the password prompt creates it passwordless, matching the shop/workbench default. Running the helper again later detects the temporary user and matching profile folders such as `C:\Users\dcadmin*`, then asks whether to remove them. The helper also keeps `LimitBlankPasswordUse = 0` so passwordless local accounts can work over the LAN when that workflow is intentionally used.
+`Diagnose-SmbSharing.ps1` is the separate SMB/network visibility helper: it repairs Private network profile, SMB and Network Discovery firewall rules, LAN discovery services, SMBv2/v3, blank-password policy, and ICMPv4 Echo Request so ping diagnostics can work.
 In the first TUI remote slice, `R` refreshes the active remote snapshot using the in-session credential when available; selected-device `E`, `S`, and `A` actions remain local-target only until remote per-device actions are wired safely.
 The first full PALIOS LAN snapshot completed through a Windows PowerShell 5.1 WinRM endpoint in about 10 seconds, collecting 127 present devices, 9 monitor registry entries, and connected-device `pnputil` output.
 
@@ -261,6 +265,7 @@ DeviceCheck/
 ├── .gitignore            # Generated evidence/cache folder ignores
 ├── .gitattributes        # Repository line-ending policy
 ├── Connect-PaliosDeviceCheck.ps1 # Convenience wrapper for PALIOS remote snapshot export
+├── Diagnose-SmbSharing.ps1 # SMB/network discovery/ping visibility repair helper
 ├── Enable-RemotePs.ps1     # WinRM/PSRemoting administrator configuration helper
 ├── DeviceCheck.ps1         # Main TUI entrypoint, startup state, and event loop
 ├── Get-DriverUpdateAgent.ps1 # Gemini tool-calling driver finder

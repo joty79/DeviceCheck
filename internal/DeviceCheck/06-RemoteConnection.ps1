@@ -336,110 +336,6 @@ function Get-CurrentNetworkIdentity {
     }
 }
 
-function Get-DeviceCheckHostsCache {
-    param([string]$NetworkId)
-    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
-    $hash = @{}
-    if (Test-Path -LiteralPath $path -PathType Leaf) {
-        try {
-            $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
-            if ($null -ne $json -and $json.PSObject.Properties[$NetworkId]) {
-                $netObj = $json.PSObject.Properties[$NetworkId].Value
-                if ($null -ne $netObj) {
-                    foreach ($p in $netObj.PSObject.Properties) { $hash[$p.Name] = $p.Value }
-                }
-            }
-        } catch {}
-    }
-    return $hash
-}
-
-function Save-DeviceCheckHostsCache {
-    param([Parameter(Mandatory)]$Cache, [Parameter(Mandatory)][string]$NetworkId)
-    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
-    try {
-        $fullCache = @{}
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
-            if ($null -ne $json) {
-                foreach ($p in $json.PSObject.Properties) {
-                    if ($p.Name -match '\|') { $fullCache[$p.Name] = $p.Value }
-                }
-            }
-        }
-        $fullCache[$NetworkId] = $Cache
-        ($fullCache | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $path -Encoding UTF8
-    } catch {}
-}
-
-function Start-DeviceCheckBackgroundResolver {
-    param(
-        [Parameter(Mandatory)][string[]]$IPs,
-        [Parameter(Mandatory)][string]$NetworkId
-    )
-    if ($IPs.Count -eq 0) { return }
-    $cachePath = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'hosts-cache.json'
-
-    $null = Start-Job -ScriptBlock {
-        param($ips, $path, $networkId)
-        $fullCache = @{}
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            try {
-                $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-                if ($null -ne $json) {
-                    foreach ($prop in $json.PSObject.Properties) {
-                        if ($prop.Name -match '\|') {
-                            $fullCache[$prop.Name] = $prop.Value
-                        }
-                    }
-                }
-            } catch {}
-        }
-
-        $netCache = @{}
-        if ($fullCache.ContainsKey($networkId)) {
-            $netObj = $fullCache[$networkId]
-            if ($null -ne $netObj) {
-                foreach ($prop in $netObj.PSObject.Properties) {
-                    $netCache[$prop.Name] = $prop.Value
-                }
-            }
-        }
-
-        $updated = $false
-        foreach ($ip in $ips) {
-            if (-not $netCache.ContainsKey($ip)) {
-                try {
-                    $entry = [System.Net.Dns]::GetHostEntry($ip)
-                    if ($entry.HostName) {
-                        $name = $entry.HostName
-                        if ($name -match '^([^.]+)\.') { $name = $Matches[1] }
-                        $netCache[$ip] = $name
-                        $updated = $true
-                    }
-                } catch {
-                    try {
-                        $dnsRes = Resolve-DnsName -Name $ip -QuickTimeout -ErrorAction Stop
-                        if ($dnsRes) {
-                            $name = $dnsRes[0].NameHost
-                            if ($name -match '^([^.]+)\.') { $name = $Matches[1] }
-                            $netCache[$ip] = $name
-                            $updated = $true
-                        }
-                    } catch {}
-                }
-            }
-        }
-        if ($updated) {
-            try {
-                $fullCache[$networkId] = $netCache
-                $json = $fullCache | ConvertTo-Json -Depth 4
-                $json | Set-Content -LiteralPath $path -Encoding UTF8
-            } catch {}
-        }
-    } -ArgumentList $IPs, $cachePath, $networkId
-}
-
 function Get-DeviceCheckDiscoveredHosts {
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -602,9 +498,19 @@ function Get-DeviceCheckDiscoveredHosts {
     $swPhase.Restart()
 
     # Get neighbors first to know which IPs to target
+    $localSubnetPrefixes = @(
+        foreach ($if in $interfaces) {
+            if ($if.IPAddress -match '^(\d+\.\d+\.\d+)\.\d+$') { $Matches[1] }
+        }
+    ) | Select-Object -Unique
+
     $neighbors = foreach ($if in $interfaces) {
         Get-NetNeighbor -InterfaceIndex $if.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.State -ne 'Unreachable' -and $_.IPAddress -notmatch '^\d+\.\d+\.\d+\.255$' -and $_.LinkLayerAddress -ne '00-00-00-00-00-00' }
+            Where-Object {
+                $_.State -ne 'Unreachable' -and
+                $_.LinkLayerAddress -ne '00-00-00-00-00-00' -and
+                (Test-DeviceCheckLanDiscoveryIPv4 -Address $_.IPAddress -SubnetPrefixes $localSubnetPrefixes)
+            }
     }
 
     # Filter out gateway IPs to avoid connecting to router
@@ -624,6 +530,11 @@ function Get-DeviceCheckDiscoveredHosts {
         $null = $localIPs.Add($if.IPAddress)
     }
 
+    $swWsDiscovery = [System.Diagnostics.Stopwatch]::StartNew()
+    $wsDiscoveryHosts = @(Invoke-DeviceCheckWsDiscoveryProbe -SubnetPrefixes $localSubnetPrefixes)
+    $timeWsDiscovery = $swWsDiscovery.Elapsed.TotalMilliseconds
+    $wsDiscoveryIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
     $neighborIPs = @()
     if ($neighbors) {
         $neighborIPs = @($neighbors.IPAddress)
@@ -632,12 +543,24 @@ function Get-DeviceCheckDiscoveredHosts {
     # Combine neighbor cache IPs and history IPs
     $targetIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($ip in $neighborIPs) { $null = $targetIPsSet.Add($ip) }
-    foreach ($ip in $historyIPs) { $null = $targetIPsSet.Add($ip) }
+    foreach ($hostEntry in $wsDiscoveryHosts) {
+        if (-not $localIPs.Contains($hostEntry.IP)) {
+            $null = $wsDiscoveryIPsSet.Add($hostEntry.IP)
+            $null = $targetIPsSet.Add($hostEntry.IP)
+            if (-not [string]::IsNullOrWhiteSpace($hostEntry.HostName) -and $hostEntry.HostName -ne $hostEntry.IP) {
+                $historyIpToName[$hostEntry.IP] = $hostEntry.HostName
+            }
+        }
+    }
+    foreach ($ip in $historyIPs) {
+        if (Test-DeviceCheckLanDiscoveryIPv4 -Address $ip -SubnetPrefixes $localSubnetPrefixes) { $null = $targetIPsSet.Add($ip) }
+    }
 
     $targetIPs = @(
         $targetIPsSet | Where-Object { -not $gateways.Contains($_) -and -not $localIPs.Contains($_) }
     )
 
+    $swPhase.Restart()
     $pingSuccessfulIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $pingTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
 
@@ -740,21 +663,47 @@ function Get-DeviceCheckDiscoveredHosts {
     # 7. Asynchronous Hostname Resolution for Online Hosts
     $swPhase.Restart()
 
-    # Online hosts are those that have WinRM open or SMB open (excluding ping-only hosts to filter out sleeping PCs in Modern Standby or non-Windows devices)
+    # Keep confirmed WS-Discovery computers visible before WinRM is enabled, without listing ARP-only phones/cameras.
     $onlineIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($ip in $winrmOpenIPs) { $null = $onlineIPsSet.Add($ip) }
     foreach ($ip in $smbOpenIPs) { $null = $onlineIPsSet.Add($ip) }
+    $detectedOnlyIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ip in $targetIPs) {
+        if ($wsDiscoveryIPsSet.Contains($ip) -and -not $onlineIPsSet.Contains($ip)) { $null = $detectedOnlyIPsSet.Add($ip) }
+    }
+    foreach ($ip in $detectedOnlyIPsSet) { $null = $onlineIPsSet.Add($ip) }
 
     $onlineIPs = @($onlineIPsSet)
     $resolvedNames = @{}
     $hostsCache = Get-DeviceCheckHostsCache -NetworkId $currentNetworkId
+    $cacheUpdatedFromDiscovery = $false
+    foreach ($entry in $historyIpToName.GetEnumerator()) {
+        $displayName = ConvertTo-DeviceCheckHostDisplayName -HostName $entry.Value -FallbackIP $entry.Key
+        if ($displayName -ne $entry.Key -and ((-not $hostsCache.ContainsKey($entry.Key)) -or $hostsCache[$entry.Key] -ne $displayName)) {
+            $hostsCache[$entry.Key] = $displayName
+            $cacheUpdatedFromDiscovery = $true
+        }
+    }
+    if ($cacheUpdatedFromDiscovery) {
+        Save-DeviceCheckHostsCache -Cache $hostsCache -NetworkId $currentNetworkId
+    }
 
     $unresolvedIPs = [System.Collections.Generic.List[string]]::new()
     foreach ($ip in $onlineIPs) {
         if ($historyIpToName.ContainsKey($ip)) {
-            $resolvedNames[$ip] = $historyIpToName[$ip]
+            $displayName = ConvertTo-DeviceCheckHostDisplayName -HostName $historyIpToName[$ip] -FallbackIP $ip
+            if ($displayName -ne $ip) {
+                $resolvedNames[$ip] = $displayName
+            } else {
+                $unresolvedIPs.Add($ip)
+            }
         } elseif ($hostsCache.ContainsKey($ip)) {
-            $resolvedNames[$ip] = $hostsCache[$ip]
+            $displayName = ConvertTo-DeviceCheckHostDisplayName -HostName $hostsCache[$ip] -FallbackIP $ip
+            if ($displayName -ne $ip) {
+                $resolvedNames[$ip] = $displayName
+            } else {
+                $unresolvedIPs.Add($ip)
+            }
         } else {
             $unresolvedIPs.Add($ip)
         }
@@ -785,10 +734,11 @@ function Get-DeviceCheckDiscoveredHosts {
             $newlyResolved = @{}
             foreach ($rt in $resolutionTasks) {
                 if ($rt.Task.IsCompleted -and -not $rt.Task.IsFaulted -and $rt.Task.Result.HostName) {
-                    $hostName = $rt.Task.Result.HostName
-                    if ($hostName -match '^([^.]+)\.') { $hostName = $Matches[1] }
-                    $resolvedNames[$rt.IP] = $hostName
-                    $newlyResolved[$rt.IP] = $hostName
+                    $hostName = ConvertTo-DeviceCheckHostDisplayName -HostName $rt.Task.Result.HostName -FallbackIP $rt.IP
+                    if ($hostName -ne $rt.IP) {
+                        $resolvedNames[$rt.IP] = $hostName
+                        $newlyResolved[$rt.IP] = $hostName
+                    }
                 }
             }
             if ($newlyResolved.Count -gt 0) {
@@ -807,11 +757,15 @@ function Get-DeviceCheckDiscoveredHosts {
             try {
                 $dnsRes = Resolve-DnsName -Name $ip -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
                 if ($dnsRes) {
-                    $dnsName = $dnsRes[0].NameHost
-                    if ($dnsName -match '^([^.]+)\.') { $dnsName = $Matches[1] }
-                    $resolvedNames[$ip] = $dnsName
-                    $hostsCache[$ip] = $dnsName
-                    Save-DeviceCheckHostsCache -Cache $hostsCache -NetworkId $currentNetworkId
+                    $dnsName = ConvertTo-DeviceCheckHostDisplayName -HostName $dnsRes[0].NameHost -FallbackIP $ip
+                    if ($dnsName -ne $ip) {
+                        $resolvedNames[$ip] = $dnsName
+                        $hostsCache[$ip] = $dnsName
+                        Save-DeviceCheckHostsCache -Cache $hostsCache -NetworkId $currentNetworkId
+                    } else {
+                        $resolvedNames[$ip] = $ip
+                        $stillUnresolved.Add($ip)
+                    }
                 } else {
                     $resolvedNames[$ip] = $ip
                     $stillUnresolved.Add($ip)
@@ -834,12 +788,8 @@ function Get-DeviceCheckDiscoveredHosts {
         $name = $resolvedNames[$ip]
         $isWinRm = $ip -in $winrmOpenIPs
         $isSmb = $ip -in $smbOpenIPs
-        $scanResultsList.Add([PSCustomObject]@{
-            IP        = $ip
-            HostName  = $name
-            WinRmOpen = $isWinRm
-            SmbOpen   = $isSmb
-        })
+        $isDetectedOnly = $detectedOnlyIPsSet.Contains($ip)
+        $scanResultsList.Add([PSCustomObject]@{ IP = $ip; HostName = $name; WinRmOpen = $isWinRm; SmbOpen = $isSmb; DetectedOnly = $isDetectedOnly })
     }
 
     $results = @($scanResultsList)
@@ -863,13 +813,7 @@ function Get-DeviceCheckDiscoveredHosts {
             if ($macLookup.ContainsKey($res.IP)) {
                 $mac = $macLookup[$res.IP]
             }
-            $discovered.Add([PSCustomObject]@{
-                IP        = $res.IP
-                HostName  = $res.HostName
-                MAC       = $mac
-                WinRmOpen = $res.WinRmOpen
-                SmbOpen   = $res.SmbOpen
-            })
+            $discovered.Add([PSCustomObject]@{ IP = $res.IP; HostName = $res.HostName; MAC = $mac; WinRmOpen = $res.WinRmOpen; SmbOpen = $res.SmbOpen; DetectedOnly = $res.DetectedOnly })
         }
     }
     $timeFinalMap = $swPhase.Elapsed.TotalMilliseconds
@@ -889,6 +833,7 @@ function Get-DeviceCheckDiscoveredHosts {
     }
     $logLines.Add("  Phase 3 (ArpClr) : $([Math]::Round($timeArpClear, 1)) ms")
     $logLines.Add("  Phase 4 (Ping)   : $([Math]::Round($timePing, 1)) ms")
+    $logLines.Add("  Phase 4b (WS-Disc): $([Math]::Round($timeWsDiscovery, 1)) ms ($($wsDiscoveryHosts.Count) hosts)")
     $logLines.Add("  Phase 5 (Neighbr): $([Math]::Round($timeNeighbors, 1)) ms")
     $logLines.Add("  Phase 6 (TCPScan): $([Math]::Round($timeTcpScan, 1)) ms")
     $logLines.Add("  Phase 7 (Reverse): $([Math]::Round($timeFinalMap, 1)) ms")
@@ -1302,6 +1247,7 @@ function Invoke-ConnectionHistorySelector {
                     Data          = $entry
                     IsOnline      = $true
                     WinRmOpen     = $online.WinRmOpen
+                    DetectedOnly  = $false
                     ResolvedIP    = $online.ResolvedIP
                     Source        = 'History'
                     SourceNetwork = Get-DeviceCheckNetworkLabel -NetworkId $entry.NetworkId
@@ -1398,16 +1344,9 @@ function Invoke-ConnectionHistorySelector {
 
                 if (-not $inHistory) {
                     $discoveredCount++
-                    $statusLabel = $(if ($d.WinRmOpen) { "(Online)" } else { "(WinRM Disabled)" })
+                    $statusLabel = $(if ($d.WinRmOpen) { "(Online)" } elseif ($d.DetectedOnly) { "(Computer - mgmt closed)" } else { "(WinRM Disabled)" })
                     $displayText = "$($d.HostName) ($($d.IP)) $statusLabel"
-                    $items.Add([PSCustomObject]@{
-                        Type       = 'Discovered'
-                        Text       = $displayText
-                        Selectable = $true
-                        Data       = $d
-                        IsOnline   = $true
-                        WinRmOpen  = $d.WinRmOpen
-                    })
+                    $items.Add([PSCustomObject]@{ Type = 'Discovered'; Text = $displayText; Selectable = $true; Data = $d; IsOnline = $true; WinRmOpen = $d.WinRmOpen; DetectedOnly = $d.DetectedOnly })
                 }
             }
 
@@ -1553,13 +1492,17 @@ function Invoke-ConnectionHistorySelector {
                         $statusText = ""
                         $cleanText = $item.Text
                         if ($item.Type -in @('Saved', 'OfflineSnapshot', 'Discovered')) {
-                            $cleanText = $item.Text -replace '\s*\((Online|Offline|WinRM Disabled)\)\s*$'
+                            $itemDetectedOnly = [bool](Get-NotePropertyValue -Object $item -Name 'DetectedOnly')
+                            $cleanText = $item.Text -replace '\s*\((Online|Offline|WinRM Disabled|Detected - mgmt closed|Computer - mgmt closed)\)\s*$'
                             if (-not $item.IsOnline) {
                                 $statusColor = $_C.Fail
                                 $statusLabel = "(Offline)"
                             } elseif ($item.WinRmOpen) {
                                 $statusColor = $_C.OK
                                 $statusLabel = "(Online)"
+                            } elseif ($itemDetectedOnly) {
+                                $statusColor = $_C.Warn
+                                $statusLabel = "(Computer - mgmt closed)"
                             } else {
                                 $statusColor = $_C.Warn
                                 $statusLabel = "(WinRM Disabled)"
@@ -1571,11 +1514,14 @@ function Invoke-ConnectionHistorySelector {
                         if ($item.Type -eq 'Action' -or $item.Type -eq 'OfflineLibrary') {
                             Add-UiFrameLine -Frame $frame -Text "    $($_C.OK)$($item.Text)$($_C.Reset)$($_C.EraseLn)"
                         } else {
+                            $itemDetectedOnly = [bool](Get-NotePropertyValue -Object $item -Name 'DetectedOnly')
                             $onlineColor = $(
                                 if (-not $item.IsOnline) {
                                     " $($_C.Fail)(Offline)$($_C.Reset)"
                                 } elseif ($item.WinRmOpen) {
                                     " $($_C.OK)(Online)$($_C.Reset)"
+                                } elseif ($itemDetectedOnly) {
+                                    " $($_C.Warn)(Computer - mgmt closed)$($_C.Reset)"
                                 } else {
                                     " $($_C.Warn)(WinRM Disabled)$($_C.Reset)"
                                 }

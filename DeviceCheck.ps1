@@ -46,6 +46,7 @@ $deviceCheckModuleFiles = @(
     '03-EvidenceResolvers.ps1'
     '04-UiTextFormatting.ps1'
     '05-InventoryAndSnapshots.ps1'
+    '06-RemoteDiscoveryFilters.ps1'
     '06-RemoteConnection.ps1'
     '06-RemoteConnectionOfflineMenu.ps1'
     '07-TreeDetailsAndModels.ps1'

@@ -126,6 +126,33 @@ if (-not $ndEnabled) {
 } else {
     Write-Host "   [OK] Οι κανόνες Firewall για την Ανακάλυψη Δικτύου (Network Discovery) είναι ενεργοποιημένοι." -ForegroundColor Green
 }
+
+# Check ICMPv4 Echo Request rules so the PC can answer ping during LAN discovery diagnostics.
+$icmpRules = Get-NetFirewallRule -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.Name -like 'FPS-ICMP4-ERQ-In*' -or
+        $_.Name -like 'CoreNet-Diag-ICMP4-EchoRequest-In*'
+    }
+
+$icmpEnabled = $icmpRules | Where-Object { $_.Enabled -eq 'True' }
+
+if (-not $icmpEnabled) {
+    Write-Host "   [WARN] Οι κανόνες Firewall για Ping / ICMPv4 Echo Request είναι απενεργοποιημένοι!" -ForegroundColor Yellow
+    $issues.Add([PSCustomObject]@{
+        Category    = 'FirewallIcmp'
+        Description = "Ενεργοποίηση των κανόνων Firewall για Ping / ICMPv4 Echo Request"
+        Action      = {
+            if ($icmpRules) {
+                foreach ($r in $icmpRules) {
+                    Enable-NetFirewallRule -Name $r.Name -ErrorAction SilentlyContinue
+                }
+            }
+            Write-Host "   [+] Οι κανόνες Firewall για Ping / ICMPv4 Echo Request ενεργοποιήθηκαν." -ForegroundColor Green
+        }
+    })
+} else {
+    Write-Host "   [OK] Οι κανόνες Firewall για Ping / ICMPv4 Echo Request είναι ενεργοποιημένοι." -ForegroundColor Green
+}
 Write-Host ""
 
 # --- 3. Υπηρεσίες (Windows Services) ---
