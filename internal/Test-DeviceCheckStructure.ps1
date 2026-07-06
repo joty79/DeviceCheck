@@ -69,6 +69,16 @@ $partResults = foreach ($partFile in $partFiles) {
     }
 }
 
+$internalTestFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'Test-*.ps1' | Sort-Object Name)
+$internalTestResults = foreach ($testFile in $internalTestFiles) {
+    $testParse = Get-PowerShellParseResult -Path $testFile.FullName
+    [pscustomobject]@{
+        Name       = $testFile.Name
+        Path       = $testFile.FullName
+        ParseError = @($testParse.Errors).Count
+    }
+}
+
 $assertions = [System.Collections.Generic.List[object]]::new()
 $assertions.Add((New-StructureAssertion -Name 'Entrypoint line budget' `
     -Passed ($entryPointLines -le $MaxEntryPointLines) `
@@ -90,6 +100,12 @@ foreach ($part in $partResults) {
     $assertions.Add((New-StructureAssertion -Name "Part parses: $($part.Name)" `
         -Passed ($part.ParseError -eq 0) `
         -Detail "$($part.Name) parser errors: $($part.ParseError)."))
+}
+
+foreach ($test in $internalTestResults) {
+    $assertions.Add((New-StructureAssertion -Name "Internal test parses: $($test.Name)" `
+        -Passed ($test.ParseError -eq 0) `
+        -Detail "$($test.Name) parser errors: $($test.ParseError)."))
 }
 
 $failed = @($assertions | Where-Object { -not $_.Passed })

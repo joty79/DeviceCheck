@@ -47,6 +47,44 @@ function ConvertTo-DeviceCheckHostDisplayName {
     return $name
 }
 
+function Get-DeviceCheckWsDiscoveryProbeFields {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    if ($Text -notmatch 'pub:Computer' -and $Text -notmatch '(?:^|[<\s/])(?:[A-Za-z0-9_-]+:)?Computer(?:[>\s/])') { return $null }
+
+    $xaddr = $null
+    $uuid = $null
+    if ($Text -match '<(?:[A-Za-z0-9_-]+:)?Address>(urn:uuid:[^<]+)</(?:[A-Za-z0-9_-]+:)?Address>') { $uuid = $Matches[1] }
+    if ($Text -match '<(?:[A-Za-z0-9_-]+:)?XAddrs>(http://[^<]+)</(?:[A-Za-z0-9_-]+:)?XAddrs>') { $xaddr = $Matches[1] }
+
+    return [PSCustomObject]@{
+        XAddr = $xaddr
+        Uuid  = $uuid
+    }
+}
+
+function Get-DeviceCheckWsDiscoveryMetadataComputerName {
+    param([AllowEmptyString()][string]$Content)
+
+    if ([string]::IsNullOrWhiteSpace($Content)) { return $null }
+    if ($Content -match '<(?:[A-Za-z0-9_-]+:)?Computer(?:\s[^>]*)?>([^<]+)</(?:[A-Za-z0-9_-]+:)?Computer>') {
+        $computer = $Matches[1]
+        if ($computer -match '^([^/]+)') { return $Matches[1] }
+        return $computer
+    }
+
+    return $null
+}
+
+function Get-DeviceCheckExplorerNetworkComputerNameFromPath {
+    param([AllowEmptyString()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    if ($Path -match '^\\\\([^\\]+)') { return $Matches[1].Trim() }
+    return $null
+}
+
 function Invoke-DeviceCheckWsDiscoveryProbe {
     param(
         [string[]]$SubnetPrefixes = @(),
@@ -84,19 +122,15 @@ function Invoke-DeviceCheckWsDiscoveryProbe {
                 $text = [Text.Encoding]::UTF8.GetString($data)
                 $ip = $remote.Address.ToString()
                 if (-not (Test-DeviceCheckLanDiscoveryIPv4 -Address $ip -SubnetPrefixes $SubnetPrefixes)) { continue }
-                if ($text -notmatch 'pub:Computer') { continue }
-
-                $xaddr = $null
-                $uuid = $null
-                if ($text -match '<wsa:Address>(urn:uuid:[^<]+)</wsa:Address>') { $uuid = $Matches[1] }
-                if ($text -match '<wsd:XAddrs>(http://[^<]+)</wsd:XAddrs>') { $xaddr = $Matches[1] }
+                $probeFields = Get-DeviceCheckWsDiscoveryProbeFields -Text $text
+                if ($null -eq $probeFields) { continue }
 
                 if (-not $results.Contains($ip)) {
                     $results[$ip] = [PSCustomObject]@{
                         IP       = $ip
                         HostName = $ip
-                        XAddr    = $xaddr
-                        Uuid     = $uuid
+                        XAddr    = $probeFields.XAddr
+                        Uuid     = $probeFields.Uuid
                         Source   = 'WS-Discovery'
                     }
                 }
@@ -142,14 +176,155 @@ function Get-DeviceCheckWsDiscoveryComputerName {
     try {
         $response = Invoke-WebRequest -Uri $XAddr -Method Post -Body $body -ContentType 'application/soap+xml; charset=utf-8' -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
         $content = [string]$response.Content
-        if ($content -match '<pub:Computer>([^<]+)</pub:Computer>') {
-            $computer = $Matches[1]
-            if ($computer -match '^([^/]+)') { return $Matches[1] }
-            return $computer
-        }
+        return (Get-DeviceCheckWsDiscoveryMetadataComputerName -Content $content)
     } catch {}
 
     return $null
+}
+
+function Get-DeviceCheckExplorerNetworkComputers {
+    param([int]$TimeoutMilliseconds = 700)
+
+    $runspace = $null
+    $ps = $null
+    $async = $null
+    try {
+        $runspace = [Runspaces.RunspaceFactory]::CreateRunspace()
+        $runspace.ApartmentState = [Threading.ApartmentState]::STA
+        $runspace.ThreadOptions = [Runspaces.PSThreadOptions]::ReuseThread
+        $runspace.Open()
+
+        $ps = [PowerShell]::Create()
+        $ps.Runspace = $runspace
+        [void]$ps.AddScript({
+            $results = [ordered]@{}
+            $shell = $null
+            try {
+                $shell = New-Object -ComObject Shell.Application
+                $folder = $shell.Namespace('shell:::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}')
+                if ($null -ne $folder) {
+                    foreach ($item in @($folder.Items())) {
+                        $name = [string]$item.Name
+                        $path = [string]$item.Path
+                        if ([string]::IsNullOrWhiteSpace($name) -and [string]::IsNullOrWhiteSpace($path)) { continue }
+
+                        $hostName = $null
+                        if ($path -match '^\\\\([^\\]+)') {
+                            $hostName = $Matches[1]
+                        }
+
+                        if ([string]::IsNullOrWhiteSpace($hostName)) { continue }
+                        $hostName = $hostName.Trim()
+                        if (-not $results.Contains($hostName)) {
+                            $results[$hostName] = [PSCustomObject]@{
+                                HostName = $hostName
+                                Path     = $path
+                                Source   = 'ExplorerNetwork'
+                            }
+                        }
+                    }
+                }
+            } catch {
+            } finally {
+                if ($null -ne $shell) {
+                    try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) } catch {}
+                }
+            }
+
+            return @($results.Values)
+        })
+
+        $async = $ps.BeginInvoke()
+        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMilliseconds)) {
+            try { $ps.Stop() } catch {}
+            return @()
+        }
+
+        return @($ps.EndInvoke($async))
+    } catch {
+        return @()
+    } finally {
+        if ($null -ne $async -and $null -ne $async.AsyncWaitHandle) { try { $async.AsyncWaitHandle.Dispose() } catch {} }
+        if ($null -ne $ps) { try { $ps.Dispose() } catch {}; $ps = $null }
+        if ($null -ne $runspace) { try { $runspace.Dispose() } catch {}; $runspace = $null }
+    }
+}
+
+function Invoke-DeviceCheckComputerPortSweep {
+    param(
+        [string[]]$SubnetPrefixes = @(),
+        [string[]]$ExcludedIPs = @(),
+        [int[]]$Ports = @(3389, 5985, 445),
+        [int]$TimeoutMs = 220,
+        [int]$BatchSize = 2048
+    )
+
+    $prefixes = @($SubnetPrefixes | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($prefixes.Count -eq 0) { return @() }
+
+    $excluded = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($ip in @($ExcludedIPs)) {
+        if (-not [string]::IsNullOrWhiteSpace($ip)) { $null = $excluded.Add($ip) }
+    }
+
+    $candidateIPs = [System.Collections.Generic.List[string]]::new()
+    foreach ($prefix in $prefixes) {
+        for ($lastOctet = 1; $lastOctet -le 254; $lastOctet++) {
+            $ip = "$prefix.$lastOctet"
+            if (-not $excluded.Contains($ip)) { $candidateIPs.Add($ip) }
+        }
+    }
+
+    $results = [ordered]@{}
+    for ($offset = 0; $offset -lt $candidateIPs.Count; $offset += $BatchSize) {
+        $scanTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $end = [Math]::Min($offset + $BatchSize - 1, $candidateIPs.Count - 1)
+        for ($index = $offset; $index -le $end; $index++) {
+            $ip = $candidateIPs[$index]
+            foreach ($port in $Ports) {
+                try {
+                    $tcp = [System.Net.Sockets.TcpClient]::new()
+                    $task = $tcp.ConnectAsync($ip, $port)
+                    $scanTasks.Add([PSCustomObject]@{ IP = $ip; Port = $port; TcpClient = $tcp; Task = $task })
+                } catch {}
+            }
+        }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
+            $allDone = $true
+            foreach ($scanTask in $scanTasks) {
+                if (-not $scanTask.Task.IsCompleted) {
+                    $allDone = $false
+                    break
+                }
+            }
+            if ($allDone) { break }
+            Start-Sleep -Milliseconds 15
+        }
+
+        foreach ($scanTask in $scanTasks) {
+            try {
+                if ($scanTask.Task.IsCompleted -and $scanTask.TcpClient.Connected) {
+                    if (-not $results.Contains($scanTask.IP)) {
+                        $results[$scanTask.IP] = [PSCustomObject]@{
+                            IP        = $scanTask.IP
+                            RdpOpen   = $false
+                            WinRmOpen = $false
+                            SmbOpen   = $false
+                        }
+                    }
+                    if ($scanTask.Port -eq 3389) { $results[$scanTask.IP].RdpOpen = $true }
+                    if ($scanTask.Port -eq 5985) { $results[$scanTask.IP].WinRmOpen = $true }
+                    if ($scanTask.Port -eq 445) { $results[$scanTask.IP].SmbOpen = $true }
+                }
+            } finally {
+                try { $scanTask.TcpClient.Dispose() } catch {}
+            }
+        }
+    }
+
+    return @($results.Values)
 }
 
 function Get-DeviceCheckHostsCache {

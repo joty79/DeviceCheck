@@ -345,7 +345,11 @@ function Get-DeviceCheckDiscoveredHosts {
     # 1. Interfaces lookup
     $swPhase = [System.Diagnostics.Stopwatch]::StartNew()
     $interfaces = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' }
+        Where-Object {
+            $_.InterfaceAlias -notmatch "Loopback|vEthernet" -and
+            $_.AddressState -eq "Preferred" -and
+            $_.IPAddress -notmatch "^169\.254\."
+        }
 
     if (-not $interfaces) {
         $timeInterfaces = $swPhase.Elapsed.TotalMilliseconds
@@ -380,10 +384,12 @@ function Get-DeviceCheckDiscoveredHosts {
     $currentNetworkId = $currentNetwork.NetworkId
 
     $dnsDetailsLog = [System.Collections.Generic.List[string]]::new()
+    $explorerNetworkIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $explorerHostNameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $ipList = [System.Collections.Generic.List[string]]::new()
+    $hostNamesToResolveSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     if ($history) {
-        $ipList = [System.Collections.Generic.List[string]]::new()
-
         # Add static IP history entries instantly if they match the current network ID
         foreach ($entry in $history) {
             if ($entry.NetworkId -eq $currentNetworkId -and $entry.LastIPAddress -match '^\d+\.\d+\.\d+\.\d+$') {
@@ -396,10 +402,30 @@ function Get-DeviceCheckDiscoveredHosts {
         $hostsToResolve = $history | Where-Object {
             $_.NetworkId -eq $currentNetworkId -and
             -not [string]::IsNullOrWhiteSpace($_.ComputerName) -and
-            $_.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$'
+            $_.ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$' -and
+            ([string]::IsNullOrWhiteSpace($_.LastIPAddress) -or $_.LastIPAddress -notmatch '^\d+\.\d+\.\d+\.\d+$')
         } | Select-Object -ExpandProperty ComputerName -Unique
 
-        if ($hostsToResolve) {
+        foreach ($hostToResolve in @($hostsToResolve)) {
+            if (-not [string]::IsNullOrWhiteSpace($hostToResolve)) {
+                $null = $hostNamesToResolveSet.Add($hostToResolve)
+            }
+        }
+    }
+
+    $explorerNetworkHosts = @(Get-DeviceCheckExplorerNetworkComputers)
+    if ($explorerNetworkHosts.Count -gt 0) {
+        $dnsDetailsLog.Add("    Explorer Network computers: $(@($explorerNetworkHosts.HostName) -join ', ')")
+        foreach ($explorerHost in $explorerNetworkHosts) {
+            if (-not [string]::IsNullOrWhiteSpace($explorerHost.HostName)) {
+                $null = $explorerHostNameSet.Add($explorerHost.HostName)
+                $null = $hostNamesToResolveSet.Add($explorerHost.HostName)
+            }
+        }
+    }
+
+    $hostsToResolve = @($hostNamesToResolveSet)
+    if ($hostsToResolve) {
             $isPS6Plus = $PSVersionTable.PSVersion.Major -ge 6
             $hasResolveDnsName = $null -ne (Get-Command Resolve-DnsName -ErrorAction SilentlyContinue)
 
@@ -472,29 +498,23 @@ function Get-DeviceCheckDiscoveredHosts {
                             foreach ($ip in $res.IPs) {
                                 $ipList.Add($ip)
                                 $historyIpToName[$ip] = $res.ComputerName
+                                if ($explorerHostNameSet.Contains($res.ComputerName)) {
+                                    $null = $explorerNetworkIPsSet.Add($ip)
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        $historyIPs = @($ipList | Select-Object -Unique)
     }
+    $historyIPs = @($ipList | Select-Object -Unique)
     $timeDns = $swPhase.Elapsed.TotalMilliseconds
 
-    # 3. Clear OS-level negative ARP cache
+    # 3. Keep refresh fast; active TCP/WS-D probes refresh neighbors without a foreground ARP purge.
     $swPhase.Restart()
-    if ($historyIPs) {
-        foreach ($ip in $historyIPs) {
-            Remove-NetNeighbor -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue
-            try {
-                arp.exe -d $ip *>$null
-            } catch {}
-        }
-    }
     $timeArpClear = $swPhase.Elapsed.TotalMilliseconds
 
-    # 4. Trigger active ICMP Ping discovery only for neighbor cache and history IPs (fast parallel Ping)
+    # 4. ICMP is skipped for the PC-only selector; WS-D/TCP prove computer visibility.
     $swPhase.Restart()
 
     # Get neighbors first to know which IPs to target
@@ -535,6 +555,14 @@ function Get-DeviceCheckDiscoveredHosts {
     $timeWsDiscovery = $swWsDiscovery.Elapsed.TotalMilliseconds
     $wsDiscoveryIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
+    $sweepExcludedIPs = [System.Collections.Generic.List[string]]::new()
+    foreach ($ip in $localIPs) { $sweepExcludedIPs.Add($ip) }
+    foreach ($ip in $gateways) { $sweepExcludedIPs.Add($ip) }
+    $swComputerSweep = [System.Diagnostics.Stopwatch]::StartNew()
+    $computerPortHosts = @(Invoke-DeviceCheckComputerPortSweep -SubnetPrefixes $localSubnetPrefixes -ExcludedIPs @($sweepExcludedIPs))
+    $timeComputerSweep = $swComputerSweep.Elapsed.TotalMilliseconds
+    $computerPortIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
     $neighborIPs = @()
     if ($neighbors) {
         $neighborIPs = @($neighbors.IPAddress)
@@ -552,6 +580,12 @@ function Get-DeviceCheckDiscoveredHosts {
             }
         }
     }
+    foreach ($hostEntry in $computerPortHosts) {
+        if (-not $localIPs.Contains($hostEntry.IP)) {
+            $null = $computerPortIPsSet.Add($hostEntry.IP)
+            $null = $targetIPsSet.Add($hostEntry.IP)
+        }
+    }
     foreach ($ip in $historyIPs) {
         if (Test-DeviceCheckLanDiscoveryIPv4 -Address $ip -SubnetPrefixes $localSubnetPrefixes) { $null = $targetIPsSet.Add($ip) }
     }
@@ -561,40 +595,6 @@ function Get-DeviceCheckDiscoveredHosts {
     )
 
     $swPhase.Restart()
-    $pingSuccessfulIPs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $pingTasks = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-    if ($targetIPs) {
-        foreach ($ip in $targetIPs) {
-            try {
-                $p = [System.Net.NetworkInformation.Ping]::new()
-                $task = $p.SendPingAsync($ip, 250)
-                $pingTasks.Add([PSCustomObject]@{
-                    IP     = $ip
-                    Pinger = $p
-                    Task   = $task
-                })
-            } catch {}
-        }
-
-        if ($pingTasks.Count -gt 0) {
-            $tasksArray = [System.Threading.Tasks.Task[]]::new($pingTasks.Count)
-            for ($i = 0; $i -lt $pingTasks.Count; $i++) {
-                $tasksArray[$i] = $pingTasks[$i].Task
-            }
-            try {
-                $null = [System.Threading.Tasks.Task]::WaitAll($tasksArray, 300)
-            } catch {}
-        }
-
-        foreach ($pt in $pingTasks) {
-            if ($pt.Task.IsCompleted -and -not $pt.Task.IsFaulted -and $pt.Task.Result.Status -eq 'Success') {
-                $null = $pingSuccessfulIPs.Add($pt.IP)
-            }
-            $pt.Pinger.Dispose()
-        }
-    }
-
     $timePing = $swPhase.Elapsed.TotalMilliseconds
 
     # 5. Neighbor/Active Target Setup
@@ -607,9 +607,20 @@ function Get-DeviceCheckDiscoveredHosts {
     $winrmOpenIPs = [System.Collections.Generic.List[string]]::new()
     $smbOpenIPs = [System.Collections.Generic.List[string]]::new()
 
-    if ($uniqueIPs) {
-        $connections = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($hostEntry in $computerPortHosts) {
+        if ($hostEntry.WinRmOpen -and -not ($winrmOpenIPs -contains $hostEntry.IP)) { $winrmOpenIPs.Add($hostEntry.IP) }
+        if ($hostEntry.SmbOpen -and -not ($smbOpenIPs -contains $hostEntry.IP)) { $smbOpenIPs.Add($hostEntry.IP) }
+    }
+
+    $tcpScanIPs = @(
         foreach ($ip in $uniqueIPs) {
+            if (-not ($computerPortIPsSet.Contains($ip) -and ($winrmOpenIPs -contains $ip))) { $ip }
+        }
+    )
+
+    if ($tcpScanIPs) {
+        $connections = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($ip in $tcpScanIPs) {
             $tcp1 = [System.Net.Sockets.TcpClient]::new()
             $tcp2 = [System.Net.Sockets.TcpClient]::new()
             try {
@@ -669,7 +680,7 @@ function Get-DeviceCheckDiscoveredHosts {
     foreach ($ip in $smbOpenIPs) { $null = $onlineIPsSet.Add($ip) }
     $detectedOnlyIPsSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($ip in $targetIPs) {
-        if ($wsDiscoveryIPsSet.Contains($ip) -and -not $onlineIPsSet.Contains($ip)) { $null = $detectedOnlyIPsSet.Add($ip) }
+        if (($wsDiscoveryIPsSet.Contains($ip) -or $computerPortIPsSet.Contains($ip) -or $explorerNetworkIPsSet.Contains($ip)) -and -not $onlineIPsSet.Contains($ip)) { $null = $detectedOnlyIPsSet.Add($ip) }
     }
     foreach ($ip in $detectedOnlyIPsSet) { $null = $onlineIPsSet.Add($ip) }
 
@@ -834,6 +845,7 @@ function Get-DeviceCheckDiscoveredHosts {
     $logLines.Add("  Phase 3 (ArpClr) : $([Math]::Round($timeArpClear, 1)) ms")
     $logLines.Add("  Phase 4 (Ping)   : $([Math]::Round($timePing, 1)) ms")
     $logLines.Add("  Phase 4b (WS-Disc): $([Math]::Round($timeWsDiscovery, 1)) ms ($($wsDiscoveryHosts.Count) hosts)")
+    $logLines.Add("  Phase 4c (PCPort): $([Math]::Round($timeComputerSweep, 1)) ms ($($computerPortHosts.Count) hosts)")
     $logLines.Add("  Phase 5 (Neighbr): $([Math]::Round($timeNeighbors, 1)) ms")
     $logLines.Add("  Phase 6 (TCPScan): $([Math]::Round($timeTcpScan, 1)) ms")
     $logLines.Add("  Phase 7 (Reverse): $([Math]::Round($timeFinalMap, 1)) ms")
