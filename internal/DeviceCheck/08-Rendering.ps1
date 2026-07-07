@@ -140,6 +140,22 @@ function Render-FrameLegacy {
         $machine = $selectedRow.Ref
         Write-UiSection -Title "Computer Info" -Icon ""
         Write-Host "  $($_C.Dim)System Name  :$($_C.Reset) $($_C.White)$(Get-MachineDisplayName -MachineEvidence $machine)$($_C.Reset)$($_C.EraseLn)"
+        $snapshotLabel = ''
+        if (Test-RemoteSnapshotTargetActive -and $null -ne $script:TargetSnapshot) {
+            $snapshotLabel = [string](Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $script:TargetSnapshot -Name 'Collector') -Name 'SnapshotLabel')
+            if ([string]::IsNullOrWhiteSpace($snapshotLabel)) {
+                $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot $script:TargetSnapshot
+            }
+        } else {
+            $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
+            $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot ([PSCustomObject]@{
+                    Machine = $machine
+                    Devices = [PSCustomObject]@{ Present = $allDevices }
+                })
+        }
+        if (-not [string]::IsNullOrWhiteSpace($snapshotLabel)) {
+            Write-Host "  $($_C.Dim)Label        :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $snapshotLabel -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        }
         Write-Host "  $($_C.Dim)OS           :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
         Write-Host "  $($_C.Dim)System       :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
         Write-Host "  $($_C.Dim)BaseBoard    :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"

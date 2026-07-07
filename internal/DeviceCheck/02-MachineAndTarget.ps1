@@ -497,6 +497,173 @@ function Format-HeaderOsName {
     return $os
 }
 
+function Format-SnapshotLabelToken {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $value = ($Text -replace '\(R\)|\(TM\)|\(C\)', '' -replace '\s+', ' ').Trim()
+    $value = $value -replace '(?i)\bwith Radeon Graphics\b', ''
+    $value = $value -replace '(?i)\bLaptop GPU\b', ''
+    return ($value -replace '\s+', ' ').Trim(' ', '-', '|')
+}
+
+function Format-SnapshotBytesShortText {
+    param($Bytes)
+
+    $parsed = ConvertTo-UInt64OrNull -Value $Bytes
+    if ($null -eq $parsed -or $parsed -le 0) { return '' }
+    if ($parsed -ge 1TB) {
+        $tb = [double]$parsed / 1TB
+        if ([Math]::Abs($tb - [Math]::Round($tb)) -lt 0.05) { return ('{0:N0}TB' -f [Math]::Round($tb)) }
+        return ('{0:N1}TB' -f $tb)
+    }
+    if ($parsed -ge 1GB) {
+        return ('{0:N0}GB' -f ([double]$parsed / 1GB))
+    }
+    return ('{0:N0}MB' -f ([double]$parsed / 1MB))
+}
+
+function Get-SnapshotSystemLabel {
+    param($Machine)
+
+    $computerSystem = Get-NotePropertyValue -Object $Machine -Name 'ComputerSystem'
+    $product = Get-NotePropertyValue -Object $Machine -Name 'ComputerSystemProduct'
+    $manufacturer = Format-SnapshotLabelToken -Text (Get-NotePropertyValue -Object $computerSystem -Name 'Manufacturer')
+    if (Test-GenericHeaderValue -Text $manufacturer) { $manufacturer = '' }
+    if ([string]::IsNullOrWhiteSpace($manufacturer)) {
+        $manufacturer = Format-SnapshotLabelToken -Text (Get-NotePropertyValue -Object $product -Name 'Vendor')
+        if (Test-GenericHeaderValue -Text $manufacturer) { $manufacturer = '' }
+    }
+
+    $modelCandidates = @(
+        (Get-NotePropertyValue -Object $product -Name 'Version'),
+        (Get-NotePropertyValue -Object $computerSystem -Name 'Model'),
+        (Get-NotePropertyValue -Object $product -Name 'Name')
+    )
+    $model = ''
+    foreach ($candidate in $modelCandidates) {
+        $text = Format-SnapshotLabelToken -Text $candidate
+        if (-not (Test-GenericHeaderValue -Text $text) -and $text -notin @('System Version', '1.0')) {
+            $model = $text
+            break
+        }
+    }
+
+    $parts = @($manufacturer, $model) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    return (($parts | Select-Object -Unique) -join ' ')
+}
+
+function Get-SnapshotRamLabel {
+    param($Machine)
+
+    $memory = Get-NotePropertyValue -Object $Machine -Name 'Memory'
+    $computerSystem = Get-NotePropertyValue -Object $Machine -Name 'ComputerSystem'
+    $capacity = Format-SnapshotBytesShortText -Bytes (Get-MemoryDisplayBytes -Memory $memory -ComputerSystem $computerSystem)
+    if ([string]::IsNullOrWhiteSpace($capacity)) { return '' }
+    $type = Get-MemoryTypeDisplayText -Memory $memory
+    return (@($capacity, $type) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 2) -join ' '
+}
+
+function Get-SnapshotGpuLabel {
+    param($DevicesRoot)
+
+    $devices = @(Get-NotePropertyValue -Object $DevicesRoot -Name 'Present')
+    $gpus = @(
+        $devices |
+            Where-Object {
+                ([string](Get-NotePropertyValue -Object $_ -Name 'Class')) -eq 'Display' -and
+                ([string](Get-NotePropertyValue -Object $_ -Name 'FriendlyName')) -notmatch '(?i)basic display|remote display|miracast|indirect display'
+            } |
+            ForEach-Object {
+                $name = Format-SnapshotLabelToken -Text (Get-NotePropertyValue -Object $_ -Name 'FriendlyName')
+                $name = $name -replace '(?i)^AMD\s+', ''
+                $name = $name -replace '(?i)^NVIDIA\s+(GeForce\s+)?', ''
+                $name = $name -replace '(?i)^Intel\s+', ''
+                Format-SnapshotLabelToken -Text $name
+            } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique -First 2
+    )
+    return ($gpus -join ' + ')
+}
+
+function Get-SnapshotDiskSizeFromName {
+    param([AllowEmptyString()][string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+    if ($Name -match '(?i)(?<![A-Z0-9])(\d+(?:\.\d+)?)\s*(TB|T)(?=$|[\s_\-])') { return "$($Matches[1])TB" }
+    if ($Name -match '(?i)(?<![A-Z0-9])(\d+(?:\.\d+)?)\s*(GB|G)(?=$|[\s_\-])') { return "$($Matches[1])GB" }
+    return ''
+}
+
+function Get-SnapshotDiskLabel {
+    param($Machine, $DevicesRoot)
+
+    $storage = Get-NotePropertyValue -Object $Machine -Name 'Storage'
+    $disks = @(Get-NotePropertyValue -Object $storage -Name 'Disks' | Where-Object { $null -ne $_ })
+    if ($disks.Count -eq 0) {
+        $disks = @(
+            @(Get-NotePropertyValue -Object $DevicesRoot -Name 'Present') |
+                Where-Object { ([string](Get-NotePropertyValue -Object $_ -Name 'Class')) -eq 'DiskDrive' } |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        Model = Get-NotePropertyValue -Object $_ -Name 'FriendlyName'
+                        Size  = $null
+                    }
+                }
+        )
+    }
+
+    $labels = @(
+        $disks |
+            ForEach-Object {
+                $model = Format-SnapshotLabelToken -Text (Get-NotePropertyValue -Object $_ -Name 'Model')
+                if ([string]::IsNullOrWhiteSpace($model)) {
+                    $model = Format-SnapshotLabelToken -Text (Get-NotePropertyValue -Object $_ -Name 'FriendlyName')
+                }
+                $size = Format-SnapshotBytesShortText -Bytes (Get-NotePropertyValue -Object $_ -Name 'Size')
+                if ([string]::IsNullOrWhiteSpace($size)) {
+                    $size = Get-SnapshotDiskSizeFromName -Name $model
+                }
+                if (-not [string]::IsNullOrWhiteSpace($size)) {
+                    $model = ($model -replace [regex]::Escape($size), '' -replace '(?i)\b\d+(?:\.\d+)?\s*(TB|T|GB|G)\b', '' -replace '\s+', ' ').Trim(' ', '-', '_')
+                }
+                $model = $model -replace '(?i)^NVMe\s+', ''
+                $model = $model -replace '(?i)\bSSD\b', ''
+                $model = $model -replace '(?i)\bSDDPMQD[-_]*\d+G[-_]*\d+\b', ''
+                $model = ($model -replace '\s+', ' ').Trim(' ', '-', '_')
+                (@($size, $model) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 2) -join ' '
+            } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique -First 2
+    )
+    return ($labels -join ' + ')
+}
+
+function Get-DeviceCheckSnapshotHardwareLabel {
+    param([Parameter(Mandatory)]$Snapshot)
+
+    $machine = Get-NotePropertyValue -Object $Snapshot -Name 'Machine'
+    $devicesRoot = Get-NotePropertyValue -Object $Snapshot -Name 'Devices'
+    if ($null -eq $machine) { return '' }
+
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in @(
+            (Get-SnapshotSystemLabel -Machine $machine),
+            (Format-HeaderCpuName -Name (Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $machine -Name 'Processor') -Name 'Name')),
+            (Get-SnapshotGpuLabel -DevicesRoot $devicesRoot),
+            (Get-SnapshotRamLabel -Machine $machine),
+            (Get-SnapshotDiskLabel -Machine $machine -DevicesRoot $devicesRoot)
+        )) {
+        $token = Format-SnapshotLabelToken -Text $value
+        if (-not [string]::IsNullOrWhiteSpace($token) -and -not $parts.Contains($token)) {
+            $parts.Add($token)
+        }
+    }
+
+    return ($parts -join ' | ')
+}
+
 function Get-MachineSummary {
     param(
         $MachineEvidence,

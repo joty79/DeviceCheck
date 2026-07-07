@@ -375,6 +375,11 @@ function Invoke-DeviceCheckSnapshotExport {
     }
 
     $snapshot = Get-Content -LiteralPath $summary.LatestPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot $snapshot
+    if (-not [string]::IsNullOrWhiteSpace($snapshotLabel)) {
+        Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name SnapshotLabel -Value $snapshotLabel -Force
+        Add-Member -InputObject $summary -MemberType NoteProperty -Name SnapshotLabel -Value $snapshotLabel -Force
+    }
     if ($ArchiveSample) {
         $archiveAt = (Get-Date).ToString('o')
         Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name SnapshotMode -Value 'FullArchive' -Force
@@ -387,6 +392,13 @@ function Invoke-DeviceCheckSnapshotExport {
         $archiveJson | Set-Content -LiteralPath $summary.LatestPath -Encoding UTF8
         if (-not [string]::IsNullOrWhiteSpace([string]$summary.OutputPath) -and (Test-Path -LiteralPath $summary.OutputPath -PathType Leaf)) {
             $archiveJson | Set-Content -LiteralPath $summary.OutputPath -Encoding UTF8
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($snapshotLabel) -and -not $ArchiveSample) {
+        $labelJson = $snapshot | ConvertTo-Json -Depth 40
+        $labelJson | Set-Content -LiteralPath $summary.LatestPath -Encoding UTF8
+        if (-not [string]::IsNullOrWhiteSpace([string]$summary.OutputPath) -and (Test-Path -LiteralPath $summary.OutputPath -PathType Leaf)) {
+            $labelJson | Set-Content -LiteralPath $summary.OutputPath -Encoding UTF8
         }
     }
     return [PSCustomObject]@{

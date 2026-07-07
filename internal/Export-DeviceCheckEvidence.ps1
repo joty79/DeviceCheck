@@ -411,6 +411,29 @@ function New-CollectorScriptBlock {
             }
         }
 
+        function Get-MachineStorageSnapshot {
+            $diskDrives = @(Get-CimListOrEmpty -ClassName 'Win32_DiskDrive')
+            $disks = @(
+                foreach ($disk in $diskDrives) {
+                    [PSCustomObject]@{
+                        Model         = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'Model')
+                        Manufacturer  = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'Manufacturer')
+                        SerialNumber  = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'SerialNumber')
+                        InterfaceType = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'InterfaceType')
+                        MediaType     = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'MediaType')
+                        Size          = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'Size')
+                        Partitions    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'Partitions')
+                        Index         = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $disk -PropertyName 'Index')
+                    }
+                }
+            )
+
+            return [PSCustomObject]@{
+                SchemaVersion = 1
+                Disks         = @($disks)
+            }
+        }
+
         function Get-PnpDevicePropertiesSafe {
             param([string]$InstanceId)
 
@@ -511,6 +534,7 @@ function New-CollectorScriptBlock {
             $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
             $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
             $memory = Get-MachineMemorySnapshot -ComputerSystem $computerSystem
+            $storage = Get-MachineStorageSnapshot
 
             $identitySeed = @(
                 Get-ObjectPropertyValue -InputObject $computerProduct -PropertyName 'UUID'
@@ -529,6 +553,7 @@ function New-CollectorScriptBlock {
                 OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
                 Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')
                 Memory                = $memory
+                Storage               = $storage
             }
         }
 
@@ -628,6 +653,7 @@ function New-CollectorScriptBlock {
         $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
         $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
         $memory = Get-MachineMemorySnapshot -ComputerSystem $computerSystem
+        $storage = Get-MachineStorageSnapshot
 
         $identitySeed = @(
             Get-ObjectPropertyValue -InputObject $computerProduct -PropertyName 'UUID'
@@ -761,6 +787,7 @@ function New-CollectorScriptBlock {
                 OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
                 Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')
                 Memory                = $memory
+                Storage               = $storage
             }
             Devices       = [PSCustomObject]@{
                 Count      = @($devices).Count

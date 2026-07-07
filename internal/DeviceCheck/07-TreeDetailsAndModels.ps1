@@ -287,6 +287,22 @@ function Get-DetailDisplayLines {
         if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
             Add-WrappedPathLine -Lines $lines -Key 'Snapshot' -Path $script:TargetSnapshotPath -Width $Width
         }
+        $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
+        $snapshotLabel = ''
+        if (Test-RemoteSnapshotTargetActive -and $null -ne $script:TargetSnapshot) {
+            $snapshotLabel = [string](Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $script:TargetSnapshot -Name 'Collector') -Name 'SnapshotLabel')
+            if ([string]::IsNullOrWhiteSpace($snapshotLabel)) {
+                $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot $script:TargetSnapshot
+            }
+        } else {
+            $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot ([PSCustomObject]@{
+                    Machine  = $machine
+                    Devices  = [PSCustomObject]@{ Present = $allDevices }
+                })
+        }
+        if (-not [string]::IsNullOrWhiteSpace($snapshotLabel)) {
+            Add-KeyValueLines -Lines $lines -Key 'Label' -Value $snapshotLabel -Width $Width
+        }
         Add-KeyValueLines -Lines $lines -Key 'System Name' -Value (Get-MachineDisplayName -MachineEvidence $machine) -Width $Width
         Add-KeyValueLines -Lines $lines -Key 'OS' -Value "$($machine.OperatingSystem.Caption) $($machine.OperatingSystem.Version) Build $($machine.OperatingSystem.BuildNumber)" -Width $Width
         Add-KeyValueLines -Lines $lines -Key 'System' -Value "$($machine.ComputerSystem.Manufacturer) $($machine.ComputerSystem.Model) [$($machine.ComputerSystem.SystemType)]" -Width $Width
@@ -306,8 +322,6 @@ function Get-DetailDisplayLines {
         if (-not [string]::IsNullOrWhiteSpace($ramPart)) {
             Add-KeyValueLines -Lines $lines -Key 'RAM Part' -Value $ramPart -Width $Width
         }
-
-        $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
         if ($allDevices.Count -gt 0) {
             $activeEvidenceCount = @(
                 $allDevices | Where-Object {

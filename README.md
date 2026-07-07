@@ -104,6 +104,9 @@ NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree
 # Merge snapshots/history from an old Windows install, another PC, or a mounted Macrium backup
 .\tools\Merge-DeviceCheckDatabase.ps1 -SourcePath 'E:\Users\joty79\AppData\Local\DeviceCheck'
 
+# Backfill readable labels and rebuild .devicecheck-data\snapshot-index.csv
+.\tools\Update-DeviceCheckSnapshotLabels.ps1
+
 # When you also want selected-device/agent machine caches from that source
 .\tools\Merge-DeviceCheckDatabase.ps1 -SourcePath 'E:\Users\joty79\AppData\Local\DeviceCheck' -IncludeMachines
 

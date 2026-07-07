@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Restyled the Offline Snapshots submenu with fixed-width hardware columns (`Model`, `CPU`, `GPU`, `RAM`, `Disk`) plus colored `PC name`, `IP`, device count, capture time, and status columns. Rows now wrap overflowing columns onto a continuation line and use line-aware scrolling, so hardware-based snapshot names stay readable across Windows Terminal widths instead of rendering as one long white line or truncating everything with ellipses.
+- Fixed `Set-StrictMode` crashes in the Offline Snapshots submenu where single-line wrapped columns or the selected `< Back to networks` row could be treated as scalar strings and fail on `.Count` while opening the snapshot library.
 - Changed the default DeviceCheck database root from per-PC `%LOCALAPPDATA%\DeviceCheck` to repo-adjacent `.devicecheck-data`, so snapshots, history, host cache, machine evidence, and agent cache can travel with the tool instead of splitting between laptop/desktop databases. `DEVICECHECK_DATA_ROOT` or `DEVICECHECK_CACHE_ROOT` can override the database root, while credentials and the browser profile remain local under `%LOCALAPPDATA%\DeviceCheck`.
 - Extended `internal\Test-DeviceCheckStructure.ps1` to parser-check top-level `internal\Test-*.ps1` scripts, so discovery verification helpers are covered by the normal structure guard.
 - Updated `Enable-RemotePs.ps1` to configure the WinRM service to start automatically and explicitly disable Delayed Start (setting `DelayedAutoStart = 0` in the registry) so the service starts as early as possible during boot.
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Added
+- Added hardware-based snapshot labels and `tools\Update-DeviceCheckSnapshotLabels.ps1`. Offline snapshots now display labels built from brand/model, CPU, GPU, RAM, and disk evidence, and the tool backfills `Collector.SnapshotLabel` plus `.devicecheck-data\snapshot-index.csv` for older `DESKTOP-*` snapshots.
 - Added `tools\Merge-DeviceCheckDatabase.ps1` to merge snapshots, connection history, hosts cache, and optionally machine evidence from old `%LOCALAPPDATA%\DeviceCheck` folders, other PCs, or mounted backup images into the portable `.devicecheck-data` database without importing DPAPI credentials.
 - Added Windows Explorer Network computer namespace seeding to the `Ctrl+L` LAN selector, so PCs already visible under Explorer's `Network > Computer` category can feed the same discovery path after their names resolve to IPv4.
 - Added active WS-Discovery probing and metadata name enrichment to the `Ctrl+L` LAN selector, so PCs that Windows Explorer Network Discovery can see can be listed with names before WinRM is enabled.
