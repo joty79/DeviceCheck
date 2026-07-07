@@ -139,7 +139,8 @@ function Get-DeviceCheckStoredCredential {
     param([string]$ComputerName)
 
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return $null }
-    $credFolder = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'credentials'
+    $credRoot = $(if (-not [string]::IsNullOrWhiteSpace($script:DeviceCheckLocalStateRoot)) { $script:DeviceCheckLocalStateRoot } else { $script:DeviceCheckCacheRoot })
+    $credFolder = Join-Path -Path $credRoot -ChildPath 'credentials'
     $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
     if (Test-Path -LiteralPath $credPath -PathType Leaf) {
         try {
@@ -158,7 +159,8 @@ function Save-DeviceCheckStoredCredential {
     )
 
     if ([string]::IsNullOrWhiteSpace($ComputerName) -or $null -eq $Credential) { return }
-    $credFolder = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'credentials'
+    $credRoot = $(if (-not [string]::IsNullOrWhiteSpace($script:DeviceCheckLocalStateRoot)) { $script:DeviceCheckLocalStateRoot } else { $script:DeviceCheckCacheRoot })
+    $credFolder = Join-Path -Path $credRoot -ChildPath 'credentials'
     try {
         $null = New-Item -ItemType Directory -Path $credFolder -Force -ErrorAction SilentlyContinue
         $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
@@ -170,7 +172,8 @@ function Remove-DeviceCheckStoredCredential {
     param([string]$ComputerName)
 
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
-    $credFolder = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'credentials'
+    $credRoot = $(if (-not [string]::IsNullOrWhiteSpace($script:DeviceCheckLocalStateRoot)) { $script:DeviceCheckLocalStateRoot } else { $script:DeviceCheckCacheRoot })
+    $credFolder = Join-Path -Path $credRoot -ChildPath 'credentials'
     $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
     if (Test-Path -LiteralPath $credPath -PathType Leaf) {
         try {

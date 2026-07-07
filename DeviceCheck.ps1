@@ -29,11 +29,31 @@ if (-not [string]::IsNullOrWhiteSpace($env:NUMBER_OF_PROCESSORS)) {
 }
 $script:EvidenceBatchMaxConcurrent = [Math]::Max(4, [Math]::Min(12, $cpuCount))
 $script:RootExpanded = $true
-$script:DeviceCheckCacheRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'DeviceCheck'
-if ([string]::IsNullOrWhiteSpace($script:DeviceCheckCacheRoot)) {
-    $script:DeviceCheckCacheRoot = Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
+$localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+$script:DeviceCheckLocalStateRoot = $(if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        Join-Path -Path $localAppData -ChildPath 'DeviceCheck'
+    } else {
+        Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
+    })
+$overrideRoot = @($env:DEVICECHECK_CACHE_ROOT, $env:DEVICECHECK_DATA_ROOT) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -First 1
+if (-not [string]::IsNullOrWhiteSpace($overrideRoot)) {
+    $expandedCacheRoot = [Environment]::ExpandEnvironmentVariables($overrideRoot.Trim())
+    $script:DeviceCheckCacheRoot = $(if ([System.IO.Path]::IsPathRooted($expandedCacheRoot)) {
+            $expandedCacheRoot
+        } else {
+            Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath $expandedCacheRoot
+        })
+} else {
+    $portableCacheRoot = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath '.devicecheck-data'
+    $script:DeviceCheckCacheRoot = $portableCacheRoot
 }
-$env:DEVICECHECK_CHROME_PROFILE = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'browser-profile'
+try { $null = New-Item -ItemType Directory -Path $script:DeviceCheckCacheRoot -Force } catch {
+    $script:DeviceCheckCacheRoot = $script:DeviceCheckLocalStateRoot
+    try { $null = New-Item -ItemType Directory -Path $script:DeviceCheckCacheRoot -Force } catch {}
+}
+$env:DEVICECHECK_CHROME_PROFILE = Join-Path -Path $script:DeviceCheckLocalStateRoot -ChildPath 'browser-profile'
 $script:BenchmarkMode = $false
 $script:LastNetworkScanResult = $null
 $script:ScriptStartTime = Get-Date

@@ -281,8 +281,12 @@ function Invoke-DeviceCheckSnapshotExport {
     if ($Quick) {
         $exportParams.Quick = $true
     }
-    if (-not [string]::IsNullOrWhiteSpace($OutputRoot)) {
-        $exportParams.OutputRoot = $OutputRoot
+    $resolvedOutputRoot = $OutputRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedOutputRoot)) {
+        $resolvedOutputRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'snapshots'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($resolvedOutputRoot)) {
+        $exportParams.OutputRoot = $resolvedOutputRoot
     }
     if ($null -ne $Credential) {
         $exportParams.Credential = $Credential

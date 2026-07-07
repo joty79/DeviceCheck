@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Changed the default DeviceCheck database root from per-PC `%LOCALAPPDATA%\DeviceCheck` to repo-adjacent `.devicecheck-data`, so snapshots, history, host cache, machine evidence, and agent cache can travel with the tool instead of splitting between laptop/desktop databases. `DEVICECHECK_DATA_ROOT` or `DEVICECHECK_CACHE_ROOT` can override the database root, while credentials and the browser profile remain local under `%LOCALAPPDATA%\DeviceCheck`.
 - Extended `internal\Test-DeviceCheckStructure.ps1` to parser-check top-level `internal\Test-*.ps1` scripts, so discovery verification helpers are covered by the normal structure guard.
 - Updated `Enable-RemotePs.ps1` to configure the WinRM service to start automatically and explicitly disable Delayed Start (setting `DelayedAutoStart = 0` in the registry) so the service starts as early as possible during boot.
 - Updated `Enable-RemotePs.ps1` cleanup to detect and remove matching temporary profile folders such as `C:\Users\dcadmin` and `C:\Users\dcadmin.*`, including stale folders left after the local user has already been removed.
@@ -31,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Added
+- Added `tools\Merge-DeviceCheckDatabase.ps1` to merge snapshots, connection history, hosts cache, and optionally machine evidence from old `%LOCALAPPDATA%\DeviceCheck` folders, other PCs, or mounted backup images into the portable `.devicecheck-data` database without importing DPAPI credentials.
 - Added Windows Explorer Network computer namespace seeding to the `Ctrl+L` LAN selector, so PCs already visible under Explorer's `Network > Computer` category can feed the same discovery path after their names resolve to IPv4.
 - Added active WS-Discovery probing and metadata name enrichment to the `Ctrl+L` LAN selector, so PCs that Windows Explorer Network Discovery can see can be listed with names before WinRM is enabled.
 - Added `internal\Test-RemoteDiscoveryFilters.ps1` to regression-test LAN discovery filtering for same-subnet unicast hosts, multicast/reserved/APIPA/loopback rejection, IP-like reverse DNS names, and empty subnet sweeps without requiring a live LAN.

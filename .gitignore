@@ -6,6 +6,7 @@ driver-evidence/
 driver-package-metadata/
 tui_benchmark.log
 logs/
+.devicecheck-data/
 source/*
 !source/hwdata/
 source/hwdata/*

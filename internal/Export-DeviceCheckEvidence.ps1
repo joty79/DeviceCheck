@@ -7,7 +7,7 @@ param(
 
     [string]$UserName,
 
-    [string]$OutputRoot = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'DeviceCheck\snapshots'),
+    [string]$OutputRoot,
 
     [switch]$Quick,
 
@@ -26,6 +26,24 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:CollectorVersion = '0.1.0'
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $overrideRoot = @($env:DEVICECHECK_CACHE_ROOT, $env:DEVICECHECK_DATA_ROOT) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -First 1
+    if (-not [string]::IsNullOrWhiteSpace($overrideRoot)) {
+        $expandedRoot = [Environment]::ExpandEnvironmentVariables($overrideRoot.Trim())
+        $cacheRoot = $(if ([System.IO.Path]::IsPathRooted($expandedRoot)) {
+                $expandedRoot
+            } else {
+                Join-Path -Path $repoRoot -ChildPath $expandedRoot
+            })
+    } else {
+        $cacheRoot = Join-Path -Path $repoRoot -ChildPath '.devicecheck-data'
+    }
+    $OutputRoot = Join-Path -Path $cacheRoot -ChildPath 'snapshots'
+}
 
 function Test-LocalTarget {
     param([string]$Name)
