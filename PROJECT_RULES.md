@@ -133,6 +133,20 @@ Guardrail/rule: In DeviceCheck TUI helpers that store nested line collections, u
 Files affected: `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: PowerShell parser validation for `06-RemoteConnectionOfflineMenu.ps1`; StrictMode non-interactive render smoke across widths 190, 165, 145, and 130; StrictMode smoke for selected `< Back to networks` row; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`.
 
+Date: 2026-07-07
+Problem: Offline snapshot libraries became hard to scan after hardware labels improved because desktops and laptops were mixed in one long network list.
+Root cause: The offline network view grouped only by saved network, not by physical device type, even though snapshots already include useful battery/device evidence.
+Guardrail/rule: Offline snapshot network views should keep device-type sections always expanded. Classify laptops first by captured ACPI battery devices (`Microsoft ACPI-Compliant Control Method Battery`), then by laptop model keywords. Classify desktops by desktop model keywords and strong desktop CPU suffixes such as Intel `K`, Ryzen `X`, and AMD `FX` desktop parts. Use `Unknown` rather than guessing when evidence is weak.
+Files affected: `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation for `06-RemoteConnectionOfflineMenu.ps1`; StrictMode classification smoke over real `.devicecheck-data\snapshots` returned 14 laptops and 8 desktops; `PALIOS` and `NEOS` classified as desktops via desktop CPU evidence.
+
+Date: 2026-07-07
+Problem: Laptop/desktop classification should improve as more workbench PCs are captured, not depend only on old snapshot labels and PnP battery devices.
+Root cause: New snapshots did not store dedicated physical-form-factor evidence such as chassis type, PC system type, or `Win32_Battery`; classification therefore had to infer too much from labels and device names.
+Guardrail/rule: Capture physical-kind evidence in both local and remote snapshots: `Win32_ComputerSystem.PCSystemType`, `PCSystemTypeEx`, `Win32_SystemEnclosure.ChassisTypes`, and `Win32_Battery`. Classifier precedence should be chassis type, PC system type, `Win32_Battery`, PnP ACPI battery, laptop/desktop model keywords, desktop CPU hints, then `Unknown`.
+Files affected: `internal\DeviceCheck\02-MachineAndTarget.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for changed PowerShell files; StrictMode classification smoke over existing snapshots returned 14 laptops and 8 desktops; temp-output local quick exporter smoke confirmed `PCSystemType`, `PCSystemTypeEx`, `SystemEnclosure`, and `Batteries` are written, with current laptop chassis type `31` and one battery.
+
 Date: 2026-06-12
 Problem: `DeviceCheck.ps1` had grown past 8,100 lines, making review, AI-assisted edits, and bug isolation slow and risky.
 Root cause: Most feature areas lived in one root script even though they had clear boundaries such as model selection, evidence resolvers, remote connection workflows, rendering, lookup actions, and input handling.
@@ -1009,3 +1023,10 @@ Root cause: Snapshot folders and menu rows were based mainly on Windows computer
 Guardrail/rule: Keep stable folder names for matching, but display and persist a human `SnapshotLabel` built from hardware evidence. Labels should prefer real system brand/model, compact CPU/GPU names, RAM capacity/type, and disk size/model. Backfill old snapshots with `tools\Update-DeviceCheckSnapshotLabels.ps1`, and write `.devicecheck-data\snapshot-index.csv` so the archive can be searched outside the TUI. New TUI-collected snapshots should save `Collector.SnapshotLabel`; old/standalone snapshots can compute the label at display/index time.
 Files affected: `internal\DeviceCheck\02-MachineAndTarget.ps1`, `internal\DeviceCheck\05-InventoryAndSnapshots.ps1`, `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `internal\DeviceCheck\07-TreeDetailsAndModels.ps1`, `internal\DeviceCheck\08-Rendering.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, `tools\Update-DeviceCheckSnapshotLabels.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Parser validation for edited PowerShell files; `internal\Test-DeviceCheckStructure.ps1`; `tools\Update-DeviceCheckSnapshotLabels.ps1` backfilled 22 snapshots and wrote `.devicecheck-data\snapshot-index.csv` with labels such as `LENOVO Yoga 7 14ARP8 | Ryzen 7 7735U | Radeon Graphics | 16GB LPDDR5 | 512GB WD PC SN740...`.
+
+Date: 2026-07-08
+Problem: Generic Windows names still made it hard to scan the offline library and Computer Info, because a `DESKTOP-*` hostname might actually be a laptop.
+Root cause: The TUI had readable hardware labels, but no first-class device-kind field persisted in old snapshots or shown near the selected machine summary. Laptop/desktop inference was only a menu grouping concern.
+Guardrail/rule: Treat laptop/desktop classification as snapshot metadata and UI identity, not only as a menu grouping helper. Persist `Collector.DeviceKind`, `DeviceKindGroup`, `DeviceKindConfidence`, and `DeviceKindReason`; include matching fields in `.devicecheck-data\snapshot-index.csv`; and show a colored `Type` row above `Label` in Computer Info for local, remote, and offline targets. Prefer chassis/system type evidence, then battery evidence, then model/CPU heuristics.
+Files affected: `internal\DeviceCheck\02-MachineAndTarget.ps1`, `internal\DeviceCheck\05-InventoryAndSnapshots.ps1`, `internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1`, `internal\DeviceCheck\07-TreeDetailsAndModels.ps1`, `internal\DeviceCheck\08-Rendering.ps1`, `internal\Export-DeviceCheckEvidence.ps1`, `tools\Update-DeviceCheckSnapshotLabels.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for edited PowerShell files; strict-mode local classifier smoke returned `Laptop (High: chassis type)`; existing `.devicecheck-data` snapshots grouped as `Desktops: 8` and `Laptops: 14` after backfill, with `NEOS` and `PALIOS` classified as desktops and `DESKTOP-NFSVMUE` / `DESKTOP-RUHR98M` classified as laptops; `internal\Test-DeviceCheckStructure.ps1`.

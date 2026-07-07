@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 . (Join-Path -Path $repoRoot -ChildPath 'internal\DeviceCheck\04-UiTextFormatting.ps1')
 . (Join-Path -Path $repoRoot -ChildPath 'internal\DeviceCheck\02-MachineAndTarget.ps1')
+. (Join-Path -Path $repoRoot -ChildPath 'internal\DeviceCheck\06-RemoteConnectionOfflineMenu.ps1')
 
 function Resolve-DeviceCheckDatabaseRoot {
     param([string]$Root)
@@ -49,18 +50,40 @@ foreach ($file in @(Get-ChildItem -LiteralPath $snapshotsRoot -Recurse -Filter '
         $computerSystem = Get-NotePropertyValue -Object $machine -Name 'ComputerSystem'
         $devicesRoot = Get-NotePropertyValue -Object $snapshot -Name 'Devices'
         $label = Get-DeviceCheckSnapshotHardwareLabel -Snapshot $snapshot
+        $computerName = [string](Get-NotePropertyValue -Object $computerSystem -Name 'Name')
+        $deviceKind = Get-DeviceCheckSnapshotDeviceKind -Snapshot $snapshot -SnapshotLabel $label -ComputerName $computerName
 
-        if (-not [string]::IsNullOrWhiteSpace($label) -and -not $NoWrite) {
+        if (-not $NoWrite) {
             $existing = [string](Get-NotePropertyValue -Object $collector -Name 'SnapshotLabel')
-            if ($existing -ne $label -and $PSCmdlet.ShouldProcess($file.FullName, "Set SnapshotLabel to '$label'")) {
-                Add-Member -InputObject $collector -MemberType NoteProperty -Name SnapshotLabel -Value $label -Force
+            $existingKind = [string](Get-NotePropertyValue -Object $collector -Name 'DeviceKind')
+            $existingGroup = [string](Get-NotePropertyValue -Object $collector -Name 'DeviceKindGroup')
+            $existingConfidence = [string](Get-NotePropertyValue -Object $collector -Name 'DeviceKindConfidence')
+            $existingReason = [string](Get-NotePropertyValue -Object $collector -Name 'DeviceKindReason')
+            $needsWrite = (
+                ((-not [string]::IsNullOrWhiteSpace($label)) -and $existing -ne $label) -or
+                $existingKind -ne $deviceKind.Kind -or
+                $existingGroup -ne $deviceKind.Group -or
+                $existingConfidence -ne $deviceKind.Confidence -or
+                $existingReason -ne $deviceKind.Reason
+            )
+            if ($needsWrite -and $PSCmdlet.ShouldProcess($file.FullName, "Update SnapshotLabel and DeviceKind metadata")) {
+                if (-not [string]::IsNullOrWhiteSpace($label)) {
+                    Add-Member -InputObject $collector -MemberType NoteProperty -Name SnapshotLabel -Value $label -Force
+                }
+                Add-Member -InputObject $collector -MemberType NoteProperty -Name DeviceKind -Value $deviceKind.Kind -Force
+                Add-Member -InputObject $collector -MemberType NoteProperty -Name DeviceKindGroup -Value $deviceKind.Group -Force
+                Add-Member -InputObject $collector -MemberType NoteProperty -Name DeviceKindConfidence -Value $deviceKind.Confidence -Force
+                Add-Member -InputObject $collector -MemberType NoteProperty -Name DeviceKindReason -Value $deviceKind.Reason -Force
                 $snapshot | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $file.FullName -Encoding UTF8
             }
         }
 
         $rows.Add([PSCustomObject]@{
             SnapshotLabel   = $label
-            ComputerName    = [string](Get-NotePropertyValue -Object $computerSystem -Name 'Name')
+            ComputerName    = $computerName
+            DeviceKind      = $deviceKind.Kind
+            DeviceKindGroup = $deviceKind.Group
+            DeviceKindHint  = "$($deviceKind.Confidence): $($deviceKind.Reason)"
             RequestedTarget = [string](Get-NotePropertyValue -Object $collector -Name 'RequestedComputerName')
             FinishedAt      = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
             DeviceCount     = [string](Get-NotePropertyValue -Object $devicesRoot -Name 'Count')

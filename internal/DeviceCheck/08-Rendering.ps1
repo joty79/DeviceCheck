@@ -140,6 +140,7 @@ function Render-FrameLegacy {
         $machine = $selectedRow.Ref
         Write-UiSection -Title "Computer Info" -Icon ""
         Write-Host "  $($_C.Dim)System Name  :$($_C.Reset) $($_C.White)$(Get-MachineDisplayName -MachineEvidence $machine)$($_C.Reset)$($_C.EraseLn)"
+        $allDevices = @()
         $snapshotLabel = ''
         if (Test-RemoteSnapshotTargetActive -and $null -ne $script:TargetSnapshot) {
             $snapshotLabel = [string](Get-NotePropertyValue -Object (Get-NotePropertyValue -Object $script:TargetSnapshot -Name 'Collector') -Name 'SnapshotLabel')
@@ -153,6 +154,9 @@ function Render-FrameLegacy {
                     Devices = [PSCustomObject]@{ Present = $allDevices }
                 })
         }
+        $deviceKind = Get-DeviceCheckDisplayDeviceKind -Snapshot $(if (Test-RemoteSnapshotTargetActive) { $script:TargetSnapshot } else { $null }) -Machine $machine -Devices $allDevices -SnapshotLabel $snapshotLabel -ComputerName (Get-MachineDisplayName -MachineEvidence $machine)
+        $deviceKindColor = Get-DeviceCheckDeviceKindDisplayColor -DeviceKind $deviceKind
+        Write-Host "  $($_C.Dim)Type         :$($_C.Reset) $deviceKindColor$(Format-UiValue -Text (Format-DeviceCheckDeviceKindDisplayText -DeviceKind $deviceKind) -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
         if (-not [string]::IsNullOrWhiteSpace($snapshotLabel)) {
             Write-Host "  $($_C.Dim)Label        :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $snapshotLabel -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
         }

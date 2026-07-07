@@ -300,6 +300,8 @@ function Get-DetailDisplayLines {
                     Devices  = [PSCustomObject]@{ Present = $allDevices }
                 })
         }
+        $deviceKind = Get-DeviceCheckDisplayDeviceKind -Snapshot $(if (Test-RemoteSnapshotTargetActive) { $script:TargetSnapshot } else { $null }) -Machine $machine -Devices $allDevices -SnapshotLabel $snapshotLabel -ComputerName (Get-MachineDisplayName -MachineEvidence $machine)
+        Add-KeyValueLines -Lines $lines -Key 'Type' -Value (Format-DeviceCheckDeviceKindDisplayText -DeviceKind $deviceKind) -Width $Width -ValueColor (Get-DeviceCheckDeviceKindDisplayColor -DeviceKind $deviceKind)
         if (-not [string]::IsNullOrWhiteSpace($snapshotLabel)) {
             Add-KeyValueLines -Lines $lines -Key 'Label' -Value $snapshotLabel -Width $Width
         }

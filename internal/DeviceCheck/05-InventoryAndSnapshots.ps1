@@ -376,10 +376,22 @@ function Invoke-DeviceCheckSnapshotExport {
 
     $snapshot = Get-Content -LiteralPath $summary.LatestPath -Raw | ConvertFrom-Json -ErrorAction Stop
     $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot $snapshot
+    $metadataUpdated = $false
     if (-not [string]::IsNullOrWhiteSpace($snapshotLabel)) {
         Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name SnapshotLabel -Value $snapshotLabel -Force
         Add-Member -InputObject $summary -MemberType NoteProperty -Name SnapshotLabel -Value $snapshotLabel -Force
+        $metadataUpdated = $true
     }
+    $deviceKind = Get-DeviceCheckSnapshotDeviceKind -Snapshot $snapshot -SnapshotLabel $snapshotLabel -ComputerName ([string]$summary.ComputerName)
+    Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name DeviceKind -Value $deviceKind.Kind -Force
+    Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name DeviceKindGroup -Value $deviceKind.Group -Force
+    Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name DeviceKindConfidence -Value $deviceKind.Confidence -Force
+    Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name DeviceKindReason -Value $deviceKind.Reason -Force
+    Add-Member -InputObject $summary -MemberType NoteProperty -Name DeviceKind -Value $deviceKind.Kind -Force
+    Add-Member -InputObject $summary -MemberType NoteProperty -Name DeviceKindGroup -Value $deviceKind.Group -Force
+    Add-Member -InputObject $summary -MemberType NoteProperty -Name DeviceKindHint -Value "$($deviceKind.Confidence): $($deviceKind.Reason)" -Force
+    $metadataUpdated = $true
+
     if ($ArchiveSample) {
         $archiveAt = (Get-Date).ToString('o')
         Add-Member -InputObject $snapshot.Collector -MemberType NoteProperty -Name SnapshotMode -Value 'FullArchive' -Force
@@ -394,7 +406,7 @@ function Invoke-DeviceCheckSnapshotExport {
             $archiveJson | Set-Content -LiteralPath $summary.OutputPath -Encoding UTF8
         }
     }
-    if (-not [string]::IsNullOrWhiteSpace($snapshotLabel) -and -not $ArchiveSample) {
+    if ($metadataUpdated -and -not $ArchiveSample) {
         $labelJson = $snapshot | ConvertTo-Json -Depth 40
         $labelJson | Set-Content -LiteralPath $summary.LatestPath -Encoding UTF8
         if (-not [string]::IsNullOrWhiteSpace([string]$summary.OutputPath) -and (Test-Path -LiteralPath $summary.OutputPath -PathType Leaf)) {

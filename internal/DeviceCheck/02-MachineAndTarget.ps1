@@ -346,6 +346,8 @@ function Get-MachineEvidence {
     $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
     $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
     $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+    $systemEnclosure = Get-CimFirstOrNull -ClassName 'Win32_SystemEnclosure'
+    $batteries = @(Get-CimInstance -ClassName 'Win32_Battery' -ErrorAction SilentlyContinue)
     $memory = Get-MachineMemoryEvidence -ComputerSystem $computerSystem
 
     $fingerprintParts = @(
@@ -375,6 +377,8 @@ function Get-MachineEvidence {
             Model        = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Model')
             Name         = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'Name')
             SystemType   = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'SystemType')
+            PCSystemType = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'PCSystemType')
+            PCSystemTypeEx = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'PCSystemTypeEx')
             TotalPhysicalMemory = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $computerSystem -PropertyName 'TotalPhysicalMemory')
         }
         ComputerSystemProduct = [PSCustomObject]@{
@@ -391,6 +395,23 @@ function Get-MachineEvidence {
             Version      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'Version')
             SerialNumber = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $baseBoard -PropertyName 'SerialNumber')
         }
+        SystemEnclosure      = [PSCustomObject]@{
+            Manufacturer  = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $systemEnclosure -PropertyName 'Manufacturer')
+            ChassisTypes  = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $systemEnclosure -PropertyName 'ChassisTypes')
+            SMBIOSAssetTag = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $systemEnclosure -PropertyName 'SMBIOSAssetTag')
+            SerialNumber  = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $systemEnclosure -PropertyName 'SerialNumber')
+        }
+        Batteries            = @(
+            foreach ($battery in $batteries) {
+                [PSCustomObject]@{
+                    Name               = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $battery -PropertyName 'Name')
+                    DeviceID           = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $battery -PropertyName 'DeviceID')
+                    Chemistry          = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $battery -PropertyName 'Chemistry')
+                    BatteryStatus      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $battery -PropertyName 'BatteryStatus')
+                    EstimatedChargeRemaining = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $battery -PropertyName 'EstimatedChargeRemaining')
+                }
+            }
+        )
         BIOS                  = [PSCustomObject]@{
             Manufacturer      = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $bios -PropertyName 'Manufacturer')
             SMBIOSBIOSVersion = ConvertTo-PlainEvidenceValue (Get-ObjectPropertyValue -Object $bios -PropertyName 'SMBIOSBIOSVersion')

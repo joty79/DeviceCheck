@@ -533,6 +533,8 @@ function New-CollectorScriptBlock {
             $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
             $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
             $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+            $systemEnclosure = Get-CimFirstOrNull -ClassName 'Win32_SystemEnclosure'
+            $batteries = @(Get-CimInstance -ClassName 'Win32_Battery' -ErrorAction SilentlyContinue)
             $memory = Get-MachineMemorySnapshot -ComputerSystem $computerSystem
             $storage = Get-MachineStorageSnapshot
 
@@ -546,9 +548,15 @@ function New-CollectorScriptBlock {
 
             return [PSCustomObject]@{
                 MachineId             = $machineId
-                ComputerSystem        = Get-CimSnapshot -InputObject $computerSystem -PropertyNames @('Name', 'Manufacturer', 'Model', 'SystemType', 'TotalPhysicalMemory', 'Domain', 'Workgroup')
+                ComputerSystem        = Get-CimSnapshot -InputObject $computerSystem -PropertyNames @('Name', 'Manufacturer', 'Model', 'SystemType', 'PCSystemType', 'PCSystemTypeEx', 'TotalPhysicalMemory', 'Domain', 'Workgroup')
                 ComputerSystemProduct = Get-CimSnapshot -InputObject $computerProduct -PropertyNames @('Name', 'Vendor', 'Version', 'UUID', 'IdentifyingNumber')
                 BaseBoard             = Get-CimSnapshot -InputObject $baseBoard -PropertyNames @('Manufacturer', 'Product', 'Version', 'SerialNumber')
+                SystemEnclosure       = Get-CimSnapshot -InputObject $systemEnclosure -PropertyNames @('Manufacturer', 'ChassisTypes', 'SMBIOSAssetTag', 'SerialNumber')
+                Batteries             = @(
+                    foreach ($battery in $batteries) {
+                        Get-CimSnapshot -InputObject $battery -PropertyNames @('Name', 'DeviceID', 'Chemistry', 'BatteryStatus', 'EstimatedChargeRemaining')
+                    }
+                )
                 BIOS                  = Get-CimSnapshot -InputObject $bios -PropertyNames @('Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate', 'SerialNumber')
                 OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
                 Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')
@@ -652,6 +660,8 @@ function New-CollectorScriptBlock {
         $bios = Get-CimFirstOrNull -ClassName 'Win32_BIOS'
         $operatingSystem = Get-CimFirstOrNull -ClassName 'Win32_OperatingSystem'
         $processor = Get-CimFirstOrNull -ClassName 'Win32_Processor'
+        $systemEnclosure = Get-CimFirstOrNull -ClassName 'Win32_SystemEnclosure'
+        $batteries = @(Get-CimInstance -ClassName 'Win32_Battery' -ErrorAction SilentlyContinue)
         $memory = Get-MachineMemorySnapshot -ComputerSystem $computerSystem
         $storage = Get-MachineStorageSnapshot
 
@@ -780,9 +790,15 @@ function New-CollectorScriptBlock {
             }
             Machine       = [PSCustomObject]@{
                 MachineId             = $machineId
-                ComputerSystem        = Get-CimSnapshot -InputObject $computerSystem -PropertyNames @('Name', 'Manufacturer', 'Model', 'SystemType', 'TotalPhysicalMemory', 'Domain', 'Workgroup')
+                ComputerSystem        = Get-CimSnapshot -InputObject $computerSystem -PropertyNames @('Name', 'Manufacturer', 'Model', 'SystemType', 'PCSystemType', 'PCSystemTypeEx', 'TotalPhysicalMemory', 'Domain', 'Workgroup')
                 ComputerSystemProduct = Get-CimSnapshot -InputObject $computerProduct -PropertyNames @('Name', 'Vendor', 'Version', 'UUID', 'IdentifyingNumber')
                 BaseBoard             = Get-CimSnapshot -InputObject $baseBoard -PropertyNames @('Manufacturer', 'Product', 'Version', 'SerialNumber')
+                SystemEnclosure       = Get-CimSnapshot -InputObject $systemEnclosure -PropertyNames @('Manufacturer', 'ChassisTypes', 'SMBIOSAssetTag', 'SerialNumber')
+                Batteries             = @(
+                    foreach ($battery in $batteries) {
+                        Get-CimSnapshot -InputObject $battery -PropertyNames @('Name', 'DeviceID', 'Chemistry', 'BatteryStatus', 'EstimatedChargeRemaining')
+                    }
+                )
                 BIOS                  = Get-CimSnapshot -InputObject $bios -PropertyNames @('Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate', 'SerialNumber')
                 OperatingSystem       = Get-CimSnapshot -InputObject $operatingSystem -PropertyNames @('Caption', 'Version', 'BuildNumber', 'OSArchitecture', 'InstallDate', 'LastBootUpTime')
                 Processor             = Get-CimSnapshot -InputObject $processor -PropertyNames @('Name', 'Manufacturer', 'NumberOfCores', 'NumberOfLogicalProcessors')

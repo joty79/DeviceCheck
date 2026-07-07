@@ -1,6 +1,193 @@
 # Part of DeviceCheck.ps1. Dot-sourced by the root entrypoint; keep script-scope state shared.
 # Purpose: Offline snapshot submenu helpers for the LAN connection selector.
 
+function Get-DeviceCheckSnapshotDeviceKind {
+    param(
+        $Snapshot,
+        [AllowEmptyString()][string]$SnapshotLabel,
+        [AllowEmptyString()][string]$ComputerName
+    )
+
+    $machine = Get-NotePropertyValue -Object $Snapshot -Name 'Machine'
+    $computerSystem = Get-NotePropertyValue -Object $machine -Name 'ComputerSystem'
+    $systemEnclosure = Get-NotePropertyValue -Object $machine -Name 'SystemEnclosure'
+    $chassisTypes = @((Get-NotePropertyValue -Object $systemEnclosure -Name 'ChassisTypes') | ForEach-Object {
+        $value = 0
+        if ([int]::TryParse([string]$_, [ref]$value)) { $value }
+    })
+    if (@($chassisTypes | Where-Object { $_ -in @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32) }).Count -gt 0) {
+        return [PSCustomObject]@{
+            Kind       = 'Laptop'
+            Group      = 'Laptops'
+            Confidence = 'High'
+            Reason     = 'chassis type'
+        }
+    }
+    if (@($chassisTypes | Where-Object { $_ -in @(3, 4, 5, 6, 7, 13, 15, 16, 35, 36) }).Count -gt 0) {
+        return [PSCustomObject]@{
+            Kind       = 'Desktop'
+            Group      = 'Desktops'
+            Confidence = 'High'
+            Reason     = 'chassis type'
+        }
+    }
+
+    $pcSystemTypes = @(
+        Get-NotePropertyValue -Object $computerSystem -Name 'PCSystemType'
+        Get-NotePropertyValue -Object $computerSystem -Name 'PCSystemTypeEx'
+    ) | ForEach-Object {
+        $value = 0
+        if ([int]::TryParse([string]$_, [ref]$value)) { $value }
+    }
+    if (@($pcSystemTypes | Where-Object { $_ -in @(2, 8) }).Count -gt 0) {
+        return [PSCustomObject]@{
+            Kind       = 'Laptop'
+            Group      = 'Laptops'
+            Confidence = 'High'
+            Reason     = 'PC system type'
+        }
+    }
+    if (@($pcSystemTypes | Where-Object { $_ -in @(1, 3, 6) }).Count -gt 0) {
+        return [PSCustomObject]@{
+            Kind       = 'Desktop'
+            Group      = 'Desktops'
+            Confidence = 'High'
+            Reason     = 'PC system type'
+        }
+    }
+
+    $batteries = @((Get-NotePropertyValue -Object $machine -Name 'Batteries'))
+    if (@($batteries | Where-Object { -not [string]::IsNullOrWhiteSpace([string](Get-NotePropertyValue -Object $_ -Name 'Name')) }).Count -gt 0) {
+        return [PSCustomObject]@{
+            Kind       = 'Laptop'
+            Group      = 'Laptops'
+            Confidence = 'High'
+            Reason     = 'Win32_Battery'
+        }
+    }
+
+    $devicesRoot = Get-NotePropertyValue -Object $Snapshot -Name 'Devices'
+    foreach ($device in @((Get-NotePropertyValue -Object $devicesRoot -Name 'Present'))) {
+        $class = [string](Get-NotePropertyValue -Object $device -Name 'Class')
+        $friendlyName = [string](Get-NotePropertyValue -Object $device -Name 'FriendlyName')
+        $description = [string](Get-NotePropertyValue -Object $device -Name 'DeviceDesc')
+        $deviceText = "$class $friendlyName $description"
+        if ($class -eq 'Battery' -and $deviceText -match '(?i)\b(ACPI[- ]Compliant Control Method Battery|Control Method Battery|Composite Battery)\b') {
+            return [PSCustomObject]@{
+                Kind       = 'Laptop'
+                Group      = 'Laptops'
+                Confidence = 'High'
+                Reason     = 'ACPI battery'
+            }
+        }
+    }
+
+    $product = Get-NotePropertyValue -Object $machine -Name 'ComputerSystemProduct'
+    $baseBoard = Get-NotePropertyValue -Object $machine -Name 'BaseBoard'
+    $text = @(
+        $SnapshotLabel
+        $ComputerName
+        [string](Get-NotePropertyValue -Object $computerSystem -Name 'Manufacturer')
+        [string](Get-NotePropertyValue -Object $computerSystem -Name 'Model')
+        [string](Get-NotePropertyValue -Object $product -Name 'Name')
+        [string](Get-NotePropertyValue -Object $product -Name 'Version')
+        [string](Get-NotePropertyValue -Object $baseBoard -Name 'Product')
+    ) -join ' '
+
+    if ($text -match '(?i)\b(Latitude|ThinkPad|IdeaPad|Ideapad|Yoga|EliteBook|ProBook|Notebook|Laptop|Chromebook|VivoBook|ZenBook|Aspire|Swift|TravelMate|Satellite|LifeBook|MacBook)\b') {
+        return [PSCustomObject]@{
+            Kind       = 'Laptop'
+            Group      = 'Laptops'
+            Confidence = 'Medium'
+            Reason     = 'model keyword'
+        }
+    }
+
+    if ($text -match '(?i)\b(ThinkCentre|OptiPlex|EliteDesk|ProDesk|SFF|Tower|Desktop|Workstation|DeskMini|Precision)\b' -or $text -match '(?i)Gigabyte Technology') {
+        return [PSCustomObject]@{
+            Kind       = 'Desktop'
+            Group      = 'Desktops'
+            Confidence = 'Medium'
+            Reason     = 'model keyword'
+        }
+    }
+
+    if ($text -match '(?i)\b(i[3579]-\d{4,5}K|Ryzen\s+[3579]\s+\d{4}X|FX-\d{4})\b') {
+        return [PSCustomObject]@{
+            Kind       = 'Desktop'
+            Group      = 'Desktops'
+            Confidence = 'Medium'
+            Reason     = 'desktop CPU'
+        }
+    }
+
+    [PSCustomObject]@{
+        Kind       = 'Unknown'
+        Group      = 'Unknown'
+        Confidence = 'Low'
+        Reason     = 'not enough evidence'
+    }
+}
+
+function Get-DeviceCheckOfflineKindGroup {
+    param($Entry)
+
+    $group = [string](Get-NotePropertyValue -Object $Entry -Name 'DeviceKindGroup')
+    if ($group -in @('Laptops', 'Desktops', 'Unknown')) { return $group }
+    return 'Unknown'
+}
+
+function Get-DeviceCheckDisplayDeviceKind {
+    param(
+        $Snapshot,
+        $Machine,
+        $Devices = @(),
+        [AllowEmptyString()][string]$SnapshotLabel,
+        [AllowEmptyString()][string]$ComputerName
+    )
+
+    if ($null -ne $Snapshot) {
+        $collector = Get-NotePropertyValue -Object $Snapshot -Name 'Collector'
+        if ([string]::IsNullOrWhiteSpace($SnapshotLabel)) {
+            $SnapshotLabel = [string](Get-NotePropertyValue -Object $collector -Name 'SnapshotLabel')
+        }
+        if ([string]::IsNullOrWhiteSpace($ComputerName)) {
+            $snapshotMachine = Get-NotePropertyValue -Object $Snapshot -Name 'Machine'
+            $computerSystem = Get-NotePropertyValue -Object $snapshotMachine -Name 'ComputerSystem'
+            $ComputerName = [string](Get-NotePropertyValue -Object $computerSystem -Name 'Name')
+        }
+        return Get-DeviceCheckSnapshotDeviceKind -Snapshot $Snapshot -SnapshotLabel $SnapshotLabel -ComputerName $ComputerName
+    }
+
+    $pseudoSnapshot = [PSCustomObject]@{
+        Machine = $Machine
+        Devices = [PSCustomObject]@{ Present = @($Devices) }
+    }
+    return Get-DeviceCheckSnapshotDeviceKind -Snapshot $pseudoSnapshot -SnapshotLabel $SnapshotLabel -ComputerName $ComputerName
+}
+
+function Format-DeviceCheckDeviceKindDisplayText {
+    param($DeviceKind)
+
+    if ($null -eq $DeviceKind) { return 'Unknown (Low: not enough evidence)' }
+    $kind = [string](Get-NotePropertyValue -Object $DeviceKind -Name 'Kind')
+    $confidence = [string](Get-NotePropertyValue -Object $DeviceKind -Name 'Confidence')
+    $reason = [string](Get-NotePropertyValue -Object $DeviceKind -Name 'Reason')
+    if ([string]::IsNullOrWhiteSpace($kind)) { $kind = 'Unknown' }
+    if ([string]::IsNullOrWhiteSpace($confidence)) { $confidence = 'Low' }
+    if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'not enough evidence' }
+    return "$kind ($confidence`: $reason)"
+}
+
+function Get-DeviceCheckDeviceKindDisplayColor {
+    param($DeviceKind)
+
+    $kind = [string](Get-NotePropertyValue -Object $DeviceKind -Name 'Kind')
+    if ($kind -eq 'Laptop') { return $_C.Gold }
+    if ($kind -eq 'Desktop') { return $_C.Info }
+    return $_C.Warn
+}
+
 function Get-DeviceCheckLatestSnapshotEntries {
     $snapshotsRoot = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'snapshots'
     if (-not (Test-Path -LiteralPath $snapshotsRoot -PathType Container)) {
@@ -31,6 +218,7 @@ function Get-DeviceCheckLatestSnapshotEntries {
             if ([string]::IsNullOrWhiteSpace($snapshotLabel)) {
                 $snapshotLabel = Get-DeviceCheckSnapshotHardwareLabel -Snapshot $snapshot
             }
+            $deviceKind = Get-DeviceCheckSnapshotDeviceKind -Snapshot $snapshot -SnapshotLabel $snapshotLabel -ComputerName $computerName
 
             $entries.Add([PSCustomObject]@{
                 ComputerName    = $computerName
@@ -40,6 +228,9 @@ function Get-DeviceCheckLatestSnapshotEntries {
                 DeviceCount     = $deviceCount
                 SnapshotPath    = $file.FullName
                 Snapshot        = $snapshot
+                DeviceKind      = $deviceKind.Kind
+                DeviceKindGroup = $deviceKind.Group
+                DeviceKindHint  = "$($deviceKind.Confidence): $($deviceKind.Reason)"
             })
         } catch {}
     }
@@ -79,6 +270,12 @@ function Get-DeviceCheckOfflineMenuEntries {
         $hasSnapshot = $false
         $displayIPAddress = $(if (Test-DeviceCheckIPv4Address -Address $entry.LastIPAddress) { $entry.LastIPAddress } else { 'Unknown' })
         $snapshotLabel = ''
+        $deviceKind = [PSCustomObject]@{
+            Kind       = 'Unknown'
+            Group      = 'Unknown'
+            Confidence = 'Low'
+            Reason     = 'no snapshot'
+        }
         if ($null -ne $cached) {
             $collector = Get-NotePropertyValue -Object $cached.Snapshot -Name 'Collector'
             $finishedAt = [string](Get-NotePropertyValue -Object $collector -Name 'FinishedAt')
@@ -98,6 +295,7 @@ function Get-DeviceCheckOfflineMenuEntries {
             $snapshotPath = $cached.LatestPath
             $hasSnapshot = $true
             $null = $snapshotPathKeys.Add($snapshotPath)
+            $deviceKind = Get-DeviceCheckSnapshotDeviceKind -Snapshot $cached.Snapshot -SnapshotLabel $snapshotLabel -ComputerName $entry.ComputerName
         }
 
         if (
@@ -121,6 +319,9 @@ function Get-DeviceCheckOfflineMenuEntries {
             FinishedAt    = $finishedAt
             SnapshotPath  = $snapshotPath
             HasSnapshot   = $hasSnapshot
+            DeviceKind    = $deviceKind.Kind
+            DeviceKindGroup = $deviceKind.Group
+            DeviceKindHint = "$($deviceKind.Confidence): $($deviceKind.Reason)"
             Source        = 'History'
             Data          = $entry
         })
@@ -160,6 +361,9 @@ function Get-DeviceCheckOfflineMenuEntries {
             FinishedAt    = $snapshotEntry.FinishedAt
             SnapshotPath  = $snapshotEntry.SnapshotPath
             HasSnapshot   = $true
+            DeviceKind    = $snapshotEntry.DeviceKind
+            DeviceKindGroup = $snapshotEntry.DeviceKindGroup
+            DeviceKindHint = $snapshotEntry.DeviceKindHint
             Source        = 'Snapshot'
             Data          = [PSCustomObject]@{
                 ComputerName  = $snapshotEntry.ComputerName
@@ -519,9 +723,25 @@ function Invoke-OfflineSnapshotSelector {
             $items.Add([PSCustomObject]@{ Type = 'Header'; Text = "$($_C.Bold)$($_C.Info)Offline Snapshots: $selectedNetwork$($_C.Reset)"; Selectable = $false })
             $items.Add([PSCustomObject]@{ Type = 'Back'; Text = "< Back to networks"; Selectable = $true })
             $rowWidth = [Math]::Max(64, (Get-UiWidth) - 8)
-            $items.Add((New-DeviceCheckOfflineSnapshotHeaderRow -Width $rowWidth))
-            foreach ($entry in @($offlineEntries | Where-Object { $_.NetworkLabel -eq $selectedNetwork } | Sort-Object ComputerName)) {
-                $items.Add((New-DeviceCheckOfflineSnapshotMenuRow -Entry $entry -Width $rowWidth))
+            $networkEntries = @($offlineEntries | Where-Object { $_.NetworkLabel -eq $selectedNetwork } | Sort-Object ComputerName)
+            foreach ($kindGroup in @('Laptops', 'Desktops', 'Unknown')) {
+                $groupEntries = @($networkEntries | Where-Object { (Get-DeviceCheckOfflineKindGroup -Entry $_) -eq $kindGroup })
+                if ($groupEntries.Count -eq 0) { continue }
+
+                $snapshotCount = @($groupEntries | Where-Object { $_.HasSnapshot }).Count
+                $historyOnlyCount = @($groupEntries | Where-Object { -not $_.HasSnapshot }).Count
+                $extra = $(if ($historyOnlyCount -gt 0) { " / $historyOnlyCount no snapshot" } else { '' })
+                $groupColor = $(if ($kindGroup -eq 'Laptops') { $_C.Gold } elseif ($kindGroup -eq 'Desktops') { $_C.Info } else { $_C.Warn })
+                $items.Add([PSCustomObject]@{
+                    Type       = 'GroupHeader'
+                    Text       = "$kindGroup - $($groupEntries.Count) pcs / $snapshotCount snapshots$extra"
+                    RenderText = "$($_C.Bold)$groupColor$kindGroup$($_C.Reset)$($_C.Dim) - $($groupEntries.Count) pcs / $snapshotCount snapshots$extra$($_C.Reset)"
+                    Selectable = $false
+                })
+                $items.Add((New-DeviceCheckOfflineSnapshotHeaderRow -Width $rowWidth))
+                foreach ($entry in $groupEntries) {
+                    $items.Add((New-DeviceCheckOfflineSnapshotMenuRow -Entry $entry -Width $rowWidth))
+                }
             }
         }
 
@@ -575,6 +795,8 @@ function Invoke-OfflineSnapshotSelector {
                 Add-UiFrameLine -Frame $frame -Text "  $($item.Text)$($_C.EraseLn)"
             } elseif ($item.Type -eq 'Placeholder') {
                 Add-UiFrameLine -Frame $frame -Text "$($item.Text)$($_C.EraseLn)"
+            } elseif ($item.Type -eq 'GroupHeader') {
+                Add-UiFrameLine -Frame $frame -Text "  $($item.RenderText)$($_C.EraseLn)"
             } elseif ($item.Type -eq 'ColumnHeader') {
                 Add-UiFrameLine -Frame $frame -Text "    $($item.RenderText)$($_C.EraseLn)"
             } else {
