@@ -788,6 +788,28 @@ function Get-DeviceCheckDiscoveredHosts {
         }
     }
 
+    $netBiosCandidates = @(
+        $stillUnresolved |
+            Where-Object { ($smbOpenIPs -contains $_) -or $detectedOnlyIPsSet.Contains($_) } |
+            Select-Object -First 6
+    )
+    foreach ($ip in $netBiosCandidates) {
+        $netBiosName = Resolve-DeviceCheckNetBiosName -IPAddress $ip -TimeoutMs 350
+        if (-not [string]::IsNullOrWhiteSpace($netBiosName) -and $netBiosName -ne $ip) {
+            $resolvedNames[$ip] = $netBiosName
+            $hostsCache[$ip] = $netBiosName
+            Save-DeviceCheckHostsCache -Cache $hostsCache -NetworkId $currentNetworkId
+        }
+    }
+
+    $stillUnresolvedAfterNetBios = [System.Collections.Generic.List[string]]::new()
+    foreach ($ip in $stillUnresolved) {
+        if (-not $resolvedNames.ContainsKey($ip) -or $resolvedNames[$ip] -eq $ip) {
+            $stillUnresolvedAfterNetBios.Add($ip)
+        }
+    }
+    $stillUnresolved = $stillUnresolvedAfterNetBios
+
     # Resolve unresolved IPs in background to populate cache for future scans
     if ($stillUnresolved.Count -gt 0) {
         Start-DeviceCheckBackgroundResolver -IPs @($stillUnresolved) -NetworkId $currentNetworkId

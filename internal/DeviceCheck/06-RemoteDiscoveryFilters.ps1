@@ -250,6 +250,121 @@ function Get-DeviceCheckExplorerNetworkComputers {
     }
 }
 
+function Get-DeviceCheckNetBiosNodeStatusName {
+    param(
+        [Parameter(Mandatory)][byte[]]$Response,
+        [string]$FallbackIP
+    )
+
+    if ($Response.Length -lt 57) { return $null }
+
+    $offset = 12
+    while ($offset -lt $Response.Length -and $Response[$offset] -ne 0) {
+        $offset += 1 + [int]$Response[$offset]
+    }
+    if ($offset + 12 -ge $Response.Length) { return $null }
+
+    $offset += 1
+    $type = ([int]$Response[$offset] -shl 8) -bor [int]$Response[$offset + 1]
+    if ($type -ne 0x21) { return $null }
+
+    $offset += 10
+    if ($offset -ge $Response.Length) { return $null }
+
+    $nameCount = [int]$Response[$offset]
+    $offset++
+
+    $preferred = $null
+    $fallback = $null
+    for ($i = 0; $i -lt $nameCount; $i++) {
+        if ($offset + 17 -ge $Response.Length) { break }
+
+        $rawName = [Text.Encoding]::ASCII.GetString($Response, $offset, 15).Trim()
+        $suffix = [int]$Response[$offset + 15]
+        $flags = ([int]$Response[$offset + 16] -shl 8) -bor [int]$Response[$offset + 17]
+        $isGroup = (($flags -band 0x8000) -ne 0)
+        $offset += 18
+
+        if ([string]::IsNullOrWhiteSpace($rawName) -or $rawName -eq 'WORKGROUP') { continue }
+
+        if ($suffix -eq 0x20 -and -not $isGroup) {
+            $preferred = $rawName
+            break
+        }
+        if ($suffix -eq 0x00 -and -not $isGroup -and [string]::IsNullOrWhiteSpace($fallback)) {
+            $fallback = $rawName
+        }
+    }
+
+    $name = $(if (-not [string]::IsNullOrWhiteSpace($preferred)) { $preferred } else { $fallback })
+    return (ConvertTo-DeviceCheckHostDisplayName -HostName $name -FallbackIP $FallbackIP)
+}
+
+function Resolve-DeviceCheckNetBiosName {
+    param(
+        [Parameter(Mandatory)][string]$IPAddress,
+        [int]$TimeoutMs = 450
+    )
+
+    $parsed = $null
+    if (-not [Net.IPAddress]::TryParse($IPAddress, [ref]$parsed)) { return $null }
+    if ($parsed.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { return $null }
+
+    $transactionId = Get-Random -Minimum 1 -Maximum 65535
+    $query = [byte[]]::new(50)
+    $query[0] = [byte](($transactionId -shr 8) -band 0xff)
+    $query[1] = [byte]($transactionId -band 0xff)
+    $query[5] = 1
+    $query[12] = 0x20
+    $encodedWildcard = [Text.Encoding]::ASCII.GetBytes(('CK' + ('CA' * 15)))
+    for ($i = 0; $i -lt 32; $i++) { $query[13 + $i] = $encodedWildcard[$i] }
+    $query[45] = 0
+    $query[47] = 0x21
+    $query[49] = 0x01
+
+    $client = $null
+    try {
+        $client = [Net.Sockets.UdpClient]::new(0)
+        $client.Client.ReceiveTimeout = $TimeoutMs
+        $endpoint = [Net.IPEndPoint]::new($parsed, 137)
+        [void]$client.Send($query, $query.Length, $endpoint)
+        $remote = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
+        $response = $client.Receive([ref]$remote)
+        $rawName = Get-DeviceCheckNetBiosNodeStatusName -Response $response -FallbackIP $IPAddress
+        if (-not [string]::IsNullOrWhiteSpace($rawName) -and $rawName -ne $IPAddress) { return $rawName }
+    } catch {
+    } finally {
+        if ($null -ne $client) { $client.Dispose() }
+    }
+
+    if ($null -eq (Get-Command nbtstat.exe -ErrorAction SilentlyContinue)) { return $null }
+
+    try {
+        $lines = @(nbtstat.exe -A $IPAddress 2>$null)
+        $preferred = $null
+        $fallback = $null
+        foreach ($line in $lines) {
+            if ($line -match '^\s*(?<name>.{1,15})<(?<suffix>[0-9A-Fa-f]{2})>\s+UNIQUE\s+Registered') {
+                $name = $Matches.name.Trim()
+                if ([string]::IsNullOrWhiteSpace($name) -or $name -eq 'WORKGROUP') { continue }
+                $suffix = $Matches.suffix.ToUpperInvariant()
+                if ($suffix -eq '20') {
+                    $preferred = $name
+                    break
+                }
+                if ($suffix -eq '00' -and [string]::IsNullOrWhiteSpace($fallback)) {
+                    $fallback = $name
+                }
+            }
+        }
+
+        $name = $(if (-not [string]::IsNullOrWhiteSpace($preferred)) { $preferred } else { $fallback })
+        return (ConvertTo-DeviceCheckHostDisplayName -HostName $name -FallbackIP $IPAddress)
+    } catch {
+        return $null
+    }
+}
+
 function Invoke-DeviceCheckComputerPortSweep {
     param(
         [string[]]$SubnetPrefixes = @(),

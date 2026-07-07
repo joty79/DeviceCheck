@@ -66,6 +66,18 @@ Assert-Equal 'DESKTOP-79L36PK' (Get-DeviceCheckExplorerNetworkComputerNameFromPa
 Assert-Equal 'DESKTOP-79L36PK' (Get-DeviceCheckExplorerNetworkComputerNameFromPath -Path '\\DESKTOP-79L36PK\Users') 'Expected Explorer UNC child path to yield the computer name.'
 Assert-Equal $null (Get-DeviceCheckExplorerNetworkComputerNameFromPath -Path '::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}') 'Expected non-UNC Explorer paths to be ignored.'
 
+$netBiosResponse = [byte[]]::new(75)
+$netBiosResponse[12] = 0x20
+for ($i = 0; $i -lt 32; $i++) { $netBiosResponse[13 + $i] = 0x43 }
+$netBiosResponse[45] = 0
+$netBiosResponse[47] = 0x21
+$netBiosResponse[56] = 1
+$netBiosNameBytes = [Text.Encoding]::ASCII.GetBytes('DESKTOP-T76VFF3 ')
+for ($i = 0; $i -lt 15; $i++) { $netBiosResponse[57 + $i] = $netBiosNameBytes[$i] }
+$netBiosResponse[72] = 0x20
+Assert-Equal 'DESKTOP-T76VFF3' (Get-DeviceCheckNetBiosNodeStatusName -Response $netBiosResponse -FallbackIP '192.168.1.13') 'Expected NetBIOS node-status parser to prefer the file-server computer name.'
+Assert-Equal $null (Get-DeviceCheckNetBiosNodeStatusName -Response ([byte[]]::new(20)) -FallbackIP '192.168.1.13') 'Expected short NetBIOS responses to be ignored.'
+
 $emptySweep = @(Invoke-DeviceCheckComputerPortSweep -SubnetPrefixes @() -ExcludedIPs @('192.168.1.1'))
 Assert-Equal 0 $emptySweep.Count 'Expected empty subnet sweep to return no hosts.'
 

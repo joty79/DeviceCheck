@@ -974,3 +974,10 @@ Root cause: Launching a fresh `pwsh` process for every discovery refresh avoids 
 Guardrail/rule: Use a bounded STA runspace for Explorer Network namespace enumeration. Keep the timeout safety and always dispose the PowerShell/runspace objects, but avoid spawning child PowerShell processes in the interactive discovery path.
 Files affected: `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Focused parser validation for `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`; focused helper timing smoke returned safely with `Timeout=700` in about 27 ms and `Timeout=5000` in about 1 ms on the home network, both with zero Explorer Computer rows.
+
+Date: 2026-07-07
+Problem: Work-network discovery could find an SMB-only PC but display it as a bare IP, for example `192.168.1.13`, even though Windows NetBIOS node-status showed the computer name `DESKTOP-T76VFF3`.
+Root cause: Reverse DNS can return only PTR placeholders or nothing for workgroup PCs, and WS-Discovery is not guaranteed for every SMB-visible Windows machine. The selector had no final NetBIOS name fallback for already-confirmed PC candidates.
+Guardrail/rule: For unresolved hosts that are already PC candidates, use a tightly bounded NetBIOS node-status fallback and parse `<20>` or `<00>` UNIQUE registered names. Keep this fallback limited to unresolved SMB/detected computer candidates, not a full-subnet NetBIOS scan, so `Ctrl+L` remains fast and PC-only.
+Files affected: `internal\DeviceCheck\06-RemoteConnection.ps1`, `internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1`, `internal\Test-RemoteDiscoveryFilters.ps1`, `PROJECT_RULES.md`.
+Validation/tests run: `internal\Test-RemoteDiscoveryFilters.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; direct helper smoke resolved `192.168.1.13 -> DESKTOP-T76VFF3`, `192.168.1.15 -> DATACOMPUTER-ER`, and `192.168.1.62 -> DESKTOP-UQR1LBT`; work-network live repeat `internal\Test-RemoteDiscoveryLive.ps1 -RepeatCount 2 -RepeatDelaySeconds 1` returned 4 PCs in both runs with names and no `.91` expectation because `.91` was closed.
