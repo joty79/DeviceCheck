@@ -165,6 +165,15 @@ function Render-FrameLegacy {
         Write-Host "  $($_C.Dim)BaseBoard    :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.BaseBoard.Manufacturer) $($machine.BaseBoard.Product)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
         Write-Host "  $($_C.Dim)Processor    :$($_C.Reset) $($_C.White)$(Format-UiValue -Text $machine.Processor.Name -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
         Write-Host "  $($_C.Dim)BIOS         :$($_C.Reset) $($_C.White)$(Format-UiValue -Text "$($machine.BIOS.Manufacturer) $($machine.BIOS.SMBIOSBIOSVersion)" -MaxLength ((Get-UiWidth) - 20))$($_C.Reset)$($_C.EraseLn)"
+        if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
+            Write-Host "$($_C.EraseLn)"
+            $snapshotInfoLines = [System.Collections.Generic.List[string]]::new()
+            $snapshotInfoLines.Add((New-SectionLine -Title 'Snapshot Info' -Width (Get-UiWidth)))
+            Add-WrappedPathLine -Lines $snapshotInfoLines -Key 'File' -Path $script:TargetSnapshotPath -Width (Get-UiWidth)
+            foreach ($snapshotInfoLine in $snapshotInfoLines) {
+                Write-Host "$snapshotInfoLine$($_C.EraseLn)"
+            }
+        }
     }
     elseif ($selectedRow.Type -eq 'Device') {
         Write-UiSection -Title "Device Properties" -Icon ""

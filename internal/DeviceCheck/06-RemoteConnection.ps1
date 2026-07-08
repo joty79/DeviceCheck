@@ -150,6 +150,7 @@ function Invoke-RemoteSnapshotCollectionScreen {
         [switch]$ArchiveSample
     )
 
+    while ($true) {
     try {
         Clear-TuiScreen
         if ([string]::IsNullOrWhiteSpace($DefaultUserName)) { $DefaultUserName = "$ComputerName\joty79" }
@@ -180,6 +181,8 @@ function Invoke-RemoteSnapshotCollectionScreen {
         }
     } catch {
         $message = $_.Exception.Message
+        $credentialRejected = (-not [string]::IsNullOrWhiteSpace($message) -and $message -match '(?i)access is denied|logon failure|user name or password|username or password|credential|credentials')
+        $failedUserName = $(if ($null -ne $Credential) { $Credential.UserName } else { $DefaultUserName })
         Remove-DeviceCheckStoredCredential -ComputerName $ComputerName
 
         $renderErrorBlock = {
@@ -187,16 +190,26 @@ function Invoke-RemoteSnapshotCollectionScreen {
             Clear-TuiScreen
             $width = Get-UiWidth
             $frame = New-Object System.Text.StringBuilder
-            Add-UiFrameBanner -Frame $frame -Title "Cannot connect to $ComputerName" -Subtitle 'The target may be asleep, offline, blocked by firewall, or rejecting credentials.' -Width $width
+            Add-UiFrameBanner -Frame $frame -Title $(if ($credentialRejected) { "Credentials rejected for $ComputerName" } else { "Cannot connect to $ComputerName" }) -Subtitle $(if ($credentialRejected) { 'WinRM is reachable, but the username/password was rejected.' } else { 'The target may be asleep, offline, blocked by firewall, or rejecting credentials.' }) -Width $width
 
             $null = $frame.AppendLine('')
             $null = $frame.AppendLine("  $($_C.Fail)Connection failed.$($_C.Reset)$($_C.EraseLn)")
             $null = $frame.AppendLine('')
+            if ($credentialRejected -and -not [string]::IsNullOrWhiteSpace($failedUserName)) {
+                $null = $frame.AppendLine("  $($_C.Dim)Tried user:$($_C.Reset) $($_C.White)$failedUserName$($_C.Reset)$($_C.EraseLn)")
+                $null = $frame.AppendLine('')
+            }
 
             foreach ($line in (Wrap-PlainText -Text $message -Width ([Math]::Max(50, $width - 6)) -MaxLines 8)) {
                 $null = $frame.AppendLine("  $($_C.Warn)$line$($_C.Reset)$($_C.EraseLn)")
             }
             $null = $frame.AppendLine('')
+
+            if ($credentialRejected) {
+                $null = $frame.AppendLine("  $($_C.Info)Use local-account format, for example COMPUTER\user.$($_C.Reset)$($_C.EraseLn)")
+                $null = $frame.AppendLine("  $($_C.Info)For a blank password, leave Password empty and press Enter.$($_C.Reset)$($_C.EraseLn)")
+                $null = $frame.AppendLine('')
+            }
 
             if ($script:RemoteConnectionLog -and $script:RemoteConnectionLog.Count -gt 0) {
                 $null = $frame.AppendLine("  $($_C.Bold)$($_C.White)Connection Log:$($_C.Reset)$($_C.EraseLn)")
@@ -206,9 +219,10 @@ function Invoke-RemoteSnapshotCollectionScreen {
                 $null = $frame.AppendLine('')
             }
 
-            $null = $frame.AppendLine("  $($_C.Dim)No target switch was made. Wake the PC / check WinRM, then try again.$($_C.Reset)$($_C.EraseLn)")
+            $null = $frame.AppendLine("  $($_C.Dim)No target switch was made.$($_C.Reset)$($_C.EraseLn)")
             $null = $frame.AppendLine('')
-            $null = $frame.AppendLine("  $($_C.Info)Press Enter to return$($_C.Reset)$($_C.EraseLn)")
+            $null = $frame.AppendLine("  $($_C.Info)R$($_C.Reset)     = Retry with different credentials$($_C.EraseLn)")
+            $null = $frame.AppendLine("  $($_C.Info)Enter$($_C.Reset) = Return$($_C.EraseLn)")
             $null = $frame.AppendLine('')
             $null = $frame.AppendLine("$($_E)[J")
 
@@ -225,6 +239,12 @@ function Invoke-RemoteSnapshotCollectionScreen {
             if ($key.Key -eq 'Enter') {
                 break
             }
+            if ($key.Key -eq 'R') {
+                $Credential = $null
+                $PromptForCredential = $true
+                $script:RequestForceClear = $true
+                continue 2
+            }
             if ($key.Key -eq 'ResizeEvent') {
                 $script:RequestForceClear = $true
                 continue
@@ -237,6 +257,7 @@ function Invoke-RemoteSnapshotCollectionScreen {
             Export     = $null
             Error      = $message
         }
+    }
     }
 }
 
@@ -2119,7 +2140,7 @@ function Invoke-ConnectLanTarget {
                     Remove-DeviceCheckStoredCredential -ComputerName $target; if (-not [string]::IsNullOrWhiteSpace($resolvedIp)) { Remove-DeviceCheckStoredCredential -ComputerName $resolvedIp }; $existingCredential = $null
                 }
             }
-            $promptUserName = $(if (-not [string]::IsNullOrWhiteSpace($expectedUser) -and $expectedUser -ne 'Unknown') { if ($expectedUser -match '\\') { $expectedUser } else { "$target\$expectedUser" } } else { $null })
+            $promptUserName = $(if (-not [string]::IsNullOrWhiteSpace($expectedUser) -and $expectedUser -ne 'Unknown') { if ($expectedUser -match '\\') { $expectedUser } else { "$target\$expectedUser" } } elseif (-not [string]::IsNullOrWhiteSpace($target) -and -not (Test-DeviceCheckIPv4Address -Address $target)) { "$target\user" } else { $null })
 
             $collection = Invoke-RemoteSnapshotCollectionScreen -ComputerName $resolvedIp -Credential $existingCredential -DefaultUserName $promptUserName -PromptForCredential:($null -eq $existingCredential) -Quick:(-not $archiveSampleRequested) -ArchiveSample:$archiveSampleRequested
             if ($null -ne $collection -and $collection.Success) {

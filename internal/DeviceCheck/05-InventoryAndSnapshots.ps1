@@ -257,6 +257,81 @@ function Invoke-SystemScan {
     $script:SystemScanMessage = "Local system scan complete | $(Get-Date -Format 'HH:mm:ss')"
 }
 
+function Get-DeviceCheckTrustedHostValues {
+    try {
+        $value = (Get-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -ErrorAction Stop).Value
+    } catch {
+        return @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return @()
+    }
+
+    return @(
+        $value -split ',' |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+}
+
+function Add-DeviceCheckTrustedHostExact {
+    param([Parameter(Mandatory)][string]$Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        throw 'TrustedHosts target cannot be empty.'
+    }
+
+    if ($Target -eq '*') {
+        throw 'Refusing to add wildcard TrustedHosts entry.'
+    }
+
+    $current = @(Get-DeviceCheckTrustedHostValues)
+    foreach ($entry in $current) {
+        if ($entry -eq '*' -or $entry.Equals($Target, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [PSCustomObject]@{
+                Changed = $false
+                Value   = ($current -join ',')
+            }
+        }
+    }
+
+    $updated = @($current + $Target)
+    $newValue = ($updated | Select-Object -Unique) -join ','
+
+    try {
+        Set-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -Value $newValue -Force -ErrorAction Stop
+    } catch {
+        $firstError = $_.Exception.Message
+        $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
+        if ($null -eq $gsudo) {
+            throw "Adding '$Target' to TrustedHosts requires elevation. gsudo.exe was not found. Original error: $firstError"
+        }
+
+        $escapedValue = $newValue.Replace("'", "''")
+        $commandText = "`$ErrorActionPreference = 'Stop'; Set-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -Value '$escapedValue' -Force -ErrorAction Stop"
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($commandText))
+        $shellCommand = $(if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh.exe' } else { 'powershell.exe' })
+
+        & $gsudo.Source $shellCommand -NoProfile -EncodedCommand $encoded
+        if ($LASTEXITCODE -ne 0) {
+            throw "gsudo.exe failed while adding '$Target' to TrustedHosts. Original error: $firstError"
+        }
+    }
+
+    $verified = @(Get-DeviceCheckTrustedHostValues)
+    foreach ($entry in $verified) {
+        if ($entry.Equals($Target, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [PSCustomObject]@{
+                Changed = $true
+                Value   = ($verified -join ',')
+            }
+        }
+    }
+
+    throw "TrustedHosts update completed but '$Target' was not visible afterward."
+}
+
 function Invoke-DeviceCheckSnapshotExport {
     param(
         [Parameter(Mandatory)][string]$ComputerName,
@@ -292,6 +367,17 @@ function Invoke-DeviceCheckSnapshotExport {
         $exportParams.Credential = $Credential
     } else {
         $exportParams.UseCurrentCredentials = $true
+    }
+
+    if (-not (Test-DeviceCheckLocalTargetName -ComputerName $ComputerName)) {
+        $script:RemoteConnectionLog.Add("Checking TrustedHosts for '$ComputerName'")
+        $trustResult = Add-DeviceCheckTrustedHostExact -Target $ComputerName
+        if ($trustResult.Changed) {
+            $script:RemoteConnectionLog.Add("TrustedHosts updated: $($trustResult.Value)")
+        } else {
+            $script:RemoteConnectionLog.Add("TrustedHosts already includes '$ComputerName'")
+        }
+        $exportParams.SkipTrustedHosts = $true
     }
 
     if ($null -ne $OnProgress) {

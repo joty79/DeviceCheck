@@ -284,9 +284,6 @@ function Get-DetailDisplayLines {
         $lines.Add((New-SectionLine -Title 'Computer Info' -Width $Width))
         $targetColor = $(if (Test-RemoteSnapshotTargetActive) { $_C.Info } else { $_C.OK })
         Add-KeyValueLines -Lines $lines -Key 'Target' -Value (Get-TargetStatusText) -Width $Width -ValueColor $targetColor
-        if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
-            Add-WrappedPathLine -Lines $lines -Key 'Snapshot' -Path $script:TargetSnapshotPath -Width $Width
-        }
         $allDevices = @($script:categories | ForEach-Object { @($_.Devices) })
         $snapshotLabel = ''
         if (Test-RemoteSnapshotTargetActive -and $null -ne $script:TargetSnapshot) {
@@ -348,6 +345,11 @@ function Get-DetailDisplayLines {
             })
             $evidenceColor = $(if ($activeEvidenceCount -gt 0 -or $queuedEvidenceCount -gt 0) { $_C.Warn } elseif ($cachedEvidenceCount -gt 0) { $_C.OK } else { $_C.Dim })
             Add-KeyValueLines -Lines $lines -Key 'Evidence' -Value $evidenceText -Width $Width -ValueColor $evidenceColor
+        }
+        if (Test-RemoteSnapshotTargetActive -and -not [string]::IsNullOrWhiteSpace($script:TargetSnapshotPath)) {
+            $lines.Add('')
+            $lines.Add((New-SectionLine -Title 'Snapshot Info' -Width $Width))
+            Add-WrappedPathLine -Lines $lines -Key 'File' -Path $script:TargetSnapshotPath -Width $Width
         }
     }
     elseif ($SelectedRow.Type -eq 'Device') {

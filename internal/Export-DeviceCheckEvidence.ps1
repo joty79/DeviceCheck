@@ -148,9 +148,9 @@ function Add-TrustedHostExact {
         $escapedValue = $newValue.Replace("'", "''")
         $commandText = "Set-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -Value '$escapedValue' -Force -ErrorAction Stop"
         $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($commandText))
-        $shellPath = Join-Path $PSHOME $(if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh.exe' } else { 'powershell.exe' })
+        $shellCommand = $(if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh.exe' } else { 'powershell.exe' })
 
-        & $gsudo.Source $shellPath -NoProfile -EncodedCommand $encoded
+        & $gsudo.Source $shellCommand -NoProfile -EncodedCommand $encoded
         if ($LASTEXITCODE -ne 0) {
             throw "gsudo.exe failed while adding '$Target' to TrustedHosts. Original error: $firstError"
         }
