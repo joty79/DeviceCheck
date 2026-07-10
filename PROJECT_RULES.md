@@ -1051,3 +1051,192 @@ Root cause: The remote snapshot flow reused or tried a credential before prompti
 Guardrail/rule: Treat `Access is denied` / logon failure as a credential-rejected state when WinRM is reachable. Show the attempted user, mention `COMPUTER\user` local-account format and blank-password entry, and offer retry credentials directly from the error screen. For discovered hostname targets with no known user, default the prompt to `HOST\user` instead of an IP-based `joty79` guess.
 Files affected: `internal\DeviceCheck\06-RemoteConnection.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 Validation/tests run: Parser validation and `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; live quick `-NoSave` snapshot smoke against `192.168.1.11` with `DESKTOP-H5EEII4\user` and blank password returned `QuickMode = true`, `DeviceCount = 129`, and `IsAdmin = true`.
+
+Date: 2026-07-08
+Problem: Driver matching is difficult when SDIO, AMD, Lenovo, and Microsoft expose different package names for the same or related hardware IDs.
+Root cause: SDIO can rank a candidate higher or mark it newer based on driver date/score even when the OEM package treats the component as separate or not applicable on the current OS. AMD chipset is a key example: official AMD 8.05.04.516 release notes list separate component versions, and `AMD USB4 CM Driver 1.0.0.43` is Windows 10-only/not applicable on Windows 11 while this laptop uses the Microsoft USB4 stack.
+Guardrail/rule: Audit drivers one package at a time, starting from each Lenovo driver EXE. For every device, compare Installed DriverStore INF, Lenovo official extracted INF, SDIO candidate INF, Microsoft inbox/current driver, and OEM release notes. Treat SDIO as a candidate source only, not an install list; verify exact hardware ID, INF family, OS applicability, provider, date, version, and whether OEM notes mark the component not applicable.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Read-only verification found the laptop's USB4 path uses Microsoft `usb4hostrouter.inf` for `USB4(TM) Host Router (Microsoft)` on `PCI\VEN_1022&DEV_162E...&USB4_MS_CM`, Microsoft `usb4devicerouter.inf` for `USB4 Root Router`, and Microsoft `ucmucsiacpiclient.inf` for `UCM-UCSI ACPI Device`. SDIO still lists AMD `amdusb4cm.inf 1.0.0.43` candidates as `BETTER+OLD` for the host router, matching AMD release notes that USB4 CM is not applicable on Windows 11.
+
+Date: 2026-07-09
+Problem: Mixing Lenovo baseline checks with SDIO or Microsoft Catalog newer-candidate checks made early driver verdicts noisy, especially when Catalog results include unrelated OEM packages with similar titles.
+Root cause: The audit needs two separate passes: first prove what the current Windows install already has compared with Lenovo's extracted official packages, then add external candidate sources such as SDIO or MSCatalogLTS. Without that separation, a "newer" candidate can distract from the basic question of whether the Lenovo package is already installed or applicable.
+Guardrail/rule: For the current driver audit, Phase 1 is installed DriverStore/`C:\Windows\INF` vs Lenovo extracted packages only. For each Lenovo package, identify the installed device/HWID, choose the matching vendor subfolder, compare `DriverVer`, exact hardware IDs, and hashes against DriverStore files, then give a baseline verdict. Defer SDIO, Microsoft Update Catalog, and MSCatalogLTS checks to Phase 2 after the Lenovo baseline pass is complete.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Read-only baseline checks already confirmed the old Lenovo MediaTek Bluetooth package and Sunplus camera package were byte-for-byte installed; a separate Microsoft Catalog Sunplus `5.0.26.6` sample was rejected because its INF hardware IDs were HP-specific and did not include this laptop's `USB\VID_5986&PID_215D`.
+
+Date: 2026-07-09
+Problem: Opening DeviceCheck manually from the repository became annoying during repeated driver-audit testing.
+Root cause: DeviceCheck had no Explorer integration, so every run required navigating to the repo and launching `DeviceCheck.ps1` manually.
+Guardrail/rule: Keep DeviceCheck's Explorer context menu as a current-user HKCU integration, not an admin-required machine install. `Install-DeviceCheckContextMenu.ps1` owns install/uninstall of the `Directory\Background`, `Directory`, and `Drive` shell verbs, uses `Launch-DeviceCheck.vbs` as the launcher, and uses the bundled `assets\devicemanager.ico` icon. The launcher should start DeviceCheck elevated via `ShellExecute(..., "runas")` because DeviceCheck's hardware/registry evidence paths often benefit from admin access; expect a UAC prompt from the context menu. Verify context-menu writes with `reg.exe query`, not only the PowerShell registry provider.
+Files affected: `Install-DeviceCheckContextMenu.ps1`, `Launch-DeviceCheck.vbs`, `assets\devicemanager.ico`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `Install-DeviceCheckContextMenu.ps1`; installed HKCU context-menu keys; `reg.exe query` readback confirmed desktop/folder background, folder, and drive verbs point to `wscript.exe` with `Launch-DeviceCheck.vbs` and use `assets\devicemanager.ico`.
+
+Date: 2026-07-10
+Problem: Driver-source choice became confusing because DeviceCheck was being mentally pulled toward "driver updater" behavior before its evidence model was mature.
+Root cause: Real driver stacks include active function drivers, extension INFs, software components, services, OEM enablement packages, Windows Update packages, SDIO candidates, and vendor installers that may all use different version/date schemes. Treating "newer" or "official" as a single global rule is unreliable.
+Guardrail/rule: Treat DeviceCheck as a driver evidence explorer first, not a driver updater. For each device, show identity, active driver, attached stack, provenance, candidate-source comparisons, match strength, and risk/verdict labels. Before trusting any installer outcome, use a before/after tracker over DriverStore, `C:\Windows\INF`, PnP devices/properties, services, and SetupAPI logs.
+Files affected: `docs\DRIVER_EVIDENCE_DECISION_MODEL.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Documentation-only update; `git diff --check`.
+
+Date: 2026-07-10
+Problem: Driver installer behavior needs practical testing without prematurely integrating installer tracing into the DeviceCheck TUI.
+Root cause: Extracted INF preview can predict likely matches, but only a before/after trace proves whether an EXE staged packages, changed active bindings, added extension INFs, wrote services, or did nothing because Windows driver ranking rejected it.
+Guardrail/rule: Keep driver package impact tracing standalone under `tools\Trace-DriverPackageImpact.ps1` until reports prove useful. The `.exe` context menu launches elevated through `tools\Launch-DriverPackageImpactTrace.vbs`; the script creates `report.md` plus raw JSON snapshots/diffs under `.devicecheck-data\driver-package-traces` and asks before running the installer unless `-RunInstaller` is used explicitly.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `tools\Launch-DriverPackageImpactTrace.vbs`, `Install-DriverPackageTraceContextMenu.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation; safe `-PreviewOnly` smoke against Lenovo `Cardreader Driver (Genesys, Bayhub, Realtek).exe` found Realtek `RtsPer.inf` / `RtsCrExtPr.inf` matches and wrote `report.md` plus `before.snapshot.json`; installed the HKCU `.exe` context-menu verb and verified it with `reg.exe query`; no installer was run.
+
+Date: 2026-07-10
+Problem: The trace prototype hit strict-mode/runtime failures while building package preview output.
+Root cause: A local `$matches` variable collided with PowerShell's automatic `$Matches` variable, and display-only `Format-Table` output inside a function polluted the function's returned data.
+Guardrail/rule: In diagnostic/trace functions, never use case variants of automatic variables such as `$matches`. Keep functions data-pure; send display-only formatting to `Out-Host` or do formatting only after storing real data objects.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `PROJECT_RULES.md`.
+Validation/tests run: Reworked the local variable names and display formatting, then reran the safe `-PreviewOnly` smoke successfully against the Lenovo cardreader package.
+
+Date: 2026-07-10
+Problem: The first real cardreader installer trace proved that "installed" is ambiguous: the Lenovo EXE staged packages in DriverStore but did not change the active Realtek cardreader binding.
+Root cause: Windows can publish/stage driver packages with `pnputil /add-driver /install` while keeping the currently selected active driver if ranking/version/provider evidence does not require a switch. A newly published `oem*.inf` can therefore be duplicate availability, not a practical update.
+Guardrail/rule: Driver impact reports must distinguish staged DriverStore packages from active device-driver changes. For every staged package, map `PublishedName -> OriginalName` and compare it with the active signed driver's `InfName`/original INF/version before calling anything an update. Same-original/same-version staged packages should be labeled as already-active duplicate availability.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Regenerated the real Lenovo cardreader trace report from existing raw evidence; the report now shows `oem145.inf` / `rtsper.inf` as `Staged only; same version already active` with active evidence `Realtek PCIE CardReader via oem19.inf / 10.0.22621.21365`, while BayHub and Genesys packages are staged-only and no active device driver changed.
+
+Date: 2026-07-10
+Problem: The Wacom trace showed that version number alone is not enough: Lenovo staged `WacHIDRouterISDF.inf` version `8.0.2.15`, but Windows kept active `oem45.inf` with the same version and a newer driver date.
+Root cause: Windows driver ranking considers date and match quality in addition to version. Driver reports that only show version can make a staged-but-rejected package look equivalent to the active driver without explaining why Windows kept the existing binding.
+Guardrail/rule: Driver impact reports must show active and staged driver dates next to versions. When the same original INF/version is active under another `oem*.inf`, compare dates and label newer-active cases as `same version already active with newer date`.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Regenerated the real Wacom trace report from existing raw evidence; the report now shows active `oem45.inf` / `wachidrouterisdf.inf` date `2025-02-20` version `8.0.2.15` and staged `oem146.inf` date `2025-01-21` version `8.0.2.15`, labeled `Staged only; same version already active with newer date`.
+
+Date: 2026-07-10
+Problem: Monitor and Peripheral/Re-Timer traces had empty before/after diffs but non-empty SetupAPI activity, so the human report originally hid useful reasons like `Already Imported` and `No better matching drivers found`.
+Root cause: DriverStore/signed-driver diffs only show final state changes. SetupAPI can still explain attempted install behavior, including already-imported packages, no-update ranking decisions, non-present device marking, and section exit status.
+Guardrail/rule: When `SetupAPI delta characters` is non-zero, reports should include `SetupAPI Outcome Signals` even if no DriverStore or active-driver state changed. Surface import outcome, driver INF, ranking/no-update messages, matching failures, non-present device markers, and section exit status from `SetupApiInterestingLines`.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Regenerated the real Monitor and Peripheral/Re-Timer reports from existing raw evidence. Monitor now shows `Already Imported`, `displayhdr.inf (oem59.inf)`, `Device does not need an update`, `No better matching drivers`, and `Section exit: SUCCESS`; Peripheral/Re-Timer now shows `Already Imported`, `prhiddrv.inf (oem26.inf)`, `prspbdrv.inf (oem36.inf)`, `No devices were updated`, multiple no-better-match ACPI devices, and `Section exit: FAILURE(0x00000103)`.
+
+Date: 2026-07-10
+Problem: During driver-package testing, important trace-script improvement notes can be missed if they are buried in normal chat while the user is running installers and handling restart prompts.
+Root cause: The workflow is interactive and sequential: if the trace report format is weak for one package, continuing to the next installer can preserve avoidable blind spots.
+Guardrail/rule: When `tools\Trace-DriverPackageImpact.ps1` clearly needs an improvement, make that script/report improvement before continuing the next driver audit whenever practical. Announce it with a high-visibility line that includes `⚠️ !!` so the user does not miss it.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Documentation-only workflow rule update.
+
+Date: 2026-07-10
+Problem: The Lenovo Smart Appearance trace looked like "no active driver changed", but the important truth was that SetupAPI selected both the base Sunplus camera driver and the Lenovo `lnvdmft.inf` Extension INF stack.
+Root cause: `Win32_PnPSignedDriver` and Device Manager's normal Driver tab expose the base/function driver, but Extension INFs can be selected/installed beside that base driver without changing the visible active driver binding.
+Guardrail/rule: Driver trace reports must surface SetupAPI selected driver stack nodes, not only final DriverStore/signed-driver diffs. Parse `Driver Node` and `Driver Extension Node` blocks from SetupAPI, show selected/outranked status, published/original INF, provider/class, date/version, rank, Extension ID, and configuration, and keep a report-regeneration path so old trace folders can be reinterpreted without rerunning installers.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `tools\Trace-DriverPackageImpact.ps1`; `internal\Test-DeviceCheckStructure.ps1`; `git diff --check`; regenerated the real Smart Appearance trace with `-RegenerateTraceDirectory`; safe `-PreviewOnly` smoke against the Smart Appearance EXE; `report.md` now shows `oem42.inf` / `spuvcbvmerge.inf` as selected base camera driver, `oem43.inf` / `lnvdmft.inf` as selected Lenovo Extension INF, and `usbvideo.inf` as outranked inbox fallback.
+
+Date: 2026-07-10
+Problem: `Lenovo MFGSTAT Log Clean.exe` looked like a driver in the Lenovo download folder, but its extracted payload contained only `RemoveMFGSTAT.exe` and no INF files; the trace report initially said the extracted payload was `not found`.
+Root cause: The trace preview helper treated an extracted folder as "existing" only if it contained INF files. That hid utility/cleanup payloads and made non-driver packages look like missing extraction or failed driver traces.
+Guardrail/rule: Driver trace reports must distinguish "no extracted payload" from "payload exists but contains no INF files". For OEM EXEs with extracted files but zero INF files and no DriverStore/SetupAPI/active-driver changes, label the verdict as utility/cleanup/non-driver package.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `tools\Trace-DriverPackageImpact.ps1`; regenerated the real `Lenovo MFGSTAT Log Clean` trace with `-RegenerateTraceDirectory`; safe `-PreviewOnly` smoke against the same EXE confirmed the report now shows one payload file, zero INF files, and a utility/cleanup verdict.
+
+Date: 2026-07-10
+Problem: `Dolby Vision Provisioning Kit.exe` extracted to an MSI (`DolbyVisionPQConfigInstaller.msi`) rather than an INF driver payload, but the no-INF report wording was too generic and grouped it with cleanup utilities.
+Root cause: OEM download folders can contain provisioning/application packages beside real driver packages. A no-INF payload can still be meaningful software or configuration, especially when it is an MSI with product metadata.
+Guardrail/rule: For no-INF extracted payloads, classify payload kind by file types. Surface MSI payloads as provisioning/application packages and include MSI product name, version, manufacturer, and file path in the report. Do not call MSI provisioning packages driver updates unless DriverStore, SetupAPI, or active-driver evidence changes.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `tools\Trace-DriverPackageImpact.ps1`; regenerated the real Dolby Vision trace with `-RegenerateTraceDirectory`; safe `-PreviewOnly` smoke against the same EXE confirmed `Payload kind: MSI provisioning/application payload` and MSI metadata `Dolby Vision PQ Config Installer 2.0.0.4` by Dolby.
+
+Date: 2026-07-10
+Problem: Installing the `.exe` trace context menu under `HKCU\Software\Classes\exefile\shell` made the DeviceCheck trace verb become the default action for `.exe` files, breaking normal double-click/open behavior for executables.
+Root cause: A per-user `exefile\shell` override can shadow the machine `exefile` shell association. Because the DeviceCheck trace verb was the only user-level `exefile\shell` verb, Windows treated it as the default verb instead of the normal `open` command.
+Guardrail/rule: Never install optional `.exe` file context-menu verbs under per-user `exefile\shell` unless deliberately changing executable default verbs. Use `HKCU\Software\Classes\SystemFileAssociations\.exe\shell\<VerbName>` for `.exe` file context menus, and always remove legacy `HKCU\Software\Classes\exefile` overrides when migrating away from a bad key. Verify `.exe=exefile`, `exefile="%1" %*`, `HKCR\exefile\shell\open\command`, and a ShellExecute `open` smoke after any `.exe` context-menu registry change.
+Files affected: `Install-DriverPackageTraceContextMenu.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Deleted the live legacy `HKCU\Software\Classes\exefile` override; reinstalled the context menu under `SystemFileAssociations\.exe\shell`; verified `HKCU\Software\Classes\exefile` is absent, `.exe=exefile`, `exefile="%1" %*`, `HKCR\exefile\shell\open\command` is `"%1" %*`, and ShellExecute `open` against `cmd.exe /c exit 0` returned exit code 0.
+
+Date: 2026-07-10
+Problem: Re-running the Cardreader package produced repeated `SetupAPI Selected Driver Stack` rows for the same Realtek selected/outranked nodes, making the report look busier than the actual driver decision.
+Root cause: SetupAPI can emit multiple driver-selection sections during one installer run, especially when an installer imports several related INFs or retries the same device update path. The report parser preserved every node instance verbatim.
+Guardrail/rule: Dedupe SetupAPI driver stack rows by node kind, status, device ID, published/original INF, date/version, rank, Extension ID, and configuration before rendering. Keep distinct selected vs outranked/rank/configuration rows, but remove exact repeats.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `tools\Trace-DriverPackageImpact.ps1`; regenerated the real Cardreader trace with `-RegenerateTraceDirectory`; selected stack rows dropped from 10 to 6 while preserving Realtek selected base driver `oem19.inf`, selected extension `oem18.inf`, and outranked Lenovo-imported `oem145.inf` evidence.
+
+Date: 2026-07-10
+Problem: The Lenovo camera package staged Realtek `RtLeJF*.inf` packages into DriverStore, but SetupAPI immediately reported `Unable to find any matching devices`; the report initially labeled them only as generic `Staged only`.
+Root cause: DriverStore publish/import is not the same as device applicability. OEM camera bundles can include vendor variants for other camera modules, and Windows may stage those packages while no present PnP device can bind to them.
+Guardrail/rule: When SetupAPI reports `Unable to find any matching devices` after a `Driver INF - <inf> (<oem>.inf)` import, label matching staged packages as `Staged only; no matching present device`. If every staged package has that status and no active driver changed, the report verdict should say exactly that.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `tools\Trace-DriverPackageImpact.ps1`; regenerated the real Camera trace with `-RegenerateTraceDirectory`; report now labels `oem149.inf` / `rtlejf.inf` and `oem150.inf` / `rtlejfir.inf` as `Staged only; no matching present device`, while active Sunplus camera drivers remain unchanged.
+
+Date: 2026-07-10
+Problem: The Lenovo WLAN package preview falsely matched `Realtek PCIE CardReader` because the package INF contained a broad compatible ID that overlapped the cardreader's vendor-only PCI ID.
+Root cause: Compatible IDs such as `PCI\VEN_####`, `PCI\CC_*`, generic USB class IDs, and generic HDAUDIO function IDs are too broad for preview matching. They can make an unrelated INF look applicable before SetupAPI proves real hardware applicability.
+Guardrail/rule: Package preview matching may use exact hardware IDs and specific compatible IDs, but it must ignore vendor-only/class-only generic compatible IDs. Regeneration from an existing trace folder must recompute `package-preview.json` from the original installer when the installer path still exists, so old traces inherit safer matching logic.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for `tools\Trace-DriverPackageImpact.ps1`; regenerated the real WLAN trace with `-RegenerateTraceDirectory`; preview matches dropped from 2 to 1, leaving only exact `RZ616 Wi-Fi 6E 160MHz` hardware ID match on `MTK\mtkwl6ex.inf`. The report now shows active `oem60.inf` / `mtkwl6ex.inf` date `2026-01-30` version `25.40.2.586`, Lenovo MTK package `05/23/2023, 23.032.2.0558` as not a better match/already imported, and Realtek `oem151.inf` / `netrtwlane602.inf` as `Staged only; no matching present device`.
+
+Date: 2026-07-10
+Problem: The WLAN report showed a false hybrid SetupAPI stack row that combined Realtek `netrtwlane602.inf` import metadata with the preceding MediaTek RZ616 outranked node, and large SetupAPI deltas could silently lose outcome evidence after 500 filtered lines. Active-driver diffs also ignored bindings that appeared or disappeared between snapshots.
+Root cause: The SetupAPI node parser did not flush and clear the final node at `Select Drivers`, update-device, or section boundaries, so later `Driver INF` and `Driver Version` lines overwrote it. `Compare-TraceSnapshots` truncated `SetupApiInterestingLines` and compared existing signed-driver rows only.
+Guardrail/rule: Treat SetupAPI section/selection boundaries as hard driver-node boundaries; never allow later package-import metadata to mutate a completed node. Preserve the complete filtered SetupAPI evidence set for structured outcome parsing, show the node's device instance ID, and treat added/removed `Win32_PnPSignedDriver` bindings as active-driver state changes alongside updated bindings.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation; synthetic regression retained 650/650 filtered SetupAPI lines and detected one updated, one added, and one removed active binding; real WLAN raw-log regression returned only `oem60.inf` selected and `oem41.inf` outranked with no false Realtek node; regenerated all 24 existing trace folders without rerunning installers.
+
+Date: 2026-07-10
+Problem: Regenerated Camera preview evidence matched the present `SpitCameraGroup` device against four Realtek/Sunplus INFs only because each side contained the bare compatible ID `SensorGroup`.
+Root cause: `SensorGroup` identifies a generic Windows camera sensor grouping role and has no bus, vendor, product, or model specificity, so treating it as package applicability creates cross-vendor false positives.
+Guardrail/rule: Ignore bare `SensorGroup` compatible IDs during package preview matching. Keep exact camera hardware-ID matches and specific enumerator-qualified compatible IDs, and add new generic IDs to the preview deny-list only from observed false-positive evidence.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation; direct matching regression confirms `SensorGroup` is rejected while `USB\VID_5986&PID_215D` remains useful; regenerated the real Camera trace without rerunning its installer, reducing preview matches from 8 to 4 while retaining the exact Sunplus camera/composite-device matches.
+
+Date: 2026-07-10
+Problem: The Lenovo Energy Management trace had an exact `AcpiVpc.inf` hardware match but reported only “No new published drivers and no active driver changes,” hiding that the package driver was substantially older than the active same-family driver. The trace artifacts also omitted the installer process exit code even though it was printed during the live run.
+Root cause: Verdict logic compared state changes and SetupAPI outcomes but did not join preview matches to the active driver's original INF/date/version. Installer execution metadata was transient console output rather than persisted evidence.
+Guardrail/rule: For exact matched package INFs, compare package `DriverVer` against the active driver only when both resolve to the same original INF family, and report `Older`, `Same`, or `Newer` with the comparison basis. Persist future installer start/end timestamps, exit code, and after-snapshot capture time in `run-metadata.json`; do not invent or backfill an exit code for older traces.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation; in-memory `Older`/`Same`/`Newer` comparison regression; regenerated the real Energy Management trace without rerunning its installer. The report now shows package `AcpiVpc.inf` `2022-07-11 / 15.11.29.70` versus active `oem30.inf` / `acpivpc.inf` `2025-08-14 / 15.11.30.11` as `Older`, and honestly labels the historical exit code `not recorded`.
+
+Date: 2026-07-10
+Problem: The FingerPrinter package correctly reported zero local matches, but the report did not say which fingerprint devices its Egis/Goodix INFs actually supported, and preview providers appeared as unresolved `%EGIS%` / `%ManufacturerName%` tokens.
+Root cause: Package preview stored general INF metadata but did not parse model-entry hardware IDs, and `Get-InfValueFromText` returned string indirection tokens without resolving the INF `[Strings]` section.
+Guardrail/rule: When an INF package has no local matches, include a bounded table of its supported device IDs so no-present-device verdicts are auditable from `report.md`. Resolve exact `%Token%` metadata values through `[Strings]`, including quoted values with trailing INF comments, before rendering Provider/Class fields.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation; regenerated the real FingerPrinter trace without rerunning its installer; report lists Egis `USB\VID_1C7A&PID_0576` and Goodix `USB\VID_0BDA&PID_5811`, `USB\VID_27C6&PID_5584`, `USB\VID_27C6&PID_55B4` with resolved providers. The same real run verified `run-metadata.json` end-to-end with installer exit code `0`, start/end timestamps, and after-snapshot capture timestamp.
+
+Date: 2026-07-10
+Problem: The Realtek Audio preview rendered long `MatchedId` values and INF paths through `Format-Table -AutoSize -Wrap`, leaving large horizontal gaps while compressing the INF column to roughly three characters and expanding each candidate into many near-empty lines.
+Root cause: PowerShell's automatic table formatter optimized all six variable-length columns together. A few long unbroken IDs consumed most of the calculated width, leaving no usable width for extracted relative paths.
+Guardrail/rule: Do not use automatic multi-column table layout for driver preview records containing long unbroken hardware IDs and paths. Render each candidate as a compact width-aware block with aligned `Match`, `ID`, `INF`, `DriverVer`, and `Provider` fields, and use hanging continuation indentation when a value exceeds the terminal width.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: PowerShell parser validation; inspected the provided screenshot and captured administrator terminal output; regenerated the real Realtek Audio trace without rerunning its installer. All 13 candidates rendered as compact readable blocks, with the longest INF path using one aligned continuation line instead of character-by-character wrapping.
+
+Date: 2026-07-10
+Problem: The AMD VGA report called ten new packages “staged only,” but raw SetupAPI evidence showed that newly staged `oem158.inf` / `amduw23e.inf` was selected and applied as the Radeon Extension INF, the device subtree was removed/restarted, and PnP configuration succeeded while the newer active function driver remained unchanged. During the parser fix, enumerating a typed `List[object]` stored inside an ordered hashtable through `@(...)` raised runtime `Argument types do not match`.
+Root cause: `Win32_PnPSignedDriver` does not expose Extension INF application, and the report parsed driver-selection nodes but not `Install Device: Configuration` actions. The SetupAPI device-ID regex also stopped at the first `}` inside `SWD\DRIVERENUM\{GUID}` IDs. PowerShell's dynamic enumerable binder was unreliable for the typed generic list retrieved directly from the hashtable indexer.
+Guardrail/rule: Parse SetupAPI device-configuration transactions as first-class evidence: record every configured published INF, original INF/class, newly-staged status, device subtree removal, device restart, and PnP result. A newly staged INF that appears in a successful device configuration is `Applied`, not `Staged only`, and must take verdict priority even when the function-driver binding is unchanged. Capture update-device IDs through the final timestamp delimiter so embedded GUID braces remain intact. When a typed generic list is stored in a hashtable, cast it back to its declared `List[T]` type and enumerate `.ToArray()` instead of wrapping the index expression in `@(...)`.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation; regenerated the real AMD VGA trace without rerunning its installer; report now shows `oem158.inf` as `Applied Extension INF configuration`, Radeon configuration alongside active `oem12.inf`, device subtree removal/restart, and PnP result `00000000`. After snapshot confirms Radeon `Status=OK`, `Problem=0`, `ConfigManagerErrorCode=0`, active function driver `32.0.21043.19003`, and no reboot-required signal. The initial generic-list runtime failure was reproduced with a stack trace and eliminated by explicit typed `.ToArray()` enumeration.
+
+Date: 2026-07-10
+Problem: The first post-reboot audit command failed to parse with `An empty pipe element is not allowed` at `foreach (...) { ... } | Format-List`, before any checks ran.
+Root cause: In an inline PowerShell command body, piping directly from that bare `foreach` statement form is not valid in the constructed grammar, even though the intended data flow is conceptually pipeline-compatible.
+Guardrail/rule: In PowerShell audit/smoke commands, assign `foreach` output to a named variable first, then pipe that variable to `Format-*` or another consumer. Treat parser failure as zero execution, report it immediately, and rerun the complete read-only check rather than assuming earlier parallel branches produced usable results.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: The failed command produced only the parser error and no mutations. Rewritten `$fileRows` / `$driverRows` commands parsed and completed all post-reboot Radeon, Adrenalin, service, Event Log, `pnputil`, and DriverStore checks.
+
+Date: 2026-07-10
+Problem: After completing the Lenovo package audit and rebooting, the final state needed to distinguish what is actually active from packages that were merely staged during testing, especially because Adrenalin initially did not open before reboot.
+Root cause: Large OEM bundles can mix older function drivers, Extension INFs, software components, and related audio drivers. DriverStore presence alone cannot identify the live stack, and Extension INF application is not visible through `Win32_PnPSignedDriver`.
+Guardrail/rule: Use the post-reboot live baseline as the final authority: combine `Get-PnpDevice`/device properties, `Win32_PnPSignedDriver`, `pnputil /enum-devices /drivers`, running AMD processes/services, and post-boot Event Logs. For this laptop, retain active Radeon `oem12.inf / u0202073.inf` `32.0.21043.19003` and installed Extension `oem158.inf / amduw23e.inf`; do not classify `oem158.inf` as cleanup. Treat the other audit-added packages as cleanup candidates only after an explicit, separately authorized cleanup review.
+Files affected: `PROJECT_RULES.md` and regenerated reports/diffs under `.devicecheck-data\driver-package-traces`.
+Validation/tests run: Reboot confirmed at `2026-07-10 14:22:42`; Radeon is `Started/OK/CM_PROB_NONE` with active `oem12.inf`; live `pnputil` reports `oem158.inf` as `Best Ranked / Installed / Extension` and `oem157.inf` as outranked. `RadeonSoftware.exe` is responsive with AMD Software `26.6.4`; AMD services are running; no AMD/Radeon Application errors occurred after boot. One startup Event 219 for `ACPI\AMDI0080\1` was transient—current AMD UMDF Sensor is `OK`, problem code `0`, active `oem55.inf / 1.0.0.341`, and the warning did not repeat. Across 18 completed traces, no active signed-driver binding changed; only `oem158.inf` became an applied configuration. Of 21 audit-added DriverStore packages, `oem158.inf` is installed/applied and the other 20 are stored-only/not active bindings.
+
+Date: 2026-07-10
+Problem: Per-installer reports explained the immediate before/after result, but the standalone lab lacked a reusable post-reboot check and a cross-trace view. This made it difficult to distinguish currently active function drivers, retained Extension configuration, and packages that Windows only kept in the Driver Store. Installer exit codes also had no durable interpretation.
+Root cause: Windows can independently stage an INF, select or outrank it, apply an Extension INF, preserve a newer function driver, and finalize state after reboot. No single evidence source exposes all of these outcomes, and `Win32_PnPSignedDriver` does not expose installed Extension INFs.
+Guardrail/rule: Keep driver-package investigation standalone from the main DeviceCheck TUI until the evidence model proves which facts are useful for a future OEM/Windows Update/Catalog/SDIO recommendation engine. For final state, combine PnP health, live signed function drivers, per-device `pnputil /drivers` installed status, Driver Store presence, and relevant post-boot events. Classify `Stored-only` as evidence, never as an automatic cleanup or rejection decision. Interpret installer exit codes explicitly, including ambiguous wrapper/child-process code `259` and restart codes `1641`/`3010`. When parsing native output under `StrictMode`, preserve regex captures before another `-match` can overwrite `$Matches`, and never assume a filtered collection has a property or `.Count` without forcing array shape.
+Files affected: `tools\Trace-DriverPackageImpact.ps1`, `tools\Invoke-DriverPackagePostRebootAudit.ps1`, `tools\Get-DriverPackageTraceSummary.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+Validation/tests run: Parser validation for all three PowerShell scripts; real post-reboot audit of the AMD VGA trace confirmed active Radeon `oem12.inf`, installed Extension `oem158.inf`, nine AMD VGA packages stored-only, device status `OK`/problem `0`, and no relevant post-boot warning/error; real consolidated summary classified one trace-added package as installed Extension/configuration and twenty as stored-only. The two initial `StrictMode` runtime failures on empty binding collections and overwritten `$Matches` were reproduced, fixed, and rerun successfully.
+
+Date: 2026-07-10
+Problem: A final verification command falsely reported that `DeviceCheck.ps1` had changed even though `git diff --quiet -- DeviceCheck.ps1` returned native exit code `0`.
+Root cause: PowerShell `if (native-command)` evaluates the command's pipeline output, not `$LASTEXITCODE`. `git diff --quiet` intentionally emits no stdout in the unchanged case, so the condition evaluated as false.
+Guardrail/rule: For native predicates such as `git diff --quiet`, run the command first and evaluate `$LASTEXITCODE` explicitly. Do not use native command stdout directly as a Boolean when success can legitimately produce no output.
+Files affected: `PROJECT_RULES.md`.
+Validation/tests run: Repeated `git diff --quiet -- DeviceCheck.ps1`, captured `$LASTEXITCODE = 0`, confirmed `Unchanged = True`, and reran `git diff --check` successfully.

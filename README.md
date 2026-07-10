@@ -249,7 +249,40 @@ cd DeviceCheck
 
 # Run
 .\DeviceCheck.ps1
+
+# Optional: add Explorer context menu entry for the current user
+# The menu launches DeviceCheck elevated and uses assets\devicemanager.ico.
+.\Install-DeviceCheckContextMenu.ps1
+
+# Optional: add an .exe context menu entry for driver package impact tracing
+# The trace tool previews extracted INFs, captures before/after driver evidence,
+# and writes report.md plus raw JSON under .devicecheck-data\driver-package-traces.
+.\Install-DriverPackageTraceContextMenu.ps1
+
+# Remove the context menu entries
+.\Install-DeviceCheckContextMenu.ps1 -Uninstall
+.\Install-DriverPackageTraceContextMenu.ps1 -Uninstall
 ```
+
+### Standalone Driver Package Trace Lab
+
+The driver installer tracer is intentionally separate from the main `DeviceCheck.ps1` TUI. It records evidence about package applicability, Driver Store staging, SetupAPI selection/configuration, active function drivers, and installed Extension INFs; it does not yet recommend a “best” driver or remove stored packages.
+
+```powershell
+# Preview a package, capture the before state, then ask whether to run it
+.\tools\Trace-DriverPackageImpact.ps1 -InstallerPath 'C:\Path\Driver.exe'
+
+# Rebuild a report from an existing trace without rerunning the installer
+.\tools\Trace-DriverPackageImpact.ps1 -RegenerateTraceDirectory '.devicecheck-data\driver-package-traces\<trace-folder>'
+
+# Compare an existing trace with the live state after reboot
+.\tools\Trace-DriverPackageImpact.ps1 -PostRebootTraceDirectory '.devicecheck-data\driver-package-traces\<trace-folder>'
+
+# Consolidate the latest outcome per installer and classify every trace-added INF
+.\tools\Get-DriverPackageTraceSummary.ps1
+```
+
+Post-reboot audit writes `post-reboot-report.md` and `post-reboot.snapshot.json` inside the selected trace. The consolidated command writes `driver-trace-summary.md` and `driver-trace-summary.json` in the trace root. `Stored-only` means that an INF remains in the Driver Store but was not detected as the active function driver or as an installed Extension/configuration driver for the traced devices; it is not a deletion recommendation.
 
 ### Requirements
 | Requirement | Details |
@@ -267,6 +300,8 @@ cd DeviceCheck
 
 ```
 DeviceCheck/
+├── assets/
+│   └── devicemanager.ico                            # Bundled Explorer context menu icon
 ├── data/
 │   └── google-ai-studio-rate-limits-only free.csv  # Local model quota reference
 ├── docs/
@@ -283,7 +318,11 @@ DeviceCheck/
 │   ├── driver-candidate-package.schema.json         # Candidate package metadata schema
 │   └── driver-package-source-adapters.json          # Metadata adapter skeletons
 ├── tools/
-│   └── Fetch-RenderedPage.js                       # Chrome DevTools rendered-page fetch helper
+│   ├── Fetch-RenderedPage.js                       # Chrome DevTools rendered-page fetch helper
+│   ├── Get-DriverPackageTraceSummary.ps1           # Consolidated live/applied/stored-only trace summary
+│   ├── Invoke-DriverPackagePostRebootAudit.ps1     # Read-only live-state audit for one completed trace
+│   ├── Launch-DriverPackageImpactTrace.vbs         # Elevated .exe context menu launcher for driver package tracing
+│   └── Trace-DriverPackageImpact.ps1               # Standalone driver installer preview/before-after trace prototype
 ├── .gitignore            # Generated evidence/cache folder ignores
 ├── .gitattributes        # Repository line-ending policy
 ├── Connect-PaliosDeviceCheck.ps1 # Convenience wrapper for PALIOS remote snapshot export
@@ -291,6 +330,9 @@ DeviceCheck/
 ├── Enable-RemotePs.ps1     # WinRM/PSRemoting administrator configuration helper
 ├── DeviceCheck.ps1         # Main TUI entrypoint, startup state, and event loop
 ├── Get-DriverUpdateAgent.ps1 # Gemini tool-calling driver finder
+├── Install-DeviceCheckContextMenu.ps1 # Current-user Explorer context menu installer
+├── Install-DriverPackageTraceContextMenu.ps1 # Current-user .exe driver trace context menu installer
+├── Launch-DeviceCheck.vbs  # Elevated context menu launcher for Windows Terminal / PowerShell
 ├── PROJECT_RULES.md        # Project-specific implementation memory
 ├── PS_UI_Blueprint.psm1    # TUI synchronized rendering engine
 ├── README.md               # You are here
