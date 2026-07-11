@@ -6,6 +6,7 @@ Dim fso
 Dim repoRoot
 Dim toolsRoot
 Dim traceScript
+Dim extractionModeArguments
 Dim installerPath
 Dim launchProgram
 Dim launchArguments
@@ -24,6 +25,7 @@ installerPath = WScript.Arguments(0)
 toolsRoot = fso.GetParentFolderName(WScript.ScriptFullName)
 repoRoot = fso.GetParentFolderName(toolsRoot)
 traceScript = fso.BuildPath(toolsRoot, "Trace-DriverPackageImpact.ps1")
+extractionModeArguments = " -ExtractionMode Safe -PromptForExtendedExtraction"
 
 If Not fso.FileExists(traceScript) Then
     MsgBox "Trace-DriverPackageImpact.ps1 was not found:" & vbCrLf & traceScript, vbExclamation, "DeviceCheck Driver Trace"
@@ -39,10 +41,10 @@ hasWindowsTerminal = (shell.Run("%ComSpec% /c where wt.exe >nul 2>nul", 0, True)
 
 If hasWindowsTerminal Then
     launchProgram = "wt.exe"
-    launchArguments = "-d " & Quote(repoRoot) & " pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " & Quote(traceScript) & " -InstallerPath " & Quote(installerPath) & " -PauseAtEnd"
+    launchArguments = "-d " & Quote(repoRoot) & " pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " & Quote(traceScript) & " -InstallerPath " & Quote(installerPath) & extractionModeArguments & " -PauseAtEnd"
 Else
     launchProgram = "pwsh.exe"
-    launchArguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File " & Quote(traceScript) & " -InstallerPath " & Quote(installerPath) & " -PauseAtEnd"
+    launchArguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File " & Quote(traceScript) & " -InstallerPath " & Quote(installerPath) & extractionModeArguments & " -PauseAtEnd"
 End If
 
 appShell.ShellExecute launchProgram, launchArguments, repoRoot, "runas", 1

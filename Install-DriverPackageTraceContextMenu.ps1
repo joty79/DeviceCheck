@@ -8,6 +8,9 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSCommandPath
 $launcherPath = Join-Path $repoRoot 'tools\Launch-DriverPackageImpactTrace.vbs'
 $traceScriptPath = Join-Path $repoRoot 'tools\Trace-DriverPackageImpact.ps1'
+$extractionHelperPath = Join-Path $repoRoot 'tools\DriverPackageTrace\PackageExtraction.ps1'
+$extractionGuardPath = Join-Path $repoRoot 'tools\DriverPackageTrace\ExtractionGuard.ps1'
+$extractionCoordinatorPath = Join-Path $repoRoot 'tools\DriverPackageTrace\TraceExtractionCoordinator.ps1'
 $wscriptPath = Join-Path $env:WINDIR 'System32\wscript.exe'
 $iconPath = Join-Path $repoRoot 'assets\devicemanager.ico'
 $menuKey = 'HKCU\Software\Classes\SystemFileAssociations\.exe\shell\DeviceCheckTraceDriverPackage'
@@ -70,7 +73,7 @@ if ($Uninstall) {
     exit 0
 }
 
-foreach ($requiredPath in @($launcherPath, $traceScriptPath, $wscriptPath, $iconPath)) {
+foreach ($requiredPath in @($launcherPath, $traceScriptPath, $extractionHelperPath, $extractionGuardPath, $extractionCoordinatorPath, $wscriptPath, $iconPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Required file was not found: $requiredPath"
     }

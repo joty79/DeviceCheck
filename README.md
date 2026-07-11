@@ -255,7 +255,8 @@ cd DeviceCheck
 .\Install-DeviceCheckContextMenu.ps1
 
 # Optional: add an .exe context menu entry for driver package impact tracing
-# The trace tool previews extracted INFs, captures before/after driver evidence,
+# The trace tool identifies/extracts supported packages, previews their INFs,
+# captures before/after driver evidence,
 # and writes report.md plus raw JSON under .devicecheck-data\driver-package-traces.
 .\Install-DriverPackageTraceContextMenu.ps1
 
@@ -269,8 +270,19 @@ cd DeviceCheck
 The driver installer tracer is intentionally separate from the main `DeviceCheck.ps1` TUI. It records evidence about package applicability, Driver Store staging, SetupAPI selection/configuration, active function drivers, and installed Extension INFs; it does not yet recommend a “best” driver or remove stored packages.
 
 ```powershell
-# Preview a package, capture the before state, then ask whether to run it
+# Safe extraction is the default: DIE routes Inno/NSIS/MSI/InstallShield to
+# innoextract, 7-Zip, or lessmsi before the normal preview/before snapshot.
 .\tools\Trace-DriverPackageImpact.ps1 -InstallerPath 'C:\Path\Driver.exe'
+
+# Reuse only an existing extracted payload; do not invoke extractors
+.\tools\Trace-DriverPackageImpact.ps1 -InstallerPath 'C:\Path\Driver.exe' -ExtractionMode None
+
+# Force a fresh SHA-256-cached extraction and limit nested installer recursion
+.\tools\Trace-DriverPackageImpact.ps1 -InstallerPath 'C:\Path\Driver.exe' -ExtractionMode Safe -ForceReextract -MaxExtractionDepth 2
+
+# Explicit execution-based extraction for a statically proven InstallShield
+# administrative image. Requires elevation and runs mutation guards.
+.\tools\Trace-DriverPackageImpact.ps1 -InstallerPath 'C:\Path\Driver.exe' -ExtractionMode Extended
 
 # Rebuild a report from an existing trace without rerunning the installer
 .\tools\Trace-DriverPackageImpact.ps1 -RegenerateTraceDirectory '.devicecheck-data\driver-package-traces\<trace-folder>'
@@ -282,7 +294,13 @@ The driver installer tracer is intentionally separate from the main `DeviceCheck
 .\tools\Get-DriverPackageTraceSummary.ps1
 ```
 
+The Explorer `.exe` context-menu action uses `Safe` mode automatically. If Safe extraction discovers a nested InstallShield package but no INF files, it shows a `⚠️⚠️⚠️ SAFE EXTRACTION INCOMPLETE` prompt before offering `Extended` mode. Extended mode is allowed only when Detect It Easy identifies InstallShield and Sysinternals Strings proves both administrative-installation text and an embedded MSI name. It uses a short temporary administrative target to avoid legacy MSI path limits, then compares DriverStore, SetupAPI, and uninstall inventory before and after; any detected mutation stops the normal trace.
+
+Every run writes `extraction-manifest.json` with the source SHA-256/signature, detected engine, tool paths/versions, commands, exit codes, nested depth, cache provenance, payload counts, warnings, and Extended guard evidence. Extracted payloads are cached under `.devicecheck-data\driver-package-extractions\<sha256-prefix>` and reused only when the source hash and completed mode satisfy the request.
+
 Post-reboot audit writes `post-reboot-report.md` and `post-reboot.snapshot.json` inside the selected trace. The consolidated command writes `driver-trace-summary.md` and `driver-trace-summary.json` in the trace root. `Stored-only` means that an INF remains in the Driver Store but was not detected as the active function driver or as an installed Extension/configuration driver for the traced devices; it is not a deletion recommendation.
+
+For nested NSIS/Inno/InstallShield/MSI packages, tool routing, extraction commands, safety checks, and the real AMD Chipset Software comparison are documented in [Installer Analysis Toolkit](docs/INSTALLER_ANALYSIS_TOOLKIT.md).
 
 ### Requirements
 | Requirement | Details |
@@ -290,6 +308,8 @@ Post-reboot audit writes `post-reboot-report.md` and `post-reboot.snapshot.json`
 | **OS** | Windows 10 / 11 |
 | **Runtime** | PowerShell 7 (PS7) |
 | **Terminal** | Windows Terminal (recommended for synchronized rendering) |
+| **Safe extraction tools** | Detect It Easy, 7-Zip, innoextract, and lessmsi; the report identifies a missing required adapter instead of guessing |
+| **Extended extraction evidence** | Sysinternals Strings plus an elevated, statically proven InstallShield administrative path |
 | **Agent browser retrieval** | Node.js and local Chrome are used by the agent when JavaScript-rendered OEM support pages block plain HTTP fetches |
 | **Database root** | Snapshots, history, hosts cache, machine evidence, agent checkpoints, traces, and tool-result cache are stored under `.devicecheck-data\` beside `DeviceCheck.ps1` by default |
 | **Local-only state** | DPAPI credential XML files and the browser profile stay under `%LOCALAPPDATA%\DeviceCheck\` for the Windows user/PC running DeviceCheck |
@@ -307,6 +327,7 @@ DeviceCheck/
 ├── docs/
 │   ├── google-ai-studio-rate-limits-only-free.md   # Human-readable quota table
 │   ├── HARDWARE_SOURCE_INTAKE.md                   # Hardware/driver source intake notes
+│   ├── INSTALLER_ANALYSIS_TOOLKIT.md               # Installer identification/extraction tool routing and AMD case study
 │   └── LOCAL_SOURCE_PROJECT_AUDIT.md               # Local source repo audit and transfer decisions
 ├── internal/
 │   ├── DeviceCheck/                                  # Dot-sourced function groups used by DeviceCheck.ps1
@@ -318,6 +339,10 @@ DeviceCheck/
 │   ├── driver-candidate-package.schema.json         # Candidate package metadata schema
 │   └── driver-package-source-adapters.json          # Metadata adapter skeletons
 ├── tools/
+│   ├── DriverPackageTrace/
+│   │   ├── ExtractionGuard.ps1                     # DriverStore/SetupAPI/uninstall guard for execution-based extraction
+│   │   ├── PackageExtraction.ps1                   # Installer identification, tool routing, nested cache, and manifest engine
+│   │   └── TraceExtractionCoordinator.ps1          # Trace-facing extraction prompts, evidence persistence, and report rendering
 │   ├── Fetch-RenderedPage.js                       # Chrome DevTools rendered-page fetch helper
 │   ├── Get-DriverPackageTraceSummary.ps1           # Consolidated live/applied/stored-only trace summary
 │   ├── Invoke-DriverPackagePostRebootAudit.ps1     # Read-only live-state audit for one completed trace

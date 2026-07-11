@@ -15,12 +15,39 @@ param(
     [Parameter(ParameterSetName = 'Trace')]
     [switch]$PreviewOnly,
 
+    [Parameter(ParameterSetName = 'Trace')]
+    [ValidateSet('None', 'Safe', 'Extended')]
+    [string]$ExtractionMode = 'Safe',
+
+    [Parameter(ParameterSetName = 'Trace')]
+    [switch]$ForceReextract,
+
+    [Parameter(ParameterSetName = 'Trace')]
+    [ValidateRange(0, 4)]
+    [int]$MaxExtractionDepth = 2,
+
+    [Parameter(ParameterSetName = 'Trace')]
+    [switch]$PromptForExtendedExtraction,
+
     [switch]$PauseAtEnd
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+$traceHelperRoot = Join-Path $PSScriptRoot 'DriverPackageTrace'
+$traceHelperFiles = @(
+    (Join-Path $traceHelperRoot 'PackageExtraction.ps1'),
+    (Join-Path $traceHelperRoot 'ExtractionGuard.ps1'),
+    (Join-Path $traceHelperRoot 'TraceExtractionCoordinator.ps1')
+)
+foreach ($traceHelperFile in $traceHelperFiles) {
+    if (-not (Test-Path -LiteralPath $traceHelperFile)) {
+        throw "Missing driver package trace helper: $traceHelperFile"
+    }
+    . $traceHelperFile
+}
 
 function Write-TraceTitle {
     param([string]$Text)
@@ -86,10 +113,10 @@ function Write-TracePreviewField {
     }
 }
 
-function Write-TracePreviewMatches {
-    param([object[]]$Matches)
+function Write-TracePreviewMatchList {
+    param([object[]]$MatchRows)
 
-    $rows = @($Matches | Sort-Object DeviceName, MatchKind, Inf)
+    $rows = @($MatchRows | Sort-Object DeviceName, MatchKind, Inf)
     $consoleWidth = Get-TraceConsoleWidth
     Write-Host ("Matched package candidates: {0}" -f $rows.Count) -ForegroundColor Green
     Write-Host ''
@@ -524,11 +551,23 @@ function Get-PayloadFileSummary {
         $msiProductVersion = ''
         $msiManufacturer = ''
         $msiProductCode = ''
+        $productName = ''
+        $productVersion = ''
+        $manufacturer = ''
+        $fileDescription = ''
         if ($extension -eq '.msi') {
             $msiProductName = Get-MsiPropertyValue -MsiPath $file.FullName -PropertyName 'ProductName'
             $msiProductVersion = Get-MsiPropertyValue -MsiPath $file.FullName -PropertyName 'ProductVersion'
             $msiManufacturer = Get-MsiPropertyValue -MsiPath $file.FullName -PropertyName 'Manufacturer'
             $msiProductCode = Get-MsiPropertyValue -MsiPath $file.FullName -PropertyName 'ProductCode'
+            $productName = $msiProductName
+            $productVersion = $msiProductVersion
+            $manufacturer = $msiManufacturer
+        } elseif ($extension -eq '.exe') {
+            $productName = [string]$file.VersionInfo.ProductName
+            $productVersion = [string]$file.VersionInfo.ProductVersion
+            $manufacturer = [string]$file.VersionInfo.CompanyName
+            $fileDescription = [string]$file.VersionInfo.FileDescription
         }
 
         [pscustomobject]@{
@@ -541,6 +580,10 @@ function Get-PayloadFileSummary {
             MsiProductVersion = $msiProductVersion
             MsiManufacturer = $msiManufacturer
             MsiProductCode = $msiProductCode
+            ProductName = $productName
+            ProductVersion = $productVersion
+            Manufacturer = $manufacturer
+            FileDescription = $fileDescription
         }
     }
 
@@ -555,6 +598,15 @@ function Get-PayloadKind {
 
     if ($InfCount -gt 0) { return 'Driver INF payload' }
     if (@($PayloadFiles | Where-Object { $_.Extension -eq '.msi' }).Count -gt 0) { return 'MSI provisioning/application payload' }
+    $nestedInstallerExecutables = @($PayloadFiles | Where-Object {
+        $_.Extension -eq '.exe' -and
+        $_.Name -notmatch '^(?i:vc_redist|vcredist)' -and
+        ('{0} {1} {2} {3}' -f $_.Name,
+            (Get-TraceObjectValue $_ 'ProductName'),
+            (Get-TraceObjectValue $_ 'FileDescription'),
+            $_.RelativePath) -match '(?i)(setup|install|driver|chipset)'
+    })
+    if ($nestedInstallerExecutables.Count -gt 0) { return 'Nested installer/bootstrapper payload' }
     if (@($PayloadFiles | Where-Object { $_.Extension -eq '.exe' }).Count -gt 0) { return 'Executable utility payload' }
     if (@($PayloadFiles).Count -gt 0) { return 'Non-driver payload' }
     return 'No extracted payload'
@@ -595,7 +647,7 @@ function Get-PciBaseIds {
     return @($rows | Sort-Object -Unique)
 }
 
-function Test-IsUsefulCompatibleIdForPreview {
+function Test-IsUsefulDeviceIdForPreview {
     param([AllowEmptyString()][string]$Id)
 
     if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
@@ -605,6 +657,7 @@ function Test-IsUsefulCompatibleIdForPreview {
     if ($text -match '^(?i)PCI\\VEN_[0-9A-F]{4}$') { return $false }
     if ($text -match '^(?i)PCI\\CC_[0-9A-F]+$') { return $false }
     if ($text -match '^(?i)USB\\Class_[0-9A-F]{2}(&SubClass_[0-9A-F]{2})?(&Prot_[0-9A-F]{2})?$') { return $false }
+    if ($text -match '^(?i)USB\\ROOT_HUB(20|30)?$') { return $false }
     if ($text -match '^(?i)HDAUDIO\\FUNC_[0-9A-F]{2}$') { return $false }
     if ($text -match '^(?i)SensorGroup$') { return $false }
 
@@ -614,12 +667,19 @@ function Test-IsUsefulCompatibleIdForPreview {
 function New-PackagePreview {
     param(
         [string]$PackagePath,
-        [string]$OutputDirectory
+        [string]$OutputDirectory,
+        [AllowEmptyString()][string]$ExtractedRootOverride = '',
+        [AllowNull()][object]$ExtractionManifest = $null
     )
 
     Write-TraceSection 'Package preview'
     $installer = Get-Item -LiteralPath $PackagePath
-    $extractedRoot = Find-ExistingExtractedPackageRoot -PackagePath $installer.FullName
+    $extractedRoot = ''
+    if (-not [string]::IsNullOrWhiteSpace($ExtractedRootOverride) -and (Test-Path -LiteralPath $ExtractedRootOverride)) {
+        $extractedRoot = (Resolve-Path -LiteralPath $ExtractedRootOverride).Path
+    } else {
+        $extractedRoot = Find-ExistingExtractedPackageRoot -PackagePath $installer.FullName
+    }
     $deviceEvidence = @(Get-PnpDeviceIdEvidence)
     $infRows = @()
     $payloadFileCount = 0
@@ -634,6 +694,9 @@ function New-PackagePreview {
         if ($infFiles.Count -eq 0) {
             $payloadKind = Get-PayloadKind -PayloadFiles $payloadFiles -InfCount 0
             Write-Host "Extracted payload exists, but it contains no INF files. Payload kind: $payloadKind." -ForegroundColor Yellow
+            if ($payloadKind -eq 'Nested installer/bootstrapper payload') {
+                Write-Host 'The driver INFs may be unpacked only when the nested installer runs; before/after and SetupAPI evidence remain authoritative.' -ForegroundColor Yellow
+            }
         }
 
         $infRows = @($infFiles | ForEach-Object {
@@ -662,6 +725,7 @@ function New-PackagePreview {
                 $matchedId = ''
 
                 foreach ($id in $hardwareIds) {
+                    if (-not (Test-IsUsefulDeviceIdForPreview -Id $id)) { continue }
                     if ($inf.Text.IndexOf($id, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                         $matchKind = 'ExactHardwareId'
                         $matchedId = $id
@@ -671,7 +735,7 @@ function New-PackagePreview {
 
                 if ([string]::IsNullOrWhiteSpace($matchKind)) {
                     foreach ($id in $compatibleIds) {
-                        if (-not (Test-IsUsefulCompatibleIdForPreview -Id $id)) { continue }
+                        if (-not (Test-IsUsefulDeviceIdForPreview -Id $id)) { continue }
                         if ($inf.Text.IndexOf($id, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                             $matchKind = 'CompatibleId'
                             $matchedId = $id
@@ -739,13 +803,14 @@ function New-PackagePreview {
         MatchCount = $matchRows.Count
         InfFiles = @($infFileSummaries)
         Matches = @($matchRows.ToArray())
+        Extraction = $ExtractionManifest
     }
 
     $path = Join-Path $OutputDirectory 'package-preview.json'
     Save-JsonFile -Data $preview -Path $path
 
     if ($matchRows.Count -gt 0) {
-        Write-TracePreviewMatches -Matches $matchRows.ToArray()
+        Write-TracePreviewMatchList -MatchRows $matchRows.ToArray()
     } else {
         Write-Host 'No local device ID matches found in extracted INF payload.' -ForegroundColor Yellow
     }
@@ -1598,6 +1663,9 @@ function Get-TraceVerdict {
     $meaningfulSetupApiLineCount = @($Diff.SetupApiInterestingLines).Count
     if ($infCount -eq 0 -and $payloadFileCount -gt 0 -and $stagedCount -eq 0 -and $meaningfulSetupApiLineCount -eq 0) {
         if ([string]::IsNullOrWhiteSpace($payloadKind)) { $payloadKind = 'non-driver payload' }
+        if ($payloadKind -eq 'Nested installer/bootstrapper payload') {
+            return 'A nested installer/bootstrapper ran, but no DriverStore, SetupAPI, or active-driver state change was detected. Confirm that its child installer completed before treating this as a no-change result.'
+        }
         $article = if ($payloadKind -match '^(?i:msi|application|executable|archive)') { 'an' } else { 'a' }
         return "Extracted payload exists but contains no INF files, and no driver state changed. This looks like $article $payloadKind, not a driver package."
     }
@@ -1772,6 +1840,10 @@ function New-MarkdownReport {
     if ([string]::IsNullOrWhiteSpace($payloadKind)) {
         $payloadKind = Get-PayloadKind -PayloadFiles $payloadFiles -InfCount ([int]$Preview.InfCount)
     }
+    $extractionManifest = Get-TraceObjectValue -InputObject $Preview -Name 'Extraction'
+    if ($extractionManifest -is [string] -and [string]::IsNullOrWhiteSpace($extractionManifest)) {
+        $extractionManifest = $null
+    }
 
     $lines.Add('# Driver Package Impact Trace')
     $lines.Add('')
@@ -1785,6 +1857,14 @@ function New-MarkdownReport {
     $lines.Add(('- Payload kind: `{0}`' -f $payloadKind))
     $lines.Add(('- INF files inspected: `{0}`' -f $Preview.InfCount))
     $lines.Add(('- Local INF/device matches: `{0}`' -f $Preview.MatchCount))
+    if ($null -ne $extractionManifest) {
+        $lines.Add(('- Extraction mode: `{0}`' -f (Get-TraceObjectValue -InputObject $extractionManifest -Name 'CompletedMode')))
+        $identification = Get-TraceObjectValue -InputObject $extractionManifest -Name 'Identification'
+        $lines.Add(('- Detected installer engine: `{0} {1}`' -f
+            (Get-TraceObjectValue -InputObject $identification -Name 'Engine'),
+            (Get-TraceObjectValue -InputObject $identification -Name 'EngineVersion')))
+        $lines.Add(('- Extraction cache reused: `{0}`' -f (Get-TraceObjectValue -InputObject $extractionManifest -Name 'CacheReused')))
+    }
     $lines.Add(('- Installer run: `{0}`' -f $InstallerWasRun))
     if ($InstallerWasRun) {
         $installerExitCode = [string](Get-TraceObjectValue -InputObject $RunMetadata -Name 'InstallerExitCode')
@@ -1798,11 +1878,16 @@ function New-MarkdownReport {
     }
     $lines.Add('')
 
+    Add-TraceDriverPackageExtractionMarkdown -Lines $lines -Manifest $extractionManifest
+
     $lines.Add('## Package Preview Matches')
     $lines.Add('')
     if (@($Preview.Matches).Count -eq 0) {
         if ($Preview.InfCount -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingExtractedRoot)) {
             $lines.Add(('Extracted payload exists, but it contains no INF files. Payload kind: **{0}**.' -f (ConvertTo-MarkdownCell $payloadKind)))
+            if ($payloadKind -eq 'Nested installer/bootstrapper payload') {
+                $lines.Add('The visible extraction contains another installer rather than the final INF payload. Driver INFs may appear only while that child installer runs, so before/after snapshots and SetupAPI evidence are the authoritative result.')
+            }
         } else {
             $lines.Add('No local device ID matches were found in extracted INF files.')
         }
@@ -1932,13 +2017,19 @@ function New-MarkdownReport {
             $lines.Add('| Type | File | Size | Product | Version | Manufacturer |')
             $lines.Add('|---|---|---:|---|---|---|')
             foreach ($payloadFile in @($payloadFiles | Select-Object -First 20)) {
+                $productName = [string](Get-TraceObjectValue $payloadFile 'ProductName')
+                if ([string]::IsNullOrWhiteSpace($productName)) { $productName = [string](Get-TraceObjectValue $payloadFile 'MsiProductName') }
+                $productVersion = [string](Get-TraceObjectValue $payloadFile 'ProductVersion')
+                if ([string]::IsNullOrWhiteSpace($productVersion)) { $productVersion = [string](Get-TraceObjectValue $payloadFile 'MsiProductVersion') }
+                $manufacturer = [string](Get-TraceObjectValue $payloadFile 'Manufacturer')
+                if ([string]::IsNullOrWhiteSpace($manufacturer)) { $manufacturer = [string](Get-TraceObjectValue $payloadFile 'MsiManufacturer') }
                 $lines.Add(('| {0} | `{1}` | {2} | {3} | `{4}` | {5} |' -f
                     (ConvertTo-MarkdownCell $payloadFile.Type),
                     (ConvertTo-MarkdownCell $payloadFile.RelativePath),
                     (ConvertTo-MarkdownCell $payloadFile.Length),
-                    (ConvertTo-MarkdownCell $payloadFile.MsiProductName),
-                    (ConvertTo-MarkdownCell $payloadFile.MsiProductVersion),
-                    (ConvertTo-MarkdownCell $payloadFile.MsiManufacturer)))
+                    (ConvertTo-MarkdownCell $productName),
+                    (ConvertTo-MarkdownCell $productVersion),
+                    (ConvertTo-MarkdownCell $manufacturer)))
             }
             if ($payloadFiles.Count -gt 20) {
                 $lines.Add(('| ... | `{0} more files` |  |  |  |  |' -f ($payloadFiles.Count - 20)))
@@ -2088,6 +2179,9 @@ function New-MarkdownReport {
     $lines.Add('## Raw Evidence Files')
     $lines.Add('')
     $lines.Add('- `package-preview.json`')
+    if (Test-Path -LiteralPath (Join-Path $OutputDirectory 'extraction-manifest.json')) {
+        $lines.Add('- `extraction-manifest.json`')
+    }
     $lines.Add('- `before.snapshot.json`')
     if ($InstallerWasRun) {
         $lines.Add('- `after.snapshot.json`')
@@ -2121,14 +2215,20 @@ if ($PSCmdlet.ParameterSetName -eq 'Regenerate') {
     $diffPath = Join-Path $outputDirectory 'diff.json'
     $setupApiDeltaPath = Join-Path $outputDirectory 'setupapi.delta.log'
     $runMetadataPath = Join-Path $outputDirectory 'run-metadata.json'
+    $extractionManifestPath = Join-Path $outputDirectory 'extraction-manifest.json'
 
     if (-not (Test-Path -LiteralPath $previewPath)) { throw "Missing package preview: $previewPath" }
     if (-not (Test-Path -LiteralPath $beforePath)) { throw "Missing before snapshot: $beforePath" }
 
     $preview = Get-Content -LiteralPath $previewPath -Raw | ConvertFrom-Json
     $previewInstallerPath = [string](Get-TraceObjectValue -InputObject $preview -Name 'InstallerPath')
+    $storedExtractionManifest = Get-TraceObjectValue -InputObject $preview -Name 'Extraction'
+    if (Test-Path -LiteralPath $extractionManifestPath) {
+        $storedExtractionManifest = Get-Content -LiteralPath $extractionManifestPath -Raw | ConvertFrom-Json
+    }
+    $storedPayloadRoot = [string](Get-TraceObjectValue -InputObject $storedExtractionManifest -Name 'PayloadRoot')
     if (-not [string]::IsNullOrWhiteSpace($previewInstallerPath) -and (Test-Path -LiteralPath $previewInstallerPath)) {
-        $preview = New-PackagePreview -PackagePath $previewInstallerPath -OutputDirectory $outputDirectory
+        $preview = New-PackagePreview -PackagePath $previewInstallerPath -OutputDirectory $outputDirectory -ExtractedRootOverride $storedPayloadRoot -ExtractionManifest $storedExtractionManifest
     } else {
         Write-Host "Using stored package preview because installer path is unavailable: $previewInstallerPath" -ForegroundColor Yellow
     }
@@ -2172,9 +2272,11 @@ Write-Host "Package : $resolvedInstaller"
 Write-Host "Output  : $outputDirectory"
 Write-Host "Admin   : $(Get-IsAdministrator)"
 Write-Host "SafeMode: $((Get-SafeModeState).IsLikelySafeMode)"
+Write-Host "Extract : $ExtractionMode (max depth $MaxExtractionDepth)"
 
 try {
-    $preview = New-PackagePreview -PackagePath $resolvedInstaller -OutputDirectory $outputDirectory
+    $extractionResult = Invoke-TraceDriverPackagePayloadExtraction -InstallerPath $resolvedInstaller -OutputDirectory $outputDirectory -RepoRoot $repoRoot -Mode $ExtractionMode -ForceReextract:$ForceReextract -MaxDepth $MaxExtractionDepth -PromptForExtendedExtraction:$PromptForExtendedExtraction
+    $preview = New-PackagePreview -PackagePath $resolvedInstaller -OutputDirectory $outputDirectory -ExtractedRootOverride ([string]$extractionResult.PayloadRoot) -ExtractionManifest $extractionResult.Manifest
     $before = New-DriverTraceSnapshot -Name 'before' -OutputDirectory $outputDirectory
 } catch {
     Write-Host ''
