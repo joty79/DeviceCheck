@@ -23,5 +23,5 @@ source/alsa-ucm-conf/VERSION text eol=lf
 
 *.cmd text eol=crlf
 *.bat text eol=crlf
-*.reg text eol=crlf
+*.reg -text
 *.vbs text eol=crlf

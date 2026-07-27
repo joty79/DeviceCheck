@@ -34,9 +34,9 @@ This repository contains `DeviceCheck.ps1`, an interactive, flicker-free PowerSh
 
 - **Problem:** The Offline Snapshot VT regression selected the Windows Store `python.exe` alias and failed before loading `pyte`; GitHub Desktop also warned that the untracked WinRM manifest would be converted from LF to CRLF.
 - **Root cause:** The test trusted `Get-Command python` without executing a probe, while `.gitattributes` covered `.ps1`/`.psm1` but omitted `.psd1`.
-- **Guardrail:** Accept only a Python executable that passes a real `-c` probe; prefer explicit `-PythonPath`/`DEVICECHECK_TEST_PYTHON`, then the bundled Codex runtime, then usable PATH commands. Track PowerShell manifests as LF with `*.psd1 text eol=lf`.
-- **Files affected:** `.gitattributes`, `internal\Test-DeviceCheckOfflineMenu.ps1`, `CHANGELOG.md`, `PROJECT_RULES.md`.
-- **Validation:** Automatic fallback selected the bundled runtime and completed the 156x44 two-frame `pyte` replay with zero scrolls/duplicate headers in both PowerShell 7 and Windows PowerShell 5.1. Writing the Python body to a temporary `.py` file avoided PS5.1 native `-c` quote loss. Parser, structure, focused regression, PSScriptAnalyzer error-only, and diff checks passed.
+- **Guardrail:** Accept only a Python executable that passes a real `-c` probe; prefer explicit `-PythonPath`/`DEVICECHECK_TEST_PYTHON`, then the bundled Codex runtime, then usable PATH commands. Track PowerShell manifests as LF with `*.psd1 text eol=lf`. Preserve UTF-16 Regedit exports byte-for-byte with `*.reg -text`; do not run text/EOL conversion across NUL-containing `.reg` backups.
+- **Files affected:** `.gitattributes`, `internal\Test-DeviceCheckOfflineMenu.ps1`, `backups\context-menus-pre-clean-install-20260713\*.reg`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+- **Validation:** Automatic fallback selected the bundled runtime and completed the 156x44 two-frame `pyte` replay with zero scrolls/duplicate headers in both PowerShell 7 and Windows PowerShell 5.1. Writing the Python body to a temporary `.py` file avoided PS5.1 native `-c` quote loss. `git ls-files --eol` reports the UTF-16 `.reg` exports as `i/-text w/-text`, while `.psd1` remains LF. Parser, structure, focused regression, PSScriptAnalyzer error-only, and diff checks passed.
 
 ## 🔵 PowerShell Runspace Guidelines
 
