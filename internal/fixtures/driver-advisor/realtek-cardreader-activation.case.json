@@ -1,0 +1,63 @@
+{
+  "SchemaVersion": 1,
+  "Name": "Realtek CardReader SDIO candidate activates successfully with physical media pending",
+  "Report": {
+    "Target": {
+      "FriendlyName": "Realtek PCIE CardReader",
+      "Class": "MTD",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem11.inf",
+        "Version": "10.0.26200.21387",
+        "Date": "2025-12-24"
+      }
+    },
+    "Sources": {
+      "WindowsUpdate": {
+        "Outcome": "NoCurrentWuOfferObserved",
+        "MatchingOfferCount": 0
+      },
+      "CatalogPublic": {
+        "TotalRowCount": 25
+      },
+      "SelectionExperiment": {
+        "Mode": "ControlledActivation",
+        "DeviceGuard": {
+          "ActivationSucceeded": true,
+          "StatusAfter": "OK",
+          "ProblemCodeAfter": 0,
+          "ActiveInfBefore": "oem19.inf",
+          "ActiveInfAfter": "oem11.inf",
+          "ExtensionInfBefore": ["oem18.inf"],
+          "ExtensionInfAfter": ["oem18.inf"]
+        },
+        "RuntimeEvidence": {
+          "SignatureStatus": "Valid",
+          "MatchesPayloadHash": true
+        },
+        "FunctionalEvidence": {
+          "MediaTestStatus": "NotRunNoMediaDetected"
+        },
+        "Candidates": [
+          {
+            "PublishedInf": "oem11.inf",
+            "OriginalInf": "rtsperiso.inf",
+            "DriverVer": "2025-12-24 / 10.0.26200.21387",
+            "Rank": "00FF0001",
+            "Status": "Best Ranked / Installed"
+          }
+        ]
+      }
+    },
+    "OverallVerdict": "CandidateObservedBestRankedAndActivated"
+  },
+  "Expected": {
+    "Code": "KeepVerifiedActiveCandidate",
+    "RecommendedAction": "KeepActiveCandidate",
+    "Confidence": "High",
+    "Risk": "Low"
+  }
+}

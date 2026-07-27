@@ -1,0 +1,61 @@
+{
+  "SchemaVersion": 1,
+  "Name": "RZ616 Bluetooth links identical OEM candidate with older local SDIO candidates",
+  "Report": {
+    "Target": {
+      "FriendlyName": "RZ616 Bluetooth(R) Adapter",
+      "Class": "Bluetooth",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem2.inf",
+        "Version": "26.40.2.228",
+        "Date": "2026-05-14"
+      }
+    },
+    "Sources": {
+      "OEMTrace": {
+        "Outcome": "ObservedPackageMatchPreviewOnly"
+      },
+      "SDIO": {
+        "Outcome": "MatchingCandidatesFound",
+        "MatchedDeviceCount": 1,
+        "ParserWarnings": [],
+        "LocalComparison": {
+          "Outcome": "MatchingCandidatesFound",
+          "ApplicableCount": 2,
+          "NewerThanActiveCount": 0,
+          "SelectionAssessment": {
+            "Status": "NotRequiredSameAsActive",
+            "Display": "Not required — extracted OEM candidate is the active driver"
+          },
+          "OemCandidates": [
+            {
+              "Inf": "payload\\mtkbtfilter.inf",
+              "DriverVer": "05/14/2026,26.040.2.228",
+              "ActiveRelation": "SameAsActive"
+            }
+          ],
+          "Candidates": [
+            {
+              "PackName": "DP_Bluetooth_SDIO01_26072.7z",
+              "InfFile": "mediatek\\10x64\\mtkbtfilter.inf",
+              "DriverVer": "01/30/2026 / 25.40.2.227",
+              "SdioStatus": "SAME+OLD",
+              "ActiveRelation": "OlderThanActive"
+            }
+          ]
+        }
+      }
+    },
+    "OverallVerdict": "KeepCurrent_NoVerifiedBetterCandidate"
+  },
+  "Expected": {
+    "Code": "KeepCurrentNoVerifiedBetterCandidate",
+    "RecommendedAction": "KeepCurrent",
+    "Confidence": "High",
+    "Risk": "Low"
+  }
+}

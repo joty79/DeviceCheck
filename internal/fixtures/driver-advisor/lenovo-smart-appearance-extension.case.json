@@ -1,0 +1,43 @@
+{
+  "SchemaVersion": 1,
+  "Name": "Lenovo Smart Appearance applies an Extension INF beside the camera base driver",
+  "Report": {
+    "Target": {
+      "FriendlyName": "Integrated Camera",
+      "Class": "Camera",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem42.inf",
+        "Version": "5.0.18.192",
+        "Date": "2023-05-25"
+      }
+    },
+    "Sources": {
+      "OEMTrace": {
+        "Outcome": "ObservedAppliedExtension",
+        "TargetPackageNodes": [
+          {
+            "NodeKind": "Extension",
+            "Status": "Selected | Installed",
+            "PublishedName": "oem43.inf",
+            "OriginalName": "lnvdmft.inf",
+            "DriverDate": "2023-06-12",
+            "DriverVersion": "1.0.0.27",
+            "DriverRank": "00FF0001",
+            "ExtensionId": "{18d40ae0-97b7-427c-8157-645c77e41331}"
+          }
+        ]
+      }
+    },
+    "OverallVerdict": "EvidenceComparisonOnly"
+  },
+  "Expected": {
+    "Code": "KeepAppliedExtensionStack",
+    "RecommendedAction": "KeepCurrent",
+    "Confidence": "High",
+    "Risk": "Low"
+  }
+}

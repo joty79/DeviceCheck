@@ -1,0 +1,59 @@
+{
+  "SchemaVersion": 1,
+  "Name": "RZ616 signed Catalog package needs observed Windows selection proof",
+  "Report": {
+    "Target": {
+      "FriendlyName": "RZ616 Wi-Fi 6E 160MHz",
+      "Class": "Net",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem60.inf",
+        "Version": "25.40.2.586",
+        "Date": "2026-01-30"
+      }
+    },
+    "Sources": {
+      "WindowsUpdate": {
+        "Outcome": "NoCurrentWuOfferObserved",
+        "MatchingOfferCount": 0
+      },
+      "CatalogPublic": {
+        "TotalRowCount": 25
+      },
+      "CatalogPackage": {
+        "Packages": [
+          {
+            "CatalogGuid": "566cb1be-0030-4174-970c-6b6c159a34f2",
+            "Infs": [
+              {
+                "Name": "mtkwl6ex.inf",
+                "DriverVer": "03/24/2026, 3.05.00.1392",
+                "ActiveComparison": {
+                  "DateRelation": "Newer",
+                  "VersionRelation": "Lower"
+                },
+                "TargetMatches": [
+                  {
+                    "HardwareId": "PCI\\VEN_14C3&DEV_0616&SUBSYS_E0C617AA",
+                    "MatchKind": "DeviceHardwareIdToInfHardwareId",
+                    "ComputedRankBody": "00FF0001"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "OverallVerdict": "KeepCurrent_CatalogCandidateRequiresControlledSelectionProof"
+  },
+  "Expected": {
+    "Code": "InspectOrStageCandidate",
+    "RecommendedAction": "StageOnly",
+    "Confidence": "Medium",
+    "Risk": "High"
+  }
+}

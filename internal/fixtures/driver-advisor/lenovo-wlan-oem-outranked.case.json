@@ -1,0 +1,42 @@
+{
+  "SchemaVersion": 1,
+  "Name": "Lenovo WLAN package candidate is observed outranked by the current driver",
+  "Report": {
+    "Target": {
+      "FriendlyName": "RZ616 Wi-Fi 6E 160MHz",
+      "Class": "Net",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem60.inf",
+        "Version": "25.40.2.586",
+        "Date": "2026-01-30"
+      }
+    },
+    "Sources": {
+      "WindowsUpdate": {
+        "Outcome": "NoCurrentWuOfferObserved",
+        "MatchingOfferCount": 0
+      },
+      "OEMTrace": {
+        "Outcome": "ObservedOutrankedCandidate",
+        "TargetPreviewMatches": [
+          {
+            "Inf": "MTK\\mtkwl6ex.inf",
+            "DriverVer": "2023-05-23 / 23.32.2.558",
+            "MatchKind": "ExactHardwareId"
+          }
+        ]
+      }
+    },
+    "OverallVerdict": "EvidenceComparisonOnly"
+  },
+  "Expected": {
+    "Code": "SkipTestedOemCandidate",
+    "RecommendedAction": "KeepCurrent",
+    "Confidence": "High",
+    "Risk": "Low"
+  }
+}

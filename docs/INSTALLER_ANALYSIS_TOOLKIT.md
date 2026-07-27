@@ -91,6 +91,8 @@ $dark = Join-Path ${env:ProgramFiles(x86)} 'WiX Toolset v3.14\bin\dark.exe'
     -acceptEula wix7 -sct -x '.\wix7-payload' -o '.\product-v7.wxs' '.\package.msi'
 ```
 
+Το 7-Zip output switch είναι ένα native argument: χρησιμοποίησε `"-o$output"`. Το χωριστό `-o`, `$output` αποτυγχάνει με `Command Line Error: Too short switch: -o`.
+
 Για InstallShield wrapper που δηλώνει `/a`:
 
 ```powershell

@@ -29,6 +29,9 @@ param(
     [Parameter(ParameterSetName = 'Trace')]
     [switch]$PromptForExtendedExtraction,
 
+    [Parameter(ParameterSetName = 'Trace')]
+    [switch]$LaunchAdvisor,
+
     [switch]$PauseAtEnd
 )
 
@@ -2179,6 +2182,8 @@ function New-MarkdownReport {
     $lines.Add('## Raw Evidence Files')
     $lines.Add('')
     $lines.Add('- `package-preview.json`')
+    $lines.Add('- `package-topology.json`')
+    $lines.Add('- `benchmark.json`')
     if (Test-Path -LiteralPath (Join-Path $OutputDirectory 'extraction-manifest.json')) {
         $lines.Add('- `extraction-manifest.json`')
     }
@@ -2197,6 +2202,10 @@ function New-MarkdownReport {
     Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
     return $reportPath
 }
+
+$packageTopologyHelper = Join-Path $PSScriptRoot 'DriverPackageView\Topology.ps1'
+if (-not (Test-Path -LiteralPath $packageTopologyHelper -PathType Leaf)) { throw "Missing package topology helper: $packageTopologyHelper" }
+. $packageTopologyHelper
 
 if ($PSCmdlet.ParameterSetName -eq 'PostReboot') {
     $postRebootScript = Join-Path $PSScriptRoot 'Invoke-DriverPackagePostRebootAudit.ps1'
@@ -2232,6 +2241,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Regenerate') {
     } else {
         Write-Host "Using stored package preview because installer path is unavailable: $previewInstallerPath" -ForegroundColor Yellow
     }
+    $null = New-DriverPackageTopology -Preview $preview -OutputPath (Join-Path $outputDirectory 'package-topology.json')
 
     $before = Get-Content -LiteralPath $beforePath -Raw | ConvertFrom-Json
     $after = $null
@@ -2267,6 +2277,12 @@ $safeName = ConvertTo-SafeFileName -Text ([System.IO.Path]::GetFileNameWithoutEx
 $outputDirectory = Join-Path $traceRoot "$stamp-$safeName"
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 
+$benchmarkHelper = Join-Path $PSScriptRoot 'DriverSourceComparison\Benchmark.ps1'
+if (-not (Test-Path -LiteralPath $benchmarkHelper -PathType Leaf)) { throw "Required benchmark helper not found: $benchmarkHelper" }
+. $benchmarkHelper
+$benchmark = New-DriverBenchmarkRecorder -Name 'DriverPackageTrace'
+$benchmarkPath = Join-Path $outputDirectory 'benchmark.json'
+
 Write-TraceTitle 'DeviceCheck Driver Package Impact Trace'
 Write-Host "Package : $resolvedInstaller"
 Write-Host "Output  : $outputDirectory"
@@ -2275,10 +2291,44 @@ Write-Host "SafeMode: $((Get-SafeModeState).IsLikelySafeMode)"
 Write-Host "Extract : $ExtractionMode (max depth $MaxExtractionDepth)"
 
 try {
-    $extractionResult = Invoke-TraceDriverPackagePayloadExtraction -InstallerPath $resolvedInstaller -OutputDirectory $outputDirectory -RepoRoot $repoRoot -Mode $ExtractionMode -ForceReextract:$ForceReextract -MaxDepth $MaxExtractionDepth -PromptForExtendedExtraction:$PromptForExtendedExtraction
-    $preview = New-PackagePreview -PackagePath $resolvedInstaller -OutputDirectory $outputDirectory -ExtractedRootOverride ([string]$extractionResult.PayloadRoot) -ExtractionManifest $extractionResult.Manifest
-    $before = New-DriverTraceSnapshot -Name 'before' -OutputDirectory $outputDirectory
+    $extractionResult = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'PayloadExtraction' -Operation {
+        Invoke-TraceDriverPackagePayloadExtraction -InstallerPath $resolvedInstaller -OutputDirectory $outputDirectory -RepoRoot $repoRoot -Mode $ExtractionMode -ForceReextract:$ForceReextract -MaxDepth $MaxExtractionDepth -PromptForExtendedExtraction:$PromptForExtendedExtraction
+    }
+    $preview = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'InfPreviewAndDeviceMatching' -Operation {
+        New-PackagePreview -PackagePath $resolvedInstaller -OutputDirectory $outputDirectory -ExtractedRootOverride ([string]$extractionResult.PayloadRoot) -ExtractionManifest $extractionResult.Manifest
+    }
+    $null = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'PackageTopology' -Detail 'Classify function bindings, Extension applications, and linked component devices.' -Operation {
+        New-DriverPackageTopology -Preview $preview -OutputPath (Join-Path $outputDirectory 'package-topology.json')
+    }
+    $before = if ($PreviewOnly) {
+        Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'PreviewSnapshotStub' -Detail 'Full system snapshot skipped because PreviewOnly cannot mutate driver state.' -Operation {
+            $snapshot = [pscustomobject]@{
+                Name = 'before'
+                CapturedAt = (Get-Date).ToString('o')
+                SnapshotMode = 'PreviewOnlySkippedFullInventory'
+                ComputerName = $env:COMPUTERNAME
+                UserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+                IsAdministrator = Get-IsAdministrator
+                SafeMode = Get-SafeModeState
+                SetupApiMarker = $null
+                PublishedDrivers = @()
+                InfInventory = @()
+                DriverStore = @()
+                PnpDevices = @()
+                SignedDrivers = @()
+                SystemDrivers = @()
+            }
+            Save-JsonFile -Data $snapshot -Path (Join-Path $outputDirectory 'before.snapshot.json')
+            $snapshot
+        }
+    }
+    else {
+        Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'BeforeSnapshot' -Operation {
+            New-DriverTraceSnapshot -Name 'before' -OutputDirectory $outputDirectory
+        }
+    }
 } catch {
+    $null = Export-DriverBenchmark -Recorder $benchmark -Path $benchmarkPath
     Write-Host ''
     Write-Host 'Trace failed during preview/before snapshot.' -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
@@ -2315,7 +2365,9 @@ if (-not $PreviewOnly) {
         Write-TraceSection 'Running installer'
         $beforeSetupApiMarker = $before.SetupApiMarker
         $installerStartedAt = Get-Date
-        $process = Start-Process -FilePath $resolvedInstaller -Wait -PassThru
+        $process = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'InstallerExecution' -Operation {
+            Start-Process -FilePath $resolvedInstaller -Wait -PassThru
+        }
         $installerExitedAt = Get-Date
         $runMetadata = [pscustomobject]@{
             InstallerPath = $resolvedInstaller
@@ -2329,16 +2381,26 @@ if (-not $PreviewOnly) {
         Write-Host "Installer process exited with code: $($process.ExitCode)" -ForegroundColor Cyan
         Write-Host "Interpretation: $($runMetadata.InstallerExitInterpretation)" -ForegroundColor Cyan
         Write-Host 'If the installer spawned a child UI/process, wait until it is fully finished before continuing.' -ForegroundColor Yellow
-        [void](Read-Host 'Press Enter to capture after snapshot')
+        [void](Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'UserWaitBeforeAfterSnapshot' -Operation {
+                Read-Host 'Press Enter to capture after snapshot'
+            })
 
-        $after = New-DriverTraceSnapshot -Name 'after' -OutputDirectory $outputDirectory
+        $after = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'AfterSnapshot' -Operation {
+            New-DriverTraceSnapshot -Name 'after' -OutputDirectory $outputDirectory
+        }
         $runMetadata.AfterSnapshotCapturedAt = (Get-Date).ToString('o')
         Save-JsonFile -Data $runMetadata -Path (Join-Path $outputDirectory 'run-metadata.json')
-        $setupApiDelta = Get-SetupApiDeltaText -BeforeMarker $beforeSetupApiMarker
-        $setupApiDeltaPath = Join-Path $outputDirectory 'setupapi.delta.log'
-        Set-Content -LiteralPath $setupApiDeltaPath -Value $setupApiDelta -Encoding UTF8
-        $diff = Compare-TraceSnapshots -Before $before -After $after -SetupApiDelta $setupApiDelta
-        Save-JsonFile -Data $diff -Path (Join-Path $outputDirectory 'diff.json')
+        $setupApiDelta = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'SetupApiDelta' -Operation {
+            $delta = Get-SetupApiDeltaText -BeforeMarker $beforeSetupApiMarker
+            $setupApiDeltaPath = Join-Path $outputDirectory 'setupapi.delta.log'
+            Set-Content -LiteralPath $setupApiDeltaPath -Value $delta -Encoding UTF8
+            $delta
+        }
+        $diff = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'SnapshotComparison' -Operation {
+            $comparison = Compare-TraceSnapshots -Before $before -After $after -SetupApiDelta $setupApiDelta
+            Save-JsonFile -Data $comparison -Path (Join-Path $outputDirectory 'diff.json')
+            $comparison
+        }
         $installerWasRun = $true
 
         Write-TraceSection 'Actual changes'
@@ -2354,11 +2416,24 @@ if (-not $PreviewOnly) {
     }
 }
 
-$reportPath = New-MarkdownReport -Preview $preview -Before $before -After $after -Diff $diff -RunMetadata $runMetadata -OutputDirectory $outputDirectory -InstallerWasRun $installerWasRun
+$reportPath = Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'TraceReportGeneration' -Operation {
+    New-MarkdownReport -Preview $preview -Before $before -After $after -Diff $diff -RunMetadata $runMetadata -OutputDirectory $outputDirectory -InstallerWasRun $installerWasRun
+}
 
 Write-TraceSection 'Report'
 Write-Host "Human report: $reportPath" -ForegroundColor Green
 Write-Host "Raw evidence : $outputDirectory" -ForegroundColor Green
+
+if ($LaunchAdvisor) {
+    $advisorScript = Join-Path $PSScriptRoot 'Invoke-DriverTraceAdvisor.ps1'
+    if (-not (Test-Path -LiteralPath $advisorScript -PathType Leaf)) { throw "Driver Advisor launcher not found: $advisorScript" }
+    Measure-DriverBenchmarkPhase -Recorder $benchmark -Name 'AdvisorPipeline' -Operation {
+        & $advisorScript -TraceFolder $outputDirectory
+    }
+}
+
+$benchmarkResult = Export-DriverBenchmark -Recorder $benchmark -Path $benchmarkPath
+Write-Host ("Benchmark: {0:N3}s total; slowest {1} ({2} ms)" -f $benchmarkResult.TotalSeconds, $benchmarkResult.SlowestPhase, $benchmarkResult.SlowestMs) -ForegroundColor DarkCyan
 
 if ($PauseAtEnd) {
     [void](Read-Host 'Press Enter to close')

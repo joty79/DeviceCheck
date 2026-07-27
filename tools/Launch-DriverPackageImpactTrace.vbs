@@ -6,6 +6,7 @@ Dim fso
 Dim repoRoot
 Dim toolsRoot
 Dim traceScript
+Dim launchMode
 Dim extractionModeArguments
 Dim installerPath
 Dim launchProgram
@@ -22,10 +23,27 @@ Set appShell = CreateObject("Shell.Application")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
 installerPath = WScript.Arguments(0)
+launchMode = "TraceAdvisor"
+If WScript.Arguments.Count >= 2 Then
+    launchMode = WScript.Arguments(1)
+End If
 toolsRoot = fso.GetParentFolderName(WScript.ScriptFullName)
 repoRoot = fso.GetParentFolderName(toolsRoot)
 traceScript = fso.BuildPath(toolsRoot, "Trace-DriverPackageImpact.ps1")
-extractionModeArguments = " -ExtractionMode Safe -PromptForExtendedExtraction"
+
+Select Case LCase(launchMode)
+    Case "previewadvisor"
+        extractionModeArguments = " -ExtractionMode Safe -PromptForExtendedExtraction -PreviewOnly -LaunchAdvisor"
+    Case "traceadvisor"
+        extractionModeArguments = " -ExtractionMode Safe -PromptForExtendedExtraction -RunInstaller -LaunchAdvisor"
+    Case "previewonly"
+        extractionModeArguments = " -ExtractionMode Safe -PromptForExtendedExtraction -PreviewOnly"
+    Case "traceonly"
+        extractionModeArguments = " -ExtractionMode Safe -PromptForExtendedExtraction -RunInstaller"
+    Case Else
+        MsgBox "Unknown DeviceCheck driver trace mode: " & launchMode, vbExclamation, "DeviceCheck Driver Trace"
+        WScript.Quit 1
+End Select
 
 If Not fso.FileExists(traceScript) Then
     MsgBox "Trace-DriverPackageImpact.ps1 was not found:" & vbCrLf & traceScript, vbExclamation, "DeviceCheck Driver Trace"

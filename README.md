@@ -20,6 +20,7 @@
 | 🛠️ | **[DeviceCheck](#devicecheck-tui)** | Interactive text-based Device Manager interface |
 | 🔁 | **[Remote Evidence Export](#remote-evidence-export)** | Same-LAN WinRM collector for repeatable local/remote PC snapshots |
 | 🧬 | **[Hardware ID Foundation](#hardware-id-foundation)** | Migrated offline hardware ID database, resolver, INF evidence, and driver package metadata audit tools |
+| 🧪 | **[Driver Source Comparison Lab](#standalone-driver-source-comparison-lab)** | Fast local/OEM/SDIO comparison with optional WUAPI/Catalog and phase benchmarks |
 
 ---
 
@@ -83,7 +84,7 @@ $env:DEVICECHECK_TUI_PERF = '1'
 ### The Solution
 
 `internal\Export-DeviceCheckEvidence.ps1` collects system identity, present PnP devices, optional per-device properties, `pnputil` output, and monitor registry/WMI evidence from either the local host or a same-LAN WinRM target. Remote collection uses the pinned shared `WinRMConnection` module: TCP preflight, three bounded authenticated attempts, visible attempt/retry status, categorized failures, and one reused `PSSession` that is always removed after collection. `Connect-PaliosDeviceCheck.ps1` is a convenience wrapper for the known `PALIOS` desktop and writes snapshots under the DeviceCheck database root.
-Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. The selector shows active online saved connections for the current network, plus an `Offline Snapshots` submenu where offline PCs are grouped by saved network. Discovery combines active WS-Discovery probes (the same family of network-discovery signals Windows Explorer uses), Windows Explorer's Network computer namespace, local neighbor/cache/history IPs, reverse name lookup, TCP checks, and a short-budget computer-port sweep for SMB/RDP/WinRM-ready PCs that have not published through WS-Discovery yet. WS-Discovery metadata is used to recover computer names such as `DESKTOP-RUHR98M` even before WinRM is enabled. Discovered LAN hosts with WinRM open show as `(Online)`, SMB-only hosts show as `(WinRM Disabled)`, and WS-Discovery/Explorer/PC-port-confirmed computers with closed management ports show as `(Computer - mgmt closed)`. ARP/ping-only devices such as phones, cameras, TVs, and stale DHCP entries are not shown in the PC list; multicast/reserved neighbor entries such as `224.*` and `239.*` are filtered out, and tentative APIPA adapter prefixes such as `169.254.*` are ignored. This keeps one-time shop/customer PCs available as an offline evidence corpus without crowding the daily target list or requiring manual archiving. The offline library is populated from the portable DeviceCheck database root, which defaults to `.devicecheck-data` beside `DeviceCheck.ps1` and can be overridden with `DEVICECHECK_DATA_ROOT` or `DEVICECHECK_CACHE_ROOT`. Credentials and the browser profile remain local under `%LOCALAPPDATA%\DeviceCheck`. If the target PC is offline, DeviceCheck lets you load its cached snapshot in offline mode and dynamically disables live refresh (`R`) and archive capture (`F`). For online cached targets, `R` performs a quick snapshot refresh and `F` captures a slower full archive sample marked as `SnapshotMode = FullArchive` / `CapturePurpose = RepairShopSample`. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
+Inside the TUI, `Ctrl+L` prompts for a computer name/IP (or lists saved history/discovered PCs) and opens the existing `latest.json` snapshot immediately when one is available. The selector shows active online saved connections for the current network, plus an `Offline Snapshots` submenu where offline PCs are grouped by saved network. The discovery engine now comes from the pinned shared `.assets\WinRMDiscovery` module; DeviceCheck retains the app-specific selector, credentials, snapshots, and connection workflow. Discovery combines active WS-Discovery probes (the same family of network-discovery signals Windows Explorer uses), Windows Explorer's Network computer namespace, local neighbor/cache/history IPs, reverse name lookup, TCP checks, and a short-budget computer-port sweep for SMB/RDP/WinRM-ready PCs that have not published through WS-Discovery yet. WS-Discovery metadata is used to recover computer names such as `DESKTOP-RUHR98M` even before WinRM is enabled. Discovered LAN hosts with WinRM open show as `(Online)`, SMB-only hosts show as `(WinRM Disabled)`, and WS-Discovery/Explorer/PC-port-confirmed computers with closed management ports show as `(Computer - mgmt closed)`. ARP/ping-only devices such as phones, cameras, TVs, and stale DHCP entries are not shown in the PC list; multicast/reserved neighbor entries such as `224.*` and `239.*` are filtered out, and tentative APIPA adapter prefixes such as `169.254.*` are ignored. This keeps one-time shop/customer PCs available as an offline evidence corpus without crowding the daily target list or requiring manual archiving. The offline library is populated from the portable DeviceCheck database root, which defaults to `.devicecheck-data` beside `DeviceCheck.ps1` and can be overridden with `DEVICECHECK_DATA_ROOT` or `DEVICECHECK_CACHE_ROOT`. Credentials and the browser profile remain local under `%LOCALAPPDATA%\DeviceCheck`. If the target PC is offline, DeviceCheck lets you load its cached snapshot in offline mode and dynamically disables live refresh (`R`) and archive capture (`F`). For online cached targets, `R` performs a quick snapshot refresh and `F` captures a slower full archive sample marked as `SnapshotMode = FullArchive` / `CapturePurpose = RepairShopSample`. Type `local`, `.`, `localhost`, or the current computer name to switch back to the host. New remote logins use DeviceCheck's inline username/password prompts instead of PowerShell's separate credential dialog, and connection failures stay on the connect/refresh screen until you acknowledge them.
 
 ```text
 NEOS TUI -> Ctrl+L -> WinRM target -> collector snapshot -> remote device tree
@@ -254,10 +255,8 @@ cd DeviceCheck
 # The menu launches DeviceCheck elevated and uses assets\devicemanager.ico.
 .\Install-DeviceCheckContextMenu.ps1
 
-# Optional: add an .exe context menu entry for driver package impact tracing
-# The trace tool identifies/extracts supported packages, previews their INFs,
-# captures before/after driver evidence,
-# and writes report.md plus raw JSON under .devicecheck-data\driver-package-traces.
+# Optional: add the .exe "DeviceCheck driver tools" cascading context menu.
+# It exposes Safe preview / traced install, each with or without the Advisor.
 .\Install-DriverPackageTraceContextMenu.ps1
 
 # Remove the context menu entries
@@ -292,15 +291,79 @@ The driver installer tracer is intentionally separate from the main `DeviceCheck
 
 # Consolidate the latest outcome per installer and classify every trace-added INF
 .\tools\Get-DriverPackageTraceSummary.ps1
+
+# Reopen the package-filtered DeviceCheck-style topology for an existing trace
+.\tools\Show-DriverPackageView.ps1 -TraceFolder '.devicecheck-data\driver-package-traces\<trace-folder>'
 ```
 
-The Explorer `.exe` context-menu action uses `Safe` mode automatically. If Safe extraction discovers a nested InstallShield package but no INF files, it shows a `⚠️⚠️⚠️ SAFE EXTRACTION INCOMPLETE` prompt before offering `Extended` mode. Extended mode is allowed only when Detect It Easy identifies InstallShield and Sysinternals Strings proves both administrative-installation text and an embedded MSI name. It uses a short temporary administrative target to avoid legacy MSI path limits, then compares DriverStore, SetupAPI, and uninstall inventory before and after; any detected mutation stops the normal trace.
+The Explorer `.exe` context menu is a `DeviceCheck driver tools` folder with four modes: `Safe preview + Advisor`, `Trace install + Advisor`, `Safe preview only`, and `Trace install only`. Preview modes never execute the selected installer; trace-install modes pass explicit `-RunInstaller`. All modes use `Safe` extraction first. If Safe extraction discovers a nested InstallShield package but no INF files, it shows a `⚠️⚠️⚠️ SAFE EXTRACTION INCOMPLETE` prompt before offering `Extended` mode. Extended mode is allowed only when Detect It Easy identifies InstallShield and Sysinternals Strings proves both administrative-installation text and an embedded MSI name. It uses a short temporary administrative target to avoid legacy MSI path limits, then compares DriverStore, SetupAPI, and uninstall inventory before and after; any detected mutation stops the normal trace.
 
-Every run writes `extraction-manifest.json` with the source SHA-256/signature, detected engine, tool paths/versions, commands, exit codes, nested depth, cache provenance, payload counts, warnings, and Extended guard evidence. Extracted payloads are cached under `.devicecheck-data\driver-package-extractions\<sha256-prefix>` and reused only when the source hash and completed mode satisfy the request.
+Every run writes `extraction-manifest.json` with the source SHA-256/signature, detected engine, tool paths/versions, commands, exit codes, nested depth, cache provenance, payload counts, warnings, and Extended guard evidence. It also writes `package-topology.json`, which separates base/function bindings, Extension applications, component declarations, and component-driver bindings instead of treating every raw INF text match as an independent driver. Extracted payloads are cached under `.devicecheck-data\driver-package-extractions\<sha256-prefix>` and reused only when the source hash and completed mode satisfy the request.
+
+Advisor modes now open a standalone DeviceCheck-style filtered tree before per-device comparison. The left pane contains only present devices related to the extracted package; `[T]` marks stack targets/roots and `[C]` marks linked components. The right pane shows every applicable INF role, exact match evidence, ExtensionId, and stack-root relationship. `Enter` analyzes the selected device, `A` analyzes all matched devices, `Left/Right` switches tree/detail focus, and `Esc` cancels. This view remains separate from the main `DeviceCheck.ps1` TUI.
 
 Post-reboot audit writes `post-reboot-report.md` and `post-reboot.snapshot.json` inside the selected trace. The consolidated command writes `driver-trace-summary.md` and `driver-trace-summary.json` in the trace root. `Stored-only` means that an INF remains in the Driver Store but was not detected as the active function driver or as an installed Extension/configuration driver for the traced devices; it is not a deletion recommendation.
 
 For nested NSIS/Inno/InstallShield/MSI packages, tool routing, extraction commands, safety checks, and the real AMD Chipset Software comparison are documented in [Installer Analysis Toolkit](docs/INSTALLER_ANALYSIS_TOOLKIT.md).
+
+### Standalone Driver Source Comparison Lab
+
+`tools\Compare-DriverSources.ps1` is a separate audit-only prototype. Its fast default combines the live Windows driver binding, an existing OEM installer trace, and local SDIO evidence; WUAPI and public Catalog queries are opt-in. With `-AutoSdio`, it detects a valid SDIO root such as `E:\SDIO`, reuses a completed matcher log while it is newer than the active driver packs, or launches one guarded `-disableinstall -nogui` audit when needed. It never converts Catalog text-search results or SDIO scores into Windows rank evidence, and it remains outside the main DeviceCheck TUI.
+
+```powershell
+# Current RZ616 discovery: active Windows + WUAPI + public Catalog
+.\tools\Compare-DriverSources.ps1 `
+  -KnownActiveSource SDIO `
+  -IncludeWindowsUpdate -IncludeCatalog
+
+# Download and extract selected public Catalog CABs without staging/installing them
+.\tools\Inspect-CatalogDriverPackage.ps1 `
+  -Guid '566cb1be-0030-4174-970c-6b6c159a34f2','9990c2a8-cab4-48df-ae4b-d5bc9a209f97' `
+  -InspectionDirectory '.devicecheck-data\driver-catalog-inspections\RZ616-3.5.0.1392-25H2'
+
+# Add the existing Lenovo WLAN trace and an audit-only SDIO report
+.\tools\Compare-DriverSources.ps1 `
+  -KnownActiveSource SDIO `
+  -TraceFolder '.devicecheck-data\driver-package-traces\20260710-025152-WLAN Driver (Realtek, Mediatek)' `
+  -SdioReportPath "$env:LOCALAPPDATA\DeviceCheck\sdio-audit\reports\sdio-audit-<timestamp>.json" `
+  -CatalogInspectionManifest '.devicecheck-data\driver-catalog-inspections\RZ616-3.5.0.1392-25H2\inspection-manifest.json' `
+  -SelectionEvidencePath '.devicecheck-data\driver-selection-experiments\<experiment>\selection-evidence.json'
+
+# Fast default: no WUAPI/Catalog; local active/OEM/SDIO only
+.\tools\Compare-DriverSources.ps1 `
+  -InstanceId '<exact-instance-id>' `
+  -TraceFolder '.devicecheck-data\driver-package-traces\<trace-folder>' `
+  -AutoSdio -SdioRoot 'E:\SDIO'
+
+# Import a separately authorized controlled-activation experiment
+.\tools\Compare-DriverSources.ps1 `
+  -InstanceId 'PCI\VEN_10EC&DEV_522A&SUBSYS_522A10EC&REV_01\<instance>' `
+  -KnownActiveSource 'SDIO controlled activation' `
+  -SelectionEvidencePath '.devicecheck-data\driver-selection-experiments\<experiment>\selection-evidence.json'
+```
+
+Τα generated JSON και Markdown reports γράφονται στο `.devicecheck-data\driver-source-comparisons`. Το `NoCurrentWuOfferObserved` σημαίνει μόνο ότι το current WUAPI search δεν επέστρεψε target match. Το `CatalogDiscoveryOnly` σημαίνει ότι υπάρχουν public rows, αλλά δεν έχουν επαληθευτεί το INF applicability, το CHID targeting και το Windows PnP rank. Το ξεχωριστό inspection command χρησιμοποιεί MSCatalogLTS download links, επαληθεύει advertised SHA-1 και Authenticode status, κάνει extraction με το Windows `expand.exe`, αναλύει το πραγματικό INF και αποδεικνύει μέσω DriverStore/SetupAPI guards ότι δεν έγινε staging. Ένα computed rank body παραμένει strong inference μέχρι ένα ξεχωριστά εξουσιοδοτημένο selection experiment να δώσει observed `pnputil` evidence. Η εισαγωγή manifest δεν επαναλαμβάνει mutation: περιγράφει είτε `StageOnlyNoInstall` είτε `ControlledActivation` experiment και καταγράφει τα `/install`/`reboot` guards, το active binding, το device/network health, το loaded binary και το physical-media test boundary. Το πλήρες evidence/verdict contract βρίσκεται στο [Windows Driver Source Comparison Contract](docs/WINDOWS_DRIVER_SOURCE_COMPARISON_CONTRACT.md).
+
+Το fast local SDIO policy αντιστοιχεί σε `Newer + Better match + Show only best`: αγνοεί `Current`, `Older`, `Worse`, duplicates και invalid rows πριν από οποιοδήποτε archive inspection. Αν δεν υπάρχει best candidate με SDIO status `NEW` ή `BETTER`, επιστρέφει `NoNewerOrBetterCandidate`. Για eligible candidate διαχωρίζει πραγματικά `available` payloads από `index-only` rows. Διορθώνει truncated pack names μέσω suffix resolution και, μόνο όταν χρειάζεται, κάνει read-only 7-Zip fallback με exact Hardware ID και ίδιο INF `DriverVer`.
+
+Κάθε trace/comparison run γράφει structured benchmark phases. Το trace folder περιέχει `benchmark.json`, `advisor-benchmark.json` και timings μέσα στο `advisor-run.json`, ενώ κάθε comparison γράφει `driver-source-comparison-<timestamp>.benchmark.json`. Σε verified WLAN warm run, το preview μειώθηκε από `6.727s` σε `1.878s` επειδή το `PreviewOnly` δεν συλλέγει πλέον άχρηστο full-machine before snapshot. Το cached local/OEM/SDIO comparison μειώθηκε από `8.736s` σε περίπου `1.0–1.95s` με bulk PnP properties, optional signer lookup και machine-wide SDIO full-audit cache.
+
+### 🧩 Standalone Driver Package Advisor
+
+Το [Driver Package Advisor](docs/DRIVER_PACKAGE_ADVISOR.md) μετατρέπει τα comparison/trace JSON σε width-aware Windows Terminal UI με `Overview`, `Sources`, `Candidates`, `Evidence` και `Actions`. Το recommendation είναι explainable: εμφανίζει confidence, activation risk, positive/caution evidence και ό,τι παραμένει unverified.
+
+```powershell
+# Pretty UI για το τελευταίο report
+.\tools\Invoke-DriverPackageAdvisor.ps1
+
+# Static snapshot
+.\tools\Invoke-DriverPackageAdvisor.ps1 -ReportPath '<report.json>' -NoUI -PlainText -Width 88
+
+# Safe EXE preview → source comparison → Advisor
+.\tools\Trace-DriverPackageImpact.ps1 -InstallerPath 'D:\Downloads\Driver.exe' -PreviewOnly -LaunchAdvisor
+```
+
+Το Explorer `.exe` trace action περνά αυτόματα `-LaunchAdvisor` και ανοίγει πρώτα το package-filtered tree για ένα ή πολλά matched devices. Preview-only reruns μπορούν να επαναχρησιμοποιήσουν verified completed trace evidence για το ίδιο installer hash/device, ενώ η `Actions` view παραμένει non-mutating μέχρι να ολοκληρωθεί το ξεχωριστό execution safety gate.
 
 ### Requirements
 | Requirement | Details |
@@ -310,6 +373,7 @@ For nested NSIS/Inno/InstallShield/MSI packages, tool routing, extraction comman
 | **Terminal** | Windows Terminal (recommended for synchronized rendering) |
 | **Safe extraction tools** | Detect It Easy, 7-Zip, innoextract, and lessmsi; the report identifies a missing required adapter instead of guessing |
 | **Extended extraction evidence** | Sysinternals Strings plus an elevated, statically proven InstallShield administrative path |
+| **Catalog comparison** | The sibling `MSCatalogLTS` PowerShell module supplies public Catalog search/download metadata; Windows `expand.exe` performs CAB extraction |
 | **Agent browser retrieval** | Node.js and local Chrome are used by the agent when JavaScript-rendered OEM support pages block plain HTTP fetches |
 | **Database root** | Snapshots, history, hosts cache, machine evidence, agent checkpoints, traces, and tool-result cache are stored under `.devicecheck-data\` beside `DeviceCheck.ps1` by default |
 | **Local-only state** | DPAPI credential XML files and the browser profile stay under `%LOCALAPPDATA%\DeviceCheck\` for the Windows user/PC running DeviceCheck |
@@ -320,15 +384,22 @@ For nested NSIS/Inno/InstallShield/MSI packages, tool routing, extraction comman
 
 ```
 DeviceCheck/
+├── .assets/
+│   ├── WinRMConnection/                             # Pinned shared authenticated WinRM connector
+│   └── WinRMDiscovery/                              # Pinned shared LAN PC discovery module
 ├── assets/
 │   └── devicemanager.ico                            # Bundled Explorer context menu icon
+├── backups/
+│   └── context-menus-pre-clean-install-20260713/    # Verified HKCU menu exports and restore helper
 ├── data/
 │   └── google-ai-studio-rate-limits-only free.csv  # Local model quota reference
 ├── docs/
 │   ├── google-ai-studio-rate-limits-only-free.md   # Human-readable quota table
 │   ├── HARDWARE_SOURCE_INTAKE.md                   # Hardware/driver source intake notes
 │   ├── INSTALLER_ANALYSIS_TOOLKIT.md               # Installer identification/extraction tool routing and AMD case study
-│   └── LOCAL_SOURCE_PROJECT_AUDIT.md               # Local source repo audit and transfer decisions
+│   ├── DRIVER_PACKAGE_ADVISOR.md                    # Standalone WT UI, recommendation policy, cases, and usage
+│   ├── LOCAL_SOURCE_PROJECT_AUDIT.md               # Local source repo audit and transfer decisions
+│   └── WINDOWS_DRIVER_SOURCE_COMPARISON_CONTRACT.md # Verified PnP/WU/Catalog/SDIO evidence and verdict boundaries
 ├── internal/
 │   ├── DeviceCheck/                                  # Dot-sourced function groups used by DeviceCheck.ps1
 │   ├── Export-DeviceCheckEvidence.ps1              # Local/remote snapshot collector
@@ -343,8 +414,15 @@ DeviceCheck/
 │   │   ├── ExtractionGuard.ps1                     # DriverStore/SetupAPI/uninstall guard for execution-based extraction
 │   │   ├── PackageExtraction.ps1                   # Installer identification, tool routing, nested cache, and manifest engine
 │   │   └── TraceExtractionCoordinator.ps1          # Trace-facing extraction prompts, evidence persistence, and report rendering
+│   ├── DriverSourceComparison/                      # Modular evidence adapters, fast SDIO cache, and benchmark recorder
+│   ├── DriverAdvisor/                               # Recommendation, case replay, and Windows Terminal rendering
+│   ├── DriverPackageView/                           # Package topology and filtered DeviceCheck-style renderer
+│   ├── Compare-DriverSources.ps1                   # Standalone cross-source driver evidence coordinator
+│   ├── Invoke-DriverPackageAdvisor.ps1             # Pretty Advisor for one report/case
+│   ├── Invoke-DriverTraceAdvisor.ps1               # EXE trace → matched-device comparison orchestration
 │   ├── Fetch-RenderedPage.js                       # Chrome DevTools rendered-page fetch helper
 │   ├── Get-DriverPackageTraceSummary.ps1           # Consolidated live/applied/stored-only trace summary
+│   ├── Inspect-CatalogDriverPackage.ps1             # Download/extract/hash/signature/INF inspection without staging
 │   ├── Invoke-DriverPackagePostRebootAudit.ps1     # Read-only live-state audit for one completed trace
 │   ├── Launch-DriverPackageImpactTrace.vbs         # Elevated .exe context menu launcher for driver package tracing
 │   └── Trace-DriverPackageImpact.ps1               # Standalone driver installer preview/before-after trace prototype

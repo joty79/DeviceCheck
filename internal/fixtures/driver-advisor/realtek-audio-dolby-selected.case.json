@@ -1,0 +1,42 @@
+{
+  "SchemaVersion": 1,
+  "Name": "Realtek Audio package installs the selected Dolby APO software component",
+  "Report": {
+    "Target": {
+      "FriendlyName": "DolbyAPO SWC Device",
+      "Class": "AudioProcessingObject",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem23.inf",
+        "Version": "3.30704.742.0",
+        "Date": "2024-09-02"
+      }
+    },
+    "Sources": {
+      "OEMTrace": {
+        "Outcome": "ObservedSelectedPackageCandidate",
+        "TargetPackageNodes": [
+          {
+            "NodeKind": "Driver",
+            "Status": "Selected | Installed",
+            "PublishedName": "oem23.inf",
+            "OriginalName": "dax3_swc_aposvc.inf",
+            "DriverDate": "2024-09-02",
+            "DriverVersion": "3.30704.742.0",
+            "DriverRank": "00FF0000"
+          }
+        ]
+      }
+    },
+    "OverallVerdict": "EvidenceComparisonOnly"
+  },
+  "Expected": {
+    "Code": "KeepObservedSelectedPackageCandidate",
+    "RecommendedAction": "KeepCurrent",
+    "Confidence": "High",
+    "Risk": "Low"
+  }
+}

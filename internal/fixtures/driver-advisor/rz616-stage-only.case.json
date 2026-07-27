@@ -1,0 +1,64 @@
+{
+  "SchemaVersion": 1,
+  "Name": "RZ616 Catalog candidate wins stage-only ranking but activation is connectivity-sensitive",
+  "Report": {
+    "Target": {
+      "FriendlyName": "RZ616 Wi-Fi 6E 160MHz",
+      "Class": "Net",
+      "Status": "OK",
+      "ProblemCode": 0
+    },
+    "Active": {
+      "ActiveDriver": {
+        "PublishedInf": "oem60.inf",
+        "Version": "25.40.2.586",
+        "Date": "2026-01-30"
+      }
+    },
+    "Sources": {
+      "WindowsUpdate": {
+        "Outcome": "NoCurrentWuOfferObserved",
+        "MatchingOfferCount": 0
+      },
+      "CatalogPublic": {
+        "TotalRowCount": 25
+      },
+      "SelectionExperiment": {
+        "Mode": "StageOnlyNoInstall",
+        "NetworkGuard": {
+          "ActiveBindingUnchanged": true,
+          "AdapterStayedUp": true
+        },
+        "Cleanup": {
+          "RestoredBaselineCandidates": true
+        },
+        "Candidates": [
+          {
+            "PublishedInf": "oem11.inf",
+            "OriginalInf": "mtkwl6ex.inf",
+            "DriverVer": "2026-03-24 / 3.5.0.1392",
+            "Rank": "00FF0001",
+            "Status": "Best Ranked"
+          },
+          {
+            "PublishedInf": "oem60.inf",
+            "OriginalInf": "mtkwl6ex.inf",
+            "DriverVer": "2026-01-30 / 25.40.2.586",
+            "Rank": "00FF0001",
+            "Status": "Outranked / Installed"
+          }
+        ]
+      },
+      "OEMTrace": {
+        "Outcome": "ObservedOutrankedCandidate"
+      }
+    },
+    "OverallVerdict": "CatalogCandidateObservedBestRanked_ActiveUnchanged"
+  },
+  "Expected": {
+    "Code": "ControlledActivationRecommended",
+    "RecommendedAction": "ControlledActivation",
+    "Confidence": "High",
+    "Risk": "High"
+  }
+}

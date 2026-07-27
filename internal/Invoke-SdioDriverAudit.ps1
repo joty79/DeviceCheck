@@ -1,4 +1,8 @@
 #requires -version 5.1
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Best-effort local inventory probes intentionally tolerate unavailable CIM classes.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive audit summaries are intentionally host-facing; -AsJson remains pipeline-safe.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'New-* helpers create in-memory evidence objects and hashes only.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural helper names accurately describe returned evidence collections.')]
 [CmdletBinding()]
 param(
     [AllowEmptyString()]
@@ -35,6 +39,9 @@ param(
     [string]$MachineCacheRoot = '',
 
     [int]$TopCandidateCount = 8,
+
+    [ValidateRange(5, 300)]
+    [int]$RunTimeoutSeconds = 45,
 
     [switch]$AsJson
 )
@@ -550,7 +557,8 @@ function Invoke-SdioReadOnlyAuditRun {
         [string]$ExePath,
         [string]$DriverRoot,
         [string]$IndexDirectory,
-        [string]$RunRoot
+        [string]$RunRoot,
+        [int]$TimeoutSeconds
     )
 
     if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
@@ -584,7 +592,11 @@ function Invoke-SdioReadOnlyAuditRun {
     )
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $ExePath -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
+    $process = Start-Process -FilePath $ExePath -ArgumentList $arguments -PassThru -WindowStyle Hidden
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill($true) } catch { Write-Debug "Could not terminate timed-out SDIO process $($process.Id): $($_.Exception.Message)" }
+        throw "SDIO audit exceeded the $TimeoutSeconds second timeout. Close any open SDIO window and retry, or reuse a completed matcher log with -ExistingLog."
+    }
     $stopwatch.Stop()
 
     $logPath = Join-Path $logRoot 'log.txt'
@@ -697,7 +709,7 @@ if ($RunSdio) {
         }
     }
 
-    $runInfo = Invoke-SdioReadOnlyAuditRun -ExePath $SdioExe -DriverRoot $DriverPackRoot -IndexDirectory $IndexRoot -RunRoot $runRoot
+    $runInfo = Invoke-SdioReadOnlyAuditRun -ExePath $SdioExe -DriverRoot $DriverPackRoot -IndexDirectory $IndexRoot -RunRoot $runRoot -TimeoutSeconds $RunTimeoutSeconds
     $logPath = $runInfo.LogPath
     $source = 'SdioRun'
 }
