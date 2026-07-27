@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Routed remote evidence authentication through the pinned shared `WinRMConnection` module with TCP preflight, three bounded attempts, visible retry status, categorized failures, one reused session, and guaranteed cleanup.
 - Added automatic extractor orchestration to the standalone driver-package tracer while keeping the main DeviceCheck TUI untouched. The existing entry point now supports `None`, `Safe`, and guarded `Extended` modes, Detect It Easy routing, innoextract/7-Zip/lessmsi adapters, nested recursion, SHA-256 cache reuse, `extraction-manifest.json`, context-menu Safe defaults, statically proven InstallShield `/a`, short-path administrative staging, and DriverStore/SetupAPI/uninstall mutation guards.
 - Added PSScriptAnalyzer 1.25.0 to the local validation toolkit and used it on the touched tracer scripts; correctness findings for an automatic-variable parameter, empty catch blocks, and an unused cache-name variable were fixed, while intentional interactive `Write-Host` and internal evidence-write style warnings remain documented as non-errors.
 - Compared WiX 7.0.0 with WiX 3.14.1 using explicit per-command EULA acceptance. Both stop on the AMD InstallShield `ISDRMFile` table with exit `182` and extract the same stream counts, while both successfully decompile a control WiX MSI; the toolkit now records the EULA boundary and the evidence-based result.

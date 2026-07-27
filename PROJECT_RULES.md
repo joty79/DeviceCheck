@@ -2,6 +2,20 @@
 
 This repository contains `DeviceCheck.ps1`, an interactive, flicker-free PowerShell TUI for checking connected hardware devices and querying local databases and AI APIs (Gemini, OpenRouter) for details.
 
+## 🔵 Shared WinRM Connection
+
+- Canonical authenticated connection code is owned by `.agent-shared\modules\WinRMConnection`; DeviceCheck consumes its pinned `.assets\WinRMConnection` copy.
+- Treat open TCP 5985 as transport evidence, not proof that authentication works. Show each bounded attempt and the final category instead of leaving the user at a silent screen.
+- Reuse one successful `PSSession` for the full snapshot and always remove it. A completed DeviceCheck snapshot is evidence of a successful earlier session, not a session kept open for the next tool.
+
+### 2026-07-27 — Bounded authenticated connection
+
+- **Problem:** A target could be visible and have TCP 5985 open, yet a later diagnostic agent could wait several minutes before reporting a generic WinRM failure.
+- **Root cause:** Discovery was shared, but authenticated session opening, timeout budgets, retry policy, error classification, and progress reporting were still ad hoc.
+- **Guardrail:** Use the pinned `WinRMConnection` module. Retry only transient connection opening, stop immediately for credentials/TrustedHosts/configuration failures, never automatically repeat a remote diagnostic script block, and close the one reused session in `finally`.
+- **Files affected:** `.assets\WinRMConnection\*`, `internal\Export-DeviceCheckEvidence.ps1`, `internal\Test-WinRMConnectionIntegration.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+- **Validation:** Module parser/manifest and PS7/Windows PowerShell 5.1 offline suites passed; DeviceCheck integration and structure tests passed; elevated localhost authenticated smoke connected on attempt 1. The departed customer PC was unavailable for a live target retest.
+
 ## 🔵 PowerShell Runspace Guidelines
 
 🔸 **Disable Progress Reporting:**

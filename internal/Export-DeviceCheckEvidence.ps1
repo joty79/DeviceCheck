@@ -26,9 +26,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:CollectorVersion = '0.1.0'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$winRMConnectionManifest = Join-Path -Path $repoRoot -ChildPath '.assets\WinRMConnection\WinRMConnection.psd1'
+if (-not (Test-Path -LiteralPath $winRMConnectionManifest -PathType Leaf)) {
+    throw "WinRMConnection module not found: $winRMConnectionManifest"
+}
+Import-Module -Name $winRMConnectionManifest -Force -ErrorAction Stop
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $repoRoot = Split-Path -Parent $PSScriptRoot
     $overrideRoot = @($env:DEVICECHECK_CACHE_ROOT, $env:DEVICECHECK_DATA_ROOT) |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         Select-Object -First 1
@@ -888,16 +893,11 @@ if ($isLocal) {
     $snapshot = & $collector $ComputerName ([bool]$Quick) $script:CollectorVersion
 } else {
     Write-Verbose "Connecting to target PC $ComputerName via WinRM..."
-    $sessionOption = New-PSSessionOption -OpenTimeout 15000 -OperationTimeout 15000
-    $sessionParams = @{
-        ComputerName  = $ComputerName
-        SessionOption = $sessionOption
-        ErrorAction   = 'Stop'
+    $connectionStatus = {
+        param($status)
+        Write-Verbose $status.Message
     }
-    if ($null -ne $Credential) {
-        $sessionParams.Credential = $Credential
-    }
-    $session = New-PSSession @sessionParams
+    $session = Connect-WinRMSession -ComputerName $ComputerName -Credential $Credential -OnStatus $connectionStatus
 
     try {
         Write-Verbose "Remote: Collecting system identification..."
