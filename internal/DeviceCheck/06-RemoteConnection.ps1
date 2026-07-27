@@ -50,6 +50,7 @@ function Read-TuiLine {
 }
 
 function New-DeviceCheckCredentialFromPrompt {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification = 'The custom masked TUI returns the already-entered password as a transient in-memory string; it is converted immediately and is never logged or persisted.')]
     param(
         [Parameter(Mandatory)][string]$ComputerName,
         [string]$DefaultUserName
@@ -107,7 +108,7 @@ function New-DeviceCheckCredentialFromPrompt {
     } else {
         ConvertTo-SecureString $passwordStr -AsPlainText -Force
     })
-    return [System.Management.Automation.PSCredential]::new($userName, $password)
+    $password.MakeReadOnly(); return [System.Management.Automation.PSCredential]::new($userName, $password)
 }
 
 function Show-RemoteSnapshotCollectionScreen {
@@ -358,6 +359,8 @@ function Get-CurrentNetworkIdentity {
 }
 
 function Get-DeviceCheckDiscoveredHosts {
+    if ($null -ne (Get-Command -Name 'Find-WinRMComputer' -ErrorAction SilentlyContinue)) { return @(Find-WinRMComputer -StateRoot $script:DeviceCheckCacheRoot -IncludeDiagnostics:$script:BenchmarkMode) }
+
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
 
     $discovered = [System.Collections.Generic.List[object]]::new()

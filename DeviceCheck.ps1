@@ -58,6 +58,13 @@ $script:BenchmarkMode = $false
 $script:LastNetworkScanResult = $null
 $script:ScriptStartTime = Get-Date
 
+# Prefer the shared, vendored discovery engine. The project-local legacy
+# implementation remains available as a safe fallback during migration.
+$winRmDiscoveryManifest = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath '.assets\WinRMDiscovery\WinRMDiscovery.psd1'
+if (Test-Path -LiteralPath $winRmDiscoveryManifest -PathType Leaf) {
+    Import-Module -Name $winRmDiscoveryManifest -Force -ErrorAction Stop
+}
+
 # Load DeviceCheck function groups. These are dot-sourced so existing script-scope state stays shared.
 $deviceCheckModuleRoot = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\DeviceCheck'
 $deviceCheckModuleFiles = @(
@@ -217,7 +224,7 @@ try {
         $swKey = [System.Diagnostics.Stopwatch]::StartNew()
         $key = Read-ConsoleKey
         $keyReadMs = $swKey.Elapsed.TotalMilliseconds
-        
+
         if ($null -eq $key -or -not $key.PSObject.Properties['Key']) {
             Start-Sleep -Milliseconds 50
             continue
@@ -432,7 +439,7 @@ finally {
     if ($null -ne $script:EvidenceBatchQueuedIds) { $script:EvidenceBatchQueuedIds.Clear() }
     # Restore Host Settings
     Restore-TuiHost
-    
+
     # Save TUI benchmark log
     if ($script:BenchmarkLog -and $script:BenchmarkLog.Count -gt 0) {
         $benchmarkFile = Join-Path -Path $PSScriptRoot -ChildPath 'tui_benchmark.log'
