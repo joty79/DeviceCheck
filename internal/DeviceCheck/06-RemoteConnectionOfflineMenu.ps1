@@ -671,6 +671,18 @@ function Get-DeviceCheckOfflineMenuItemLineCount {
     return 1
 }
 
+function Get-DeviceCheckOfflineMenuVisibleLineBudget {
+    param([int]$WindowHeight)
+
+    # The selector frame has 11 fixed physical lines: six banner lines, one
+    # spacer, the above/below indicators, one footer spacer, and the footer.
+    # Keep one additional terminal row unused because every frame line ends in
+    # a newline; advancing from the bottom row would scroll the whole viewport.
+    $frameHeightBudget = [Math]::Max(1, $WindowHeight - 1)
+    $fixedFrameLines = 11
+    return [Math]::Max(1, $frameHeightBudget - $fixedFrameLines)
+}
+
 function Invoke-OfflineSnapshotSelector {
     param(
         [Parameter(Mandatory)]$NetworkInfo,
@@ -755,7 +767,8 @@ function Invoke-OfflineSnapshotSelector {
             }
         }
 
-        try { $maxVisibleLines = [Math]::Max(3, $Host.UI.RawUI.WindowSize.Height - 10) } catch { $maxVisibleLines = 10 }
+        try { $windowHeight = $Host.UI.RawUI.WindowSize.Height } catch { $windowHeight = 22 }
+        $maxVisibleLines = Get-DeviceCheckOfflineMenuVisibleLineBudget -WindowHeight $windowHeight
         $viewTop = [Math]::Max(0, $selectedIndex)
         while ($viewTop -gt 0) {
             $lineSpan = 0
