@@ -10,6 +10,21 @@ $blueprintPath = Join-Path -Path $PSScriptRoot -ChildPath 'PS_UI_Blueprint.psm1'
 if (-not (Test-Path -LiteralPath $blueprintPath)) {
     throw "Required UI Blueprint not found at: $blueprintPath"
 }
+$blueprintReceiptPath = Join-Path -Path $PSScriptRoot -ChildPath 'PS_UI_Blueprint.sha256'
+if (-not (Test-Path -LiteralPath $blueprintReceiptPath -PathType Leaf)) {
+    throw "Required UI Blueprint hash receipt not found at: $blueprintReceiptPath"
+}
+$expectedBlueprintHash = (Get-Content -Raw -LiteralPath $blueprintReceiptPath).Trim()
+$actualBlueprintHash = (Get-FileHash -LiteralPath $blueprintPath -Algorithm SHA256).Hash
+if ($actualBlueprintHash -ne $expectedBlueprintHash) {
+    throw "UI Blueprint drift detected. Expected=$expectedBlueprintHash Actual=$actualBlueprintHash"
+}
+# DeviceCheck deliberately retains the primary buffer because its long-lived
+# dashboard workflow has shown unstable ConPTY window math in alternate-screen mode.
+# An explicit caller value (including 0) remains an advanced override.
+if ([string]::IsNullOrWhiteSpace($env:POWERSHELL_TUI_PRIMARY_BUFFER)) {
+    $script:TuiPrimaryBufferModeOverride = $true
+}
 Invoke-Expression (Get-Content -LiteralPath $blueprintPath -Raw)
 
 # Initialize Host Settings

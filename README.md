@@ -437,7 +437,8 @@ DeviceCheck/
 ├── Install-DriverPackageTraceContextMenu.ps1 # Current-user .exe driver trace context menu installer
 ├── Launch-DeviceCheck.vbs  # Elevated context menu launcher for Windows Terminal / PowerShell
 ├── PROJECT_RULES.md        # Project-specific implementation memory
-├── PS_UI_Blueprint.psm1    # TUI synchronized rendering engine
+├── PS_UI_Blueprint.psm1    # Vendored canonical TUI rendering engine
+├── PS_UI_Blueprint.sha256  # Exact canonical-source hash receipt
 ├── README.md               # You are here
 └── CHANGELOG.md            # Project version history
 ```

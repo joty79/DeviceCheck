@@ -55,12 +55,24 @@ This prevents parser interruption from skipping the null assignment and creating
 
 ## 🔵 TUI Rendering Guidelines
 
+- Canonical reusable TUI mechanics are owned by `.agent-shared\templates\PS_UI_Blueprint.psm1`. DeviceCheck ships an exact vendored `PS_UI_Blueprint.psm1` plus `PS_UI_Blueprint.sha256` so customer/store PCs remain portable; never edit the vendored module directly.
+- DeviceCheck's project adapter is intentionally small: `DeviceCheck.ps1` verifies the receipt and sets the script-scoped `TuiPrimaryBufferModeOverride` when the caller did not provide an explicit `POWERSHELL_TUI_PRIMARY_BUFFER` override. Screen-specific state/layout remains inside DeviceCheck and no environment mutation leaks into the caller's PowerShell process.
+- Every vendored update must pass the DeviceCheck-specific sequential VT replay `120 -> 101 -> 100 -> 99 -> 98 -> 80 -> 60 -> 120`, preserving raw CRLF terminal bytes and rejecting wraps, scrolls, duplicate headers, or stale selection rows.
+
 🔸 **Synchronized Rendering:**
 Wrap TUI frame redraws inside Windows Terminal synchronized output sequences (`Begin-SyncRender` and `End-SyncRender`) to prevent frame tearing and flicker.
 
 🔸 **Color Tagging:**
 Highlight model name tags dynamically in the tree.
 Use `$_C.Info` (Blue) for Gemini models and `$_C.OK` (Green) for Nvidia/OpenRouter models.
+
+### 2026-07-28 — Canonical vendored TUI consumer
+
+- **Problem:** DeviceCheck carried an active primary-buffer fork of the shared blueprint, so general fixes such as resize-before-pending-key could drift even though the project appeared to use the common TUI pattern.
+- **Root cause:** Portability required a local file, but there was no hash receipt or sync contract separating reusable renderer mechanics from DeviceCheck's host-mode choice.
+- **Guardrail:** Vendor the exact `.agent-shared` blueprint, verify `PS_UI_Blueprint.sha256` at startup/tests, keep primary-buffer selection in the thin DeviceCheck script-scoped adapter without mutating the caller environment, and update only through `Sync-AgentShared.ps1`.
+- **Files affected:** `.gitattributes`, `DeviceCheck.ps1`, `PS_UI_Blueprint.psm1`, `PS_UI_Blueprint.sha256`, `internal\Test-DeviceCheckOfflineMenu.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
+- **Validation:** All four remaining blueprint files matched SHA-256 `EBB85402F33AD2EBEA7C1BCF71BFA953237E88AF00C7B45777F93901822FB0AA`; startup/test receipt checks passed; raw-byte sequential `pyte` resize replay passed with zero wraps, scrolls, or stale frames in PowerShell 7 and Windows PowerShell 5.1; DeviceCheck structure guard passed in both hosts; parser, PSScriptAnalyzer error-severity, shared `-VerifyOnly`, diff and mixed-EOL checks passed.
 
 ---
 

@@ -14,11 +14,12 @@
       4) Cursor-home redraw for normal frames, gated full clear only when needed
       5) Responsive resize polling via KeyAvailable + Test-WindowResized
       6) Low-latency key polling around 10ms when render time is under 10ms
-      7) BufferSize = WindowSize, including width and height, to kill scrollback tearing
-      8) Primary buffer only; do NOT use the alternate screen buffer
-      9) UI width helpers must never report more columns than the real viewport
-     10) Height budgets may hide lower-priority panes/rows; never write past viewport
-     11) Do not batch arrow keys; keep one key -> one selection move -> one frame
+      7) BufferSize = WindowSize, including width and height, to reduce scrollback tearing
+      8) Fullscreen dashboards use the alternate screen buffer by default
+      9) Forced clears purge WT scrollback with ESC[3J unless explicitly disabled
+     10) UI width helpers must never report more columns than the real viewport
+     11) Height budgets may hide lower-priority panes/rows; never write past viewport
+     12) Do not batch arrow keys; keep one key -> one selection move -> one frame
 
     The important lesson is that for complex PowerShell TUIs in WT, "partial
     redraw" is not the canonical answer once resize/stretch correctness matters.
@@ -75,12 +76,33 @@ $script:LastWindowWidth = 0
 $script:LastWindowHeight = 0
 $script:RequestForceClear = $true
 $script:TuiBenchmarkLog = [System.Collections.Generic.List[string]]::new()
+$script:TuiAlternateScreenActive = $false
 
 function Test-UiEnvFlag {
     param([Parameter(Mandatory)][string]$Name)
 
     $value = [Environment]::GetEnvironmentVariable($Name)
     return (-not [string]::IsNullOrWhiteSpace($value) -and $value -notin @('0', 'false', 'False', 'FALSE', 'off', 'Off', 'OFF', 'no', 'No', 'NO'))
+}
+
+function Test-TuiKeepScrollback {
+    Test-UiEnvFlag -Name 'POWERSHELL_TUI_KEEP_SCROLLBACK'
+}
+
+function Test-TuiPrimaryBufferMode {
+    $scriptOverride = Get-Variable -Name 'TuiPrimaryBufferModeOverride' -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $scriptOverride) {
+        return [bool]$scriptOverride.Value
+    }
+    Test-UiEnvFlag -Name 'POWERSHELL_TUI_PRIMARY_BUFFER'
+}
+
+function Get-TuiForceClearSequence {
+    if (Test-TuiKeepScrollback) {
+        return "$_E[2J$_E[H"
+    }
+
+    return "$_E[3J$_E[2J$_E[H"
 }
 
 function Test-UiAsciiGlyphMode {
@@ -143,9 +165,14 @@ function End-SyncRender {
 
 function Initialize-TuiHost {
     try {
-        # Avoid alternate screen in PowerShell TUIs: ConPTY can freeze window math.
+        $prefix = ''
+        $script:TuiAlternateScreenActive = -not (Test-TuiPrimaryBufferMode)
+        if ($script:TuiAlternateScreenActive) {
+            $prefix = "$_E[?1049h"
+        }
+
         # Disable auto-wrap to reduce horizontal resize tearing.
-        [Console]::Write("$_E[?7l$_E[?25l")
+        [Console]::Write("$prefix$_E[?7l$_E[?25l$(Get-TuiForceClearSequence)")
     }
     catch {
     }
@@ -159,7 +186,13 @@ function Restore-TuiHost {
     }
 
     try {
-        [Console]::Write("$_E[?7h$_E[?25h")
+        $suffix = ''
+        if ($script:TuiAlternateScreenActive) {
+            $suffix = "$_E[?1049l"
+            $script:TuiAlternateScreenActive = $false
+        }
+
+        [Console]::Write("$_E[?7h$_E[?25h$suffix")
     }
     catch {
     }
@@ -332,7 +365,7 @@ function Write-UiFrame {
     $output = [System.Text.StringBuilder]::new()
     $null = $output.Append("$_E[?2026h")
     if ($shouldClear) {
-        $null = $output.Append("$_E[2J$_E[H")
+        $null = $output.Append((Get-TuiForceClearSequence))
     }
     else {
         $null = $output.Append("$_E[H")
@@ -350,7 +383,7 @@ function Move-UiCursorToFrameStart {
     $shouldClear = $ForceClear -or $script:RequestForceClear
     $script:RequestForceClear = $false
     if ($shouldClear) {
-        [Console]::Write("$_E[2J$_E[H")
+        [Console]::Write((Get-TuiForceClearSequence))
     }
     else {
         [Console]::Write("$_E[H")
@@ -531,6 +564,14 @@ function Read-ConsoleKey {
     try { [Console]::CursorVisible = $false } catch {}
 
     try {
+        if (Test-WindowResized) {
+            return [pscustomobject]@{
+                Key            = 'ResizeEvent'
+                KeyChar        = [char]0
+                VirtualKeyCode = 0
+            }
+        }
+
         while (-not [Console]::KeyAvailable) {
             if (Test-WindowResized) {
                 return [pscustomobject]@{

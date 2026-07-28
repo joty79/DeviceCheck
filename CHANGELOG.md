@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Replaced the active DeviceCheck TUI fork with an exact LF-normalized, hash-receipted vendored copy of the `.agent-shared` canonical blueprint while retaining DeviceCheck's proven primary-buffer mode as a thin script-scoped startup adapter that does not leak environment changes.
+- Expanded the Offline Snapshot virtual-terminal regression from one fixed `156x44` navigation case to a raw-byte sequential resize replay at `120 -> 101 -> 100 -> 99 -> 98 -> 80 -> 60 -> 120`, rejecting wraps, scrolls, duplicate headers, and stale selection rows.
 - Routed remote evidence authentication through the pinned shared `WinRMConnection` module with TCP preflight, three bounded attempts, visible retry status, categorized failures, one reused session, and guaranteed cleanup.
 - Hardened validation portability by rejecting the non-functional Microsoft Store `python.exe` alias, resolving the bundled Codex Python runtime when available, adding an explicit LF policy for PowerShell data manifests (`*.psd1`), and preserving UTF-16 Regedit exports byte-for-byte instead of applying text conversion.
 - Routed `Ctrl+L` PC discovery through the pinned shared `WinRMDiscovery` module while retaining the existing DeviceCheck selector, history root, snapshot, credential, and legacy fallback paths.
