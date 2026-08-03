@@ -103,12 +103,12 @@ function New-DeviceCheckCredentialFromPrompt {
     if ($null -eq $passwordStr) {
         throw "Connection cancelled by user."
     }
-    $password = $(if ([string]::IsNullOrEmpty($passwordStr)) {
-        [System.Security.SecureString]::new()
-    } else {
-        ConvertTo-SecureString $passwordStr -AsPlainText -Force
-    })
-    $password.MakeReadOnly(); return [System.Management.Automation.PSCredential]::new($userName, $password)
+    if ([string]::IsNullOrEmpty($passwordStr)) {
+        return New-WinRMBlankPasswordCredential -UserName $userName
+    }
+    $password = ConvertTo-SecureString $passwordStr -AsPlainText -Force
+    $password.MakeReadOnly()
+    return [System.Management.Automation.PSCredential]::new($userName, $password)
 }
 
 function Show-RemoteSnapshotCollectionScreen {
@@ -179,12 +179,16 @@ function Invoke-RemoteSnapshotCollectionScreen {
             Credential = $Credential
             Export     = $export
             Error      = $null
+            ErrorCategory = $null
         }
     } catch {
         $message = $_.Exception.Message
-        $credentialRejected = (-not [string]::IsNullOrWhiteSpace($message) -and $message -match '(?i)access is denied|logon failure|user name or password|username or password|credential|credentials')
+        $connectionCategory = Get-WinRMConnectionErrorCategory -ErrorObject $_
+        $credentialRejected = ($connectionCategory -eq 'AuthenticationRejected')
         $failedUserName = $(if ($null -ne $Credential) { $Credential.UserName } else { $DefaultUserName })
-        Remove-DeviceCheckStoredCredential -ComputerName $ComputerName
+        if ($credentialRejected) {
+            Remove-DeviceCheckStoredCredential -ComputerName $ComputerName
+        }
 
         $renderErrorBlock = {
             param()
@@ -257,6 +261,7 @@ function Invoke-RemoteSnapshotCollectionScreen {
             Credential = $Credential
             Export     = $null
             Error      = $message
+            ErrorCategory = $connectionCategory
         }
     }
     }
@@ -359,7 +364,16 @@ function Get-CurrentNetworkIdentity {
 }
 
 function Get-DeviceCheckDiscoveredHosts {
-    if ($null -ne (Get-Command -Name 'Find-WinRMComputer' -ErrorAction SilentlyContinue)) { return @(Find-WinRMComputer -StateRoot $script:DeviceCheckCacheRoot -IncludeDiagnostics:$script:BenchmarkMode) }
+    param([AllowEmptyString()][string]$NetworkId = '')
+
+    if ($null -ne (Get-Command -Name 'Find-WinRMComputer' -ErrorAction SilentlyContinue)) {
+        $discoveryParameters = @{
+            StateRoot         = $script:DeviceCheckCacheRoot
+            IncludeDiagnostics = [bool]$script:BenchmarkMode
+        }
+        if (-not [string]::IsNullOrWhiteSpace($NetworkId)) { $discoveryParameters.NetworkId = $NetworkId }
+        return @(Find-WinRMComputer @discoveryParameters)
+    }
 
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -917,96 +931,6 @@ function Get-DeviceCheckDiscoveredHosts {
     return $discovered
 }
 
-function Get-DeviceCheckConnectionHistory {
-    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'connection-history.json'
-    if (Test-Path -LiteralPath $path -PathType Leaf) {
-        try {
-            $history = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
-            if ($history -is [Array]) {
-                return [System.Collections.Generic.List[object]]::new($history)
-            } else {
-                return [System.Collections.Generic.List[object]]::new(@($history))
-            }
-        } catch {}
-    }
-    return [System.Collections.Generic.List[object]]::new()
-}
-
-function Save-DeviceCheckConnectionHistory {
-    param([Parameter(Mandatory)]$History)
-    $path = Join-Path -Path $script:DeviceCheckCacheRoot -ChildPath 'connection-history.json'
-    try {
-        $json = $History | ConvertTo-Json -Depth 4
-        $json | Set-Content -LiteralPath $path -Encoding UTF8
-    } catch {}
-}
-
-function Add-DeviceCheckConnectionHistoryEntry {
-    param(
-        [string]$ComputerName,
-        [string]$LastIPAddress,
-        [string]$MACAddress,
-        [string]$UserName,
-        [string]$NetworkId
-    )
-
-    if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
-    if (-not (Test-DeviceCheckIPv4Address -Address $LastIPAddress)) {
-        $LastIPAddress = $null
-    }
-
-    $historyList = Get-DeviceCheckConnectionHistory
-    $history = [System.Collections.Generic.List[object]]::new()
-    if ($null -ne $historyList) {
-        foreach ($item in @($historyList)) {
-            $history.Add($item)
-        }
-    }
-
-    $existing = $null
-    foreach ($entry in $history) {
-        if ($entry.NetworkId -eq $NetworkId) {
-            if ($entry.ComputerName.ToLower() -eq $ComputerName.ToLower()) {
-                $existing = $entry
-                break
-            }
-            if ($entry.ComputerName -match '^\d+\.\d+\.\d+\.\d+$' -and ($entry.ComputerName -eq $LastIPAddress -or $entry.LastIPAddress -eq $LastIPAddress)) {
-                $existing = $entry
-                break
-            }
-        }
-    }
-
-    if ($null -ne $existing) {
-        if ($existing.ComputerName -match '^\d+\.\d+\.\d+\.\d+$' -and $ComputerName -notmatch '^\d+\.\d+\.\d+\.\d+$') {
-            $existing.ComputerName = $ComputerName
-        }
-        if (-not [string]::IsNullOrWhiteSpace($LastIPAddress)) {
-            $existing.LastIPAddress = $LastIPAddress
-        }
-        if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
-            $existing.MACAddress = $MACAddress
-        }
-        $existing.UserName = $UserName
-        $existing.LastConnected = (Get-Date).ToString('o')
-    } else {
-        $newEntry = [PSCustomObject]@{
-            ComputerName    = $ComputerName
-            LastIPAddress   = $LastIPAddress
-            MACAddress      = $(if ([string]::IsNullOrWhiteSpace($MACAddress)) { 'Unknown' } else { $MACAddress })
-            UserName        = $UserName
-            NetworkId       = $NetworkId
-            LastConnected   = (Get-Date).ToString('o')
-        }
-        $history.Add($newEntry)
-    }
-
-    $sortedHistory = [System.Collections.Generic.List[object]]::new(
-        @($history | Sort-Object { [DateTime]$_.LastConnected } -Descending)
-    )
-    Save-DeviceCheckConnectionHistory -History $sortedHistory
-}
-
 function Get-DeviceCheckNetworkLabel {
     param([string]$NetworkId)
 
@@ -1136,92 +1060,65 @@ function Get-DeviceCheckIPv4Addresses {
     }
 }
 
-function Resolve-HistoryTargetAddress {
-    param(
-        [string]$ComputerName,
-        [string]$LastIPAddress,
-        [string]$MACAddress
+function ConvertTo-DeviceCheckCatalogDiscoveredHosts {
+    param([AllowNull()]$Catalog)
+
+    if ($null -eq $Catalog) { return @() }
+    return @(
+        @($Catalog.Targets) |
+            Where-Object { $_.HasDiscoverySnapshot } |
+            ForEach-Object {
+                [PSCustomObject]@{
+                    HostName     = $_.ComputerName
+                    IP           = $_.IPAddress
+                    MAC          = $_.MACAddress
+                    WinRmOpen    = [bool]$_.WinRMHttpOpen
+                    SmbOpen      = [bool]$_.SMBOpen
+                    DetectedOnly = [bool]$_.DetectedOnly
+                    Status       = $_.CachedStatus
+                }
+            }
     )
+}
 
-    Write-Verbose "Resolving address for target $ComputerName..."
+function Get-DeviceCheckTargetStatusPresentation {
+    param([Parameter(Mandatory)]$Item)
 
-    # 1. Try to resolve the hostname directly via DNS/LLMNR
-    try {
-        $ips = [System.Net.Dns]::GetHostAddresses($ComputerName)
-        foreach ($resolvedIp in @(Get-DeviceCheckIPv4Addresses -Addresses $ips)) {
-            if (Test-PortOpen -ComputerName $resolvedIp -Port 5985) {
-                return $resolvedIp
-            }
-        }
-    } catch {}
-
-    try {
-        $resolved = Resolve-DnsName -Name $ComputerName -ErrorAction SilentlyContinue
-        if ($resolved) {
-            foreach ($r in $resolved) {
-                foreach ($resolvedIp in @(Get-DeviceCheckIPv4Addresses -Addresses $r.IPAddress)) {
-                    if (Test-PortOpen -ComputerName $resolvedIp -Port 5985) {
-                        return $resolvedIp
-                    }
-                }
-            }
-        }
-    } catch {}
-
-    # 2. Check local ARP cache
-    if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
-        $normMAC = $MACAddress.Replace(':', '-').ToUpper()
-        $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object {
-                $nMac = $_.LinkLayerAddress
-                if ($nMac) { $nMac = $nMac.Replace(':', '-').ToUpper() }
-                $nMac -eq $normMAC -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet'
-            }
-        if ($neighbors) {
-            $arpIp = $neighbors[0].IPAddress
-            if ((Test-DeviceCheckIPv4Address -Address $arpIp) -and (Test-PortOpen -ComputerName $arpIp -Port 5985)) {
-                return $arpIp
-            }
-        }
+    $validationStatus = ''
+    if ($null -ne $Item.PSObject.Properties['ValidationStatus']) {
+        $validationStatus = [string]$Item.ValidationStatus
     }
 
-    # 3. Fallback to last known IP
-    if (-not [string]::IsNullOrWhiteSpace($LastIPAddress)) {
-        if (-not (Test-DeviceCheckIPv4Address -Address $LastIPAddress)) {
-            return $null
-        }
-
-        if (Test-PortOpen -ComputerName $LastIPAddress -Port 5985) {
-            # If MACAddress is known, verify the MAC of $LastIPAddress matches
-            if (-not [string]::IsNullOrWhiteSpace($MACAddress) -and $MACAddress -ne 'Unknown') {
-                $neighbor = Get-NetNeighbor -IPAddress $LastIPAddress -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($neighbor -and $neighbor.LinkLayerAddress) {
-                    $foundMac = $neighbor.LinkLayerAddress.Replace(':', '-').ToUpper()
-                    $normMac = $MACAddress.Replace(':', '-').ToUpper()
-                    if ($foundMac -ne $normMac) {
-                        Write-Verbose "MAC mismatch for fallback IP $LastIPAddress (expected $normMac, got $foundMac). Skipping."
-                        return $null
-                    }
-                }
-            }
-            return $LastIPAddress
-        }
+    if ($validationStatus -eq 'NotChecked') {
+        return [PSCustomObject]@{ Kind = 'NotChecked'; Label = 'Not checked' }
+    }
+    if (-not [bool]$Item.IsOnline) {
+        return [PSCustomObject]@{ Kind = 'Offline'; Label = 'Offline' }
+    }
+    if ([bool]$Item.WinRmOpen) {
+        return [PSCustomObject]@{ Kind = 'Online'; Label = 'Online' }
     }
 
-    return $null
+    $detectedOnly = $false
+    if ($null -ne $Item.PSObject.Properties['DetectedOnly']) {
+        $detectedOnly = [bool]$Item.DetectedOnly
+    }
+    if ($detectedOnly) {
+        return [PSCustomObject]@{ Kind = 'DetectedOnly'; Label = 'Computer - mgmt closed' }
+    }
+    return [PSCustomObject]@{ Kind = 'WinRMDisabled'; Label = 'WinRM Disabled' }
 }
 
 function Invoke-ConnectionHistorySelector {
     param(
         [Parameter(Mandatory)]$NetworkInfo,
-        $DiscoveredHosts = @()
+        [AllowNull()]$Catalog = $null
     )
 
-    if ($null -eq $DiscoveredHosts) {
-        $DiscoveredHosts = @()
+    if ($null -eq $Catalog) {
+        $Catalog = Get-WinRMTargetCatalog -NetworkId $NetworkInfo.NetworkId -IncludeDiagnostics:$script:BenchmarkMode
     }
-
-    $currentDiscovered = $DiscoveredHosts
+    $currentDiscovered = @(ConvertTo-DeviceCheckCatalogDiscoveredHosts -Catalog $Catalog)
 
     $networkId = $NetworkInfo.NetworkId
     $networkName = $NetworkInfo.ProfileName
@@ -1255,7 +1152,6 @@ function Invoke-ConnectionHistorySelector {
                         $filteredHistory.Add($entry)
                     }
                 }
-                $offlineEntries = @(Get-DeviceCheckOfflineMenuEntries -AllHistory $allHistory -CurrentDiscovered $currentDiscovered -CurrentNetworkId $networkId)
                 if ($script:BenchmarkMode) {
                     $logLines = $script:LastNetworkScanResult
                     if ($null -eq $logLines -or $logLines.Count -eq 0) {
@@ -1279,34 +1175,43 @@ function Invoke-ConnectionHistorySelector {
             # Measure Render
             $swRender = [System.Diagnostics.Stopwatch]::StartNew()
             $items = [System.Collections.Generic.List[object]]::new()
+            $hasFreshDiscoverySnapshot = $false
+            if ($null -ne $Catalog -and $null -ne $Catalog.PSObject.Properties['SnapshotCapturedAtUtc']) {
+                $hasFreshDiscoverySnapshot = -not [string]::IsNullOrWhiteSpace([string]$Catalog.SnapshotCapturedAtUtc)
+            }
 
-            # Section 1: Saved Connections
+            # Section 1: Saved Connections. Loading this section is local-only;
+            # the selected row is validated later by Resolve-WinRMHistoryTargetAddress.
             $items.Add([PSCustomObject]@{
                 Type       = 'Header'
-                Text       = "$($_C.Bold)$($_C.Info)Saved Connections (Active)$($_C.Reset)"
+                Text       = "$($_C.Bold)$($_C.Info)Saved Connections$($_C.Reset)"
                 Selectable = $false
             })
 
             $savedCount = 0
             foreach ($entry in $filteredHistory) {
-                $online = Test-DeviceCheckHistoryEntryOnline -Entry $entry -DiscoveredHosts $currentDiscovered -CurrentNetworkId $networkId
-                if (-not $online.IsOnline) {
-                    continue
-                }
-
                 $savedCount++
-                $onlineText = $(if ($online.WinRmOpen) { " (Online)" } else { " (WinRM Disabled)" })
-                $displayText = "$($entry.ComputerName) ($($online.ResolvedIP)) - user: $($entry.UserName)$onlineText"
+                $discoveryState = Test-DeviceCheckHistoryEntryOnline -Entry $entry -DiscoveredHosts $currentDiscovered -CurrentNetworkId $networkId
+                $displayIP = $(if ($hasFreshDiscoverySnapshot -and (Test-DeviceCheckIPv4Address -Address $discoveryState.ResolvedIP)) {
+                        $discoveryState.ResolvedIP
+                    } elseif (Test-DeviceCheckIPv4Address -Address $entry.LastIPAddress) {
+                        $entry.LastIPAddress
+                    } else {
+                        'address unknown'
+                    })
+                $validationStatus = $(if ($hasFreshDiscoverySnapshot) { 'CachedDiscovery' } else { 'NotChecked' })
+                $displayText = "$($entry.ComputerName) ($displayIP) - user: $($entry.UserName)"
 
                 $items.Add([PSCustomObject]@{
                     Type          = 'Saved'
                     Text          = $displayText
                     Selectable    = $true
                     Data          = $entry
-                    IsOnline      = $true
-                    WinRmOpen     = $online.WinRmOpen
+                    IsOnline      = $(if ($hasFreshDiscoverySnapshot) { [bool]$discoveryState.IsOnline } else { $false })
+                    WinRmOpen     = $(if ($hasFreshDiscoverySnapshot) { [bool]$discoveryState.WinRmOpen } else { $false })
                     DetectedOnly  = $false
-                    ResolvedIP    = $online.ResolvedIP
+                    ResolvedIP    = $displayIP
+                    ValidationStatus = $validationStatus
                     Source        = 'History'
                     SourceNetwork = Get-DeviceCheckNetworkLabel -NetworkId $entry.NetworkId
                 })
@@ -1315,7 +1220,7 @@ function Invoke-ConnectionHistorySelector {
             if ($savedCount -eq 0) {
                 $items.Add([PSCustomObject]@{
                     Type       = 'Placeholder'
-                    Text       = "  $($_C.Dim)(No active saved connections on this network)$($_C.Reset)"
+                    Text       = "  $($_C.Dim)(No saved connections on this network)$($_C.Reset)"
                     Selectable = $false
                 })
             }
@@ -1333,28 +1238,15 @@ function Invoke-ConnectionHistorySelector {
                 Selectable = $false
             })
 
-            # Using cached $offlineEntries
-            if ($offlineEntries.Count -gt 0) {
-                $offlineNetworkCount = @($offlineEntries | Group-Object NetworkLabel).Count
-                $offlineSnapshotCount = @($offlineEntries | Where-Object { $_.HasSnapshot }).Count
-                $offlineHistoryOnlyCount = @($offlineEntries | Where-Object { -not $_.HasSnapshot }).Count
-                $historyOnlyText = $(if ($offlineHistoryOnlyCount -gt 0) { ", $offlineHistoryOnlyCount no snapshot" } else { "" })
-                $items.Add([PSCustomObject]@{
-                    Type          = 'OfflineLibrary'
-                    Text          = "[Offline Snapshots...] - $($offlineEntries.Count) pcs / $offlineNetworkCount networks / $offlineSnapshotCount snapshots$historyOnlyText"
-                    Selectable    = $true
-                    IsOnline      = $false
-                    WinRmOpen     = $false
-                    Data          = $null
-                    Source        = 'Library'
-                })
-            } else {
-                $items.Add([PSCustomObject]@{
-                    Type       = 'Placeholder'
-                    Text       = "  $($_C.Dim)(No offline snapshots or offline history targets found)$($_C.Reset)"
-                    Selectable = $false
-                })
-            }
+            $items.Add([PSCustomObject]@{
+                Type          = 'OfflineLibrary'
+                Text          = '[Offline Snapshots...]'
+                Selectable    = $true
+                IsOnline      = $false
+                WinRmOpen     = $false
+                Data          = $null
+                Source        = 'Library'
+            })
 
             $items.Add([PSCustomObject]@{
                 Type       = 'Separator'
@@ -1362,10 +1254,10 @@ function Invoke-ConnectionHistorySelector {
                 Selectable = $false
             })
 
-            # Section 3: Discovered PCs
+            # Section 3: short-lived results from the last explicit scan.
             $items.Add([PSCustomObject]@{
                 Type       = 'Header'
-                Text       = "$($_C.Bold)$($_C.Info)Discovered PCs on Network$($_C.Reset)"
+                Text       = "$($_C.Bold)$($_C.Info)Recent Discovery Snapshot$($_C.Reset)"
                 Selectable = $false
             })
 
@@ -1409,9 +1301,17 @@ function Invoke-ConnectionHistorySelector {
             }
 
             if ($discoveredCount -eq 0) {
+                $snapshotSummary = $(if (-not $hasFreshDiscoverySnapshot) {
+                        'No fresh scan snapshot. Choose Scan network now.'
+                    } elseif ($currentDiscovered.Count -gt 0) {
+                        $targetWord = $(if ($currentDiscovered.Count -eq 1) { 'PC is' } else { 'PCs are' })
+                        "Fresh scan found $($currentDiscovered.Count) $targetWord already listed under Saved Connections."
+                    } else {
+                        'Fresh scan completed; no PCs detected.'
+                    })
                 $items.Add([PSCustomObject]@{
                     Type       = 'Placeholder'
-                    Text       = "  $($_C.Dim)(No other active PCs detected)$($_C.Reset)"
+                    Text       = "  $($_C.Dim)($snapshotSummary)$($_C.Reset)"
                     Selectable = $false
                 })
             }
@@ -1431,9 +1331,17 @@ function Invoke-ConnectionHistorySelector {
 
             $items.Add([PSCustomObject]@{
                 Type       = 'Action'
+                Text       = '[Scan network now...]'
+                Selectable = $true
+                Data       = 'Scan'
+                IsOnline   = $false
+            })
+
+            $items.Add([PSCustomObject]@{
+                Type       = 'Action'
                 Text       = "[Connect to new target...]"
                 Selectable = $true
-                Data       = $null
+                Data       = 'New'
                 IsOnline   = $false
             })
 
@@ -1550,21 +1458,15 @@ function Invoke-ConnectionHistorySelector {
                         $statusText = ""
                         $cleanText = $item.Text
                         if ($item.Type -in @('Saved', 'OfflineSnapshot', 'Discovered')) {
-                            $itemDetectedOnly = [bool](Get-NotePropertyValue -Object $item -Name 'DetectedOnly')
-                            $cleanText = $item.Text -replace '\s*\((Online|Offline|WinRM Disabled|Detected - mgmt closed|Computer - mgmt closed)\)\s*$'
-                            if (-not $item.IsOnline) {
-                                $statusColor = $_C.Fail
-                                $statusLabel = "(Offline)"
-                            } elseif ($item.WinRmOpen) {
-                                $statusColor = $_C.OK
-                                $statusLabel = "(Online)"
-                            } elseif ($itemDetectedOnly) {
-                                $statusColor = $_C.Warn
-                                $statusLabel = "(Computer - mgmt closed)"
-                            } else {
-                                $statusColor = $_C.Warn
-                                $statusLabel = "(WinRM Disabled)"
+                            $cleanText = $item.Text -replace '\s*\((Online|Offline|Not checked|WinRM Disabled|Detected - mgmt closed|Computer - mgmt closed)\)\s*$'
+                            $status = Get-DeviceCheckTargetStatusPresentation -Item $item
+                            switch ($status.Kind) {
+                                'NotChecked' { $statusColor = $_C.Gold }
+                                'Offline' { $statusColor = $_C.Fail }
+                                'Online' { $statusColor = $_C.OK }
+                                default { $statusColor = $_C.Warn }
                             }
+                            $statusLabel = "($($status.Label))"
                             $statusText = " $statusColor$statusLabel$($_C.Reset)$($_C.SelBg)$($_C.SelFg)$($_C.Bold)"
                         }
                         Add-UiFrameLine -Frame $frame -Text "$($_C.SelBg)$($_C.SelFg)$($_C.Bold)  $(Get-UiGlyph -Name SelectionArrow) $($cleanText)$($statusText) $($_C.Reset)$($_C.EraseLn)"
@@ -1572,18 +1474,14 @@ function Invoke-ConnectionHistorySelector {
                         if ($item.Type -eq 'Action' -or $item.Type -eq 'OfflineLibrary') {
                             Add-UiFrameLine -Frame $frame -Text "    $($_C.OK)$($item.Text)$($_C.Reset)$($_C.EraseLn)"
                         } else {
-                            $itemDetectedOnly = [bool](Get-NotePropertyValue -Object $item -Name 'DetectedOnly')
-                            $onlineColor = $(
-                                if (-not $item.IsOnline) {
-                                    " $($_C.Fail)(Offline)$($_C.Reset)"
-                                } elseif ($item.WinRmOpen) {
-                                    " $($_C.OK)(Online)$($_C.Reset)"
-                                } elseif ($itemDetectedOnly) {
-                                    " $($_C.Warn)(Computer - mgmt closed)$($_C.Reset)"
-                                } else {
-                                    " $($_C.Warn)(WinRM Disabled)$($_C.Reset)"
-                                }
-                            )
+                            $status = Get-DeviceCheckTargetStatusPresentation -Item $item
+                            $statusColor = $(switch ($status.Kind) {
+                                    'NotChecked' { $_C.Gold; break }
+                                    'Offline' { $_C.Fail; break }
+                                    'Online' { $_C.OK; break }
+                                    default { $_C.Warn; break }
+                                })
+                            $onlineColor = " $statusColor($($status.Label))$($_C.Reset)"
                             $baseText = $(if ($item.Type -eq 'Saved') {
                                 "$($item.Data.ComputerName) ($($item.ResolvedIP)) - user: $($item.Data.UserName)"
                             } elseif ($item.Type -eq 'OfflineSnapshot') {
@@ -1708,7 +1606,9 @@ function Invoke-ConnectionHistorySelector {
                     Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
                     Write-UiFrame -Frame $frame
 
-                    $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts)
+                    $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts -NetworkId $networkId)
+                    $Catalog = Get-WinRMTargetCatalog -NetworkId $networkId -IncludeDiagnostics:$script:BenchmarkMode
+                    $currentDiscovered = @(ConvertTo-DeviceCheckCatalogDiscoveredHosts -Catalog $Catalog)
 
                     $selectedIndex = -1 # Reset selection
                     $script:RequestForceClear = $true
@@ -1732,6 +1632,20 @@ function Invoke-ConnectionHistorySelector {
                 'Enter' {
                     $item = $items[$selectedIndex]
                     if ($item.Type -eq 'Action') {
+                        if ([string]$item.Data -eq 'Scan') {
+                            $frame = New-UiFrame
+                            Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
+                            Add-UiFrameLine -Frame $frame
+                            Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
+                            Write-UiFrame -Frame $frame
+                            $currentDiscovered = @(Get-DeviceCheckDiscoveredHosts -NetworkId $networkId)
+                            $Catalog = Get-WinRMTargetCatalog -NetworkId $networkId -IncludeDiagnostics:$script:BenchmarkMode
+                            $currentDiscovered = @(ConvertTo-DeviceCheckCatalogDiscoveredHosts -Catalog $Catalog)
+                            $selectedIndex = -1
+                            $script:RequestForceClear = $true
+                            $needsReload = $true
+                            continue
+                        }
                         return [PSCustomObject]@{
                             Action       = 'New'
                             ComputerName = $null
@@ -1740,6 +1654,11 @@ function Invoke-ConnectionHistorySelector {
                             UserName     = 'Unknown'
                         }
                     } elseif ($item.Type -eq 'OfflineLibrary') {
+                        $frame = New-UiFrame
+                        Add-UiFrameBanner -Frame $frame -Title 'Offline Snapshot Library' -Subtitle 'Loading local hardware snapshots...' -Width (Get-UiWidth)
+                        Add-UiFrameLine -Frame $frame
+                        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Reading saved snapshot metadata. No network scan is running.$($_C.Reset)$($_C.EraseLn)"
+                        Write-UiFrame -Frame $frame
                         $offlineChoice = Invoke-OfflineSnapshotSelector -NetworkInfo $NetworkInfo -AllHistory $allHistory -DiscoveredHosts $currentDiscovered
                         if ($null -ne $offlineChoice -and $offlineChoice.Action -ne 'Back') {
                             return $offlineChoice
@@ -1816,12 +1735,12 @@ function Invoke-ConnectLanTarget {
         Add-UiFrameBanner -Frame $frame -Title 'Connecting to LAN' -Subtitle "Active Network: $networkName" -Width (Get-UiWidth)
         Add-UiFrameLine -Frame $frame
         Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Active Network: $networkName$($_C.Reset)$($_C.EraseLn)"
-        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Scanning local network for active PCs (testing WinRM 5985)...$($_C.Reset)$($_C.EraseLn)"
+        Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Loading saved targets and recent scan snapshot...$($_C.Reset)$($_C.EraseLn)"
         Write-UiFrame -Frame $frame
 
-        $discoveredHosts = @(Get-DeviceCheckDiscoveredHosts)
+        $catalog = Get-WinRMTargetCatalog -NetworkId $networkInfo.NetworkId -IncludeDiagnostics:$script:BenchmarkMode
 
-        $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -DiscoveredHosts $discoveredHosts
+        $choice = Invoke-ConnectionHistorySelector -NetworkInfo $networkInfo -Catalog $catalog
         if ($null -eq $choice) {
             # Switch back to local host machine instead of previous logged target
             $script:TargetMode = 'Local'
@@ -1901,7 +1820,7 @@ function Invoke-ConnectLanTarget {
             Add-UiFrameLine -Frame $frame -Text "  $($_C.Info)Locating PC '$target' dynamically (checking DNS and ARP cache)...$($_C.Reset)$($_C.EraseLn)"
             Write-UiFrame -Frame $frame
 
-            $resolvedIp = Resolve-HistoryTargetAddress -ComputerName $target -LastIPAddress $choice.LastIP -MACAddress $targetMac
+            $resolvedIp = Resolve-WinRMHistoryTargetAddress -ComputerName $target -LastIPAddress $choice.LastIP -MACAddress $targetMac
             if ($null -eq $resolvedIp) {
                 # Target is offline. Check if we have a cached snapshot before failing
                 $cached = Find-LatestSnapshotForComputerName -ComputerName $target
@@ -2181,8 +2100,12 @@ function Invoke-ConnectLanTarget {
                 try { [Console]::CursorVisible = $false } catch {}
                 return
             } else {
-                Remove-DeviceCheckStoredCredential -ComputerName $target
-                if (-not [string]::IsNullOrWhiteSpace($resolvedIp)) { Remove-DeviceCheckStoredCredential -ComputerName $resolvedIp }
+                if ($null -ne $collection -and $collection.ErrorCategory -eq 'AuthenticationRejected') {
+                    Remove-DeviceCheckStoredCredential -ComputerName $target
+                    if (-not [string]::IsNullOrWhiteSpace($resolvedIp)) {
+                        Remove-DeviceCheckStoredCredential -ComputerName $resolvedIp
+                    }
+                }
                 $script:SystemScanMessage = "Connect cancelled or failed: $target | $(Get-Date -Format 'HH:mm:ss')"
                 $script:RequestForceClear = $true
                 try { Initialize-TuiHost } catch {}

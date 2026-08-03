@@ -32,6 +32,11 @@ if (-not (Test-Path -LiteralPath $winRMConnectionManifest -PathType Leaf)) {
     throw "WinRMConnection module not found: $winRMConnectionManifest"
 }
 Import-Module -Name $winRMConnectionManifest -Force -ErrorAction Stop
+$winRMWorkshopManifest = Join-Path -Path $repoRoot -ChildPath '.assets\WinRMWorkshop\WinRMWorkshop.psd1'
+if (-not (Test-Path -LiteralPath $winRMWorkshopManifest -PathType Leaf)) {
+    throw "WinRMWorkshop module not found: $winRMWorkshopManifest"
+}
+Import-Module -Name $winRMWorkshopManifest -Force -ErrorAction Stop
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $overrideRoot = @($env:DEVICECHECK_CACHE_ROOT, $env:DEVICECHECK_DATA_ROOT) |
@@ -93,90 +98,6 @@ function ConvertTo-SafeFileName {
     }
 
     return ($builder.ToString() -replace '\s+', '_').Trim('_')
-}
-
-function Get-TrustedHostValues {
-    try {
-        $value = (Get-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -ErrorAction Stop).Value
-    } catch {
-        return @()
-    }
-
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return @()
-    }
-
-    return @(
-        $value -split ',' |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    )
-}
-
-function Add-TrustedHostExact {
-    param([string]$Target)
-
-    if ([string]::IsNullOrWhiteSpace($Target)) {
-        throw 'TrustedHosts target cannot be empty.'
-    }
-
-    if ($Target -eq '*') {
-        throw 'Refusing to add wildcard TrustedHosts entry.'
-    }
-
-    $current = @(Get-TrustedHostValues)
-    foreach ($entry in $current) {
-        if ($entry -eq '*' -or $entry.Equals($Target, [System.StringComparison]::OrdinalIgnoreCase)) {
-            return [PSCustomObject]@{
-                Changed = $false
-                Value   = ($current -join ',')
-            }
-        }
-    }
-
-    $updated = @($current + $Target)
-    $newValue = ($updated | Select-Object -Unique) -join ','
-
-    try {
-        Set-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -Value $newValue -Force -ErrorAction Stop
-        return [PSCustomObject]@{
-            Changed = $true
-            Value   = $newValue
-        }
-    } catch {
-        $firstError = $_.Exception.Message
-        $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
-        if ($null -eq $gsudo) {
-            throw "Adding '$Target' to TrustedHosts requires elevation. gsudo.exe was not found. Original error: $firstError"
-        }
-
-        $escapedValue = $newValue.Replace("'", "''")
-        $commandText = "Set-Item -Path 'WSMan:\localhost\Client\TrustedHosts' -Value '$escapedValue' -Force -ErrorAction Stop"
-        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($commandText))
-        $shellCommand = $(if ($PSVersionTable.PSVersion.Major -ge 6) { 'pwsh.exe' } else { 'powershell.exe' })
-
-        & $gsudo.Source $shellCommand -NoProfile -EncodedCommand $encoded
-        if ($LASTEXITCODE -ne 0) {
-            throw "gsudo.exe failed while adding '$Target' to TrustedHosts. Original error: $firstError"
-        }
-
-        $verified = @(Get-TrustedHostValues)
-        $found = $false
-        foreach ($entry in $verified) {
-            if ($entry.Equals($Target, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $found = $true
-                break
-            }
-        }
-        if (-not $found) {
-            throw "TrustedHosts update completed but '$Target' was not visible afterward."
-        }
-
-        return [PSCustomObject]@{
-            Changed = $true
-            Value   = ($verified -join ',')
-        }
-    }
 }
 
 function New-CollectorScriptBlock {
@@ -832,29 +753,36 @@ function New-CollectorScriptBlock {
 $isLocal = Test-LocalTarget -Name $ComputerName
 
 if (-not $isLocal -and -not $SkipTrustedHosts) {
-    if (-not $AsJson) {
-        Write-Host "Checking TrustedHosts for '$ComputerName'..." -ForegroundColor Cyan
+    $trustStatus = {
+        param($status)
+        Write-Verbose $status.Message
     }
-    $trustResult = Add-TrustedHostExact -Target $ComputerName
+    $trustResult = Add-WinRMWorkshopTrustedHost -ComputerName $ComputerName -OnStatus $trustStatus
     if (-not $AsJson) {
         if ($trustResult.Changed) {
-            Write-Host "TrustedHosts updated: $($trustResult.Value)" -ForegroundColor Yellow
+            Write-Host "TrustedHosts prepared: $($trustResult.AfterValue)" -ForegroundColor Yellow
         } else {
             Write-Host "TrustedHosts already includes '$ComputerName'." -ForegroundColor DarkGray
         }
     }
 }
 
+$credentialFromProfile = $false
+$legacyCredentialPath = $null
 if (-not $isLocal -and $null -eq $Credential -and -not $UseCurrentCredentials) {
+    $Credential = Get-WinRMCredentialProfile -ComputerName $ComputerName -Scope 'DeviceCheck'
+    $credentialFromProfile = ($null -ne $Credential)
+
+    # Compatibility read for the pre-WinRMConnection 1.1.0 DeviceCheck profile.
     $cacheRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'DeviceCheck'
     if ([string]::IsNullOrWhiteSpace($cacheRoot)) {
         $cacheRoot = Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
     }
-    $credFolder = Join-Path -Path $cacheRoot -ChildPath 'credentials'
-    $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
-    if (Test-Path -LiteralPath $credPath -PathType Leaf) {
+    $legacyCredentialPath = Join-Path -Path (Join-Path -Path $cacheRoot -ChildPath 'credentials') -ChildPath "$($ComputerName.ToLower()).xml"
+    if ($null -eq $Credential -and (Test-Path -LiteralPath $legacyCredentialPath -PathType Leaf)) {
         try {
-            $Credential = Import-Clixml -Path $credPath -ErrorAction Stop
+            $Credential = Import-Clixml -Path $legacyCredentialPath -ErrorAction Stop
+            $credentialFromProfile = ($null -ne $Credential)
         } catch {}
     }
 
@@ -863,24 +791,8 @@ if (-not $isLocal -and $null -eq $Credential -and -not $UseCurrentCredentials) {
             $UserName = "$ComputerName\joty79"
         }
         $Credential = Get-Credential -UserName $UserName -Message "Enter credentials for $ComputerName"
-        if ($null -ne $Credential) {
-            try {
-                $null = New-Item -ItemType Directory -Path $credFolder -Force -ErrorAction SilentlyContinue
-                $Credential | Export-Clixml -Path $credPath
-            } catch {}
-        }
+        $credentialFromProfile = $false
     }
-} elseif (-not $isLocal -and $null -ne $Credential) {
-    $cacheRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'DeviceCheck'
-    if ([string]::IsNullOrWhiteSpace($cacheRoot)) {
-        $cacheRoot = Join-Path -Path $env:TEMP -ChildPath 'DeviceCheck'
-    }
-    $credFolder = Join-Path -Path $cacheRoot -ChildPath 'credentials'
-    $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
-    try {
-        $null = New-Item -ItemType Directory -Path $credFolder -Force -ErrorAction SilentlyContinue
-        $Credential | Export-Clixml -Path $credPath
-    } catch {}
 }
 
 $collector = New-CollectorScriptBlock
@@ -897,9 +809,28 @@ if ($isLocal) {
         param($status)
         Write-Verbose $status.Message
     }
-    $session = Connect-WinRMSession -ComputerName $ComputerName -Credential $Credential -OnStatus $connectionStatus
+    try {
+        $session = Connect-WinRMSession -ComputerName $ComputerName -Credential $Credential -OnStatus $connectionStatus
+    } catch {
+        $connectionCategory = Get-WinRMConnectionErrorCategory -ErrorObject $_
+        if ($credentialFromProfile -and $connectionCategory -eq 'AuthenticationRejected') {
+            Remove-WinRMCredentialProfile -ComputerName $ComputerName -Scope 'DeviceCheck' -Confirm:$false -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($legacyCredentialPath) -and (Test-Path -LiteralPath $legacyCredentialPath -PathType Leaf)) {
+                Remove-Item -LiteralPath $legacyCredentialPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+        throw
+    }
 
     try {
+        if ($null -ne $Credential) {
+            try {
+                Save-WinRMCredentialProfile -ComputerName $ComputerName -Credential $Credential -Scope 'DeviceCheck' | Out-Null
+            } catch {
+                Write-Verbose "Connected, but the DPAPI credential profile could not be saved: $($_.Exception.Message)"
+            }
+        }
+
         Write-Verbose "Remote: Collecting system identification..."
         $machine = Invoke-Command -Session $session -ScriptBlock $collector -ArgumentList @($ComputerName, [bool]$Quick, $script:CollectorVersion, 'System')
 

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Reworked `Ctrl+L` around canonical `WinRMDiscovery` 1.4.0: the first selector frame now loads only the local target catalog, saved PCs remain `Not checked` until selected, and full LAN scanning is an explicit `Scan network now`/`R` action.
+- Kept recent discovery snapshots distinct from durable successful-connection history and deferred the large offline hardware-snapshot library until its submenu is selected.
+- Added a 100-record local catalog/secret regression; the measured DeviceCheck pre-selector path improved from `4181 ms` average to `362 ms` average (`91.3%`), with warm runs at `152–162 ms`.
+- Updated the pinned authenticated connector to canonical `WinRMConnection` 1.1.0. DeviceCheck now uses its DPAPI credential profiles and error classification, saves credentials only after successful authentication, and removes cached profiles only after `AuthenticationRejected`.
+- Replaced both local `TrustedHosts` mutation implementations with canonical `WinRMWorkshop` 1.0.0 exact-target preparation, including verified elevation/readback and safe narrowing of legacy wildcard state.
 - Replaced the active DeviceCheck TUI fork with an exact LF-normalized, hash-receipted vendored copy of the `.agent-shared` canonical blueprint while retaining DeviceCheck's proven primary-buffer mode as a thin script-scoped startup adapter that does not leak environment changes.
 - Expanded the Offline Snapshot virtual-terminal regression from one fixed `156x44` navigation case to a raw-byte sequential resize replay at `120 -> 101 -> 100 -> 99 -> 98 -> 80 -> 60 -> 120`, rejecting wraps, scrolls, duplicate headers, and stale selection rows.
 - Routed remote evidence authentication through the pinned shared `WinRMConnection` module with TCP preflight, three bounded attempts, visible retry status, categorized failures, one reused session, and guaranteed cleanup.

@@ -73,12 +73,15 @@ $script:BenchmarkMode = $false
 $script:LastNetworkScanResult = $null
 $script:ScriptStartTime = Get-Date
 
-# Prefer the shared, vendored discovery engine. The project-local legacy
-# implementation remains available as a safe fallback during migration.
-$winRmDiscoveryManifest = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath '.assets\WinRMDiscovery\WinRMDiscovery.psd1'
-if (Test-Path -LiteralPath $winRmDiscoveryManifest -PathType Leaf) {
-    Import-Module -Name $winRmDiscoveryManifest -Force -ErrorAction Stop
+# Load only the pinned canonical WinRM consumer modules.
+foreach ($winRmModuleName in @('WinRMDiscovery', 'WinRMConnection', 'WinRMWorkshop')) {
+    $winRmManifest = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath ".assets\$winRmModuleName\$winRmModuleName.psd1"
+    if (-not (Test-Path -LiteralPath $winRmManifest -PathType Leaf)) {
+        throw "Required $winRmModuleName module not found: $winRmManifest"
+    }
+    Import-Module -Name $winRmManifest -Force -ErrorAction Stop
 }
+Set-WinRMDiscoveryStateRoot -Path $script:DeviceCheckCacheRoot
 
 # Load DeviceCheck function groups. These are dot-sourced so existing script-scope state stays shared.
 $deviceCheckModuleRoot = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath 'internal\DeviceCheck'
@@ -89,6 +92,7 @@ $deviceCheckModuleFiles = @(
     '04-UiTextFormatting.ps1'
     '05-InventoryAndSnapshots.ps1'
     '06-RemoteDiscoveryFilters.ps1'
+    '06-RemoteTargetCatalog.ps1'
     '06-RemoteConnection.ps1'
     '06-RemoteConnectionOfflineMenu.ps1'
     '07-TreeDetailsAndModels.ps1'

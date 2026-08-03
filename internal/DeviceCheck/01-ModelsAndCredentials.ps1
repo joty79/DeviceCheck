@@ -139,6 +139,11 @@ function Get-DeviceCheckStoredCredential {
     param([string]$ComputerName)
 
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return $null }
+    $credential = Get-WinRMCredentialProfile -ComputerName $ComputerName -Scope 'DeviceCheck'
+    if ($null -ne $credential) { return $credential }
+
+    # One-way compatibility read for profiles created before WinRMConnection 1.1.0.
+    # A successful connection saves the credential through the canonical module.
     $credRoot = $(if (-not [string]::IsNullOrWhiteSpace($script:DeviceCheckLocalStateRoot)) { $script:DeviceCheckLocalStateRoot } else { $script:DeviceCheckCacheRoot })
     $credFolder = Join-Path -Path $credRoot -ChildPath 'credentials'
     $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
@@ -159,19 +164,20 @@ function Save-DeviceCheckStoredCredential {
     )
 
     if ([string]::IsNullOrWhiteSpace($ComputerName) -or $null -eq $Credential) { return }
-    $credRoot = $(if (-not [string]::IsNullOrWhiteSpace($script:DeviceCheckLocalStateRoot)) { $script:DeviceCheckLocalStateRoot } else { $script:DeviceCheckCacheRoot })
-    $credFolder = Join-Path -Path $credRoot -ChildPath 'credentials'
     try {
-        $null = New-Item -ItemType Directory -Path $credFolder -Force -ErrorAction SilentlyContinue
-        $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
-        $Credential | Export-Clixml -Path $credPath
-    } catch {}
+        Save-WinRMCredentialProfile -ComputerName $ComputerName -Credential $Credential -Scope 'DeviceCheck' | Out-Null
+    } catch {
+        Write-Verbose "Could not save the DeviceCheck credential profile for '$ComputerName': $($_.Exception.Message)"
+    }
 }
 
 function Remove-DeviceCheckStoredCredential {
     param([string]$ComputerName)
 
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return }
+    Remove-WinRMCredentialProfile -ComputerName $ComputerName -Scope 'DeviceCheck' -Confirm:$false -ErrorAction SilentlyContinue
+
+    # Remove any stale pre-1.1.0 DeviceCheck profile for the same alias.
     $credRoot = $(if (-not [string]::IsNullOrWhiteSpace($script:DeviceCheckLocalStateRoot)) { $script:DeviceCheckLocalStateRoot } else { $script:DeviceCheckCacheRoot })
     $credFolder = Join-Path -Path $credRoot -ChildPath 'credentials'
     $credPath = Join-Path -Path $credFolder -ChildPath "$($ComputerName.ToLower()).xml"
