@@ -5,7 +5,7 @@ This repository contains `DeviceCheck.ps1`, an interactive, flicker-free PowerSh
 ## 🔵 Shared WinRM Discovery
 
 - Canonical discovery code is owned by `.agent-shared\modules\WinRMDiscovery`; DeviceCheck consumes its pinned `.assets\WinRMDiscovery` copy.
-- Keep `Ctrl+L` UI, credentials, snapshots, and local/remote target state inside DeviceCheck. Keep WS-Discovery, Explorer Network enumeration, PC-port sweep, filtering, and name resolution in the shared module.
+- Keep `Ctrl+L` rendering/keys, credentials, hardware snapshots, and local/remote target state inside DeviceCheck. Keep target history/catalog, short-lived LAN snapshots, WS-Discovery, Explorer Network enumeration, PC-port sweep, filtering, and name resolution in the shared module.
 - Never edit the vendored module directly. Use `.agent-shared\scripts\Sync-WinRMDiscovery.ps1`, then run the DeviceCheck structure and live discovery tests.
 
 ## 🔵 Shared WinRM Connection
@@ -26,7 +26,7 @@ This repository contains `DeviceCheck.ps1`, an interactive, flicker-free PowerSh
 
 - **Problem:** The proven `Ctrl+L` discovery code was needed by DiskHealth and future WinRM tools, creating copy/paste and drift risk.
 - **Root cause:** Discovery was implemented only as DeviceCheck-internal functions.
-- **Guardrail:** Route discovery through the shared module with the existing DeviceCheck state root and keep the internal implementation temporarily as a migration fallback.
+- **Guardrail:** Route discovery/history/catalog through the shared module with the existing DeviceCheck state root. The first selector frame must not scan or bulk-validate saved targets; `Scan network now`/`R` is explicit and only the selected saved row is resolved. Keep the internal discovery implementation temporarily as a migration fallback.
 - **Files affected:** `.assets\WinRMDiscovery\*`, `DeviceCheck.ps1`, `internal\DeviceCheck\06-RemoteConnection.ps1`, `README.md`, `CHANGELOG.md`, `PROJECT_RULES.md`.
 - **Validation:** Shared module offline/live tests, DeviceCheck structure guard, and live expected-target test for `SE / 192.168.1.5`.
 

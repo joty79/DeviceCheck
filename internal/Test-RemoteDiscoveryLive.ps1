@@ -20,7 +20,10 @@ $script:DeviceCheckCacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApp
 $script:BenchmarkMode = $true
 $script:LastNetworkScanResult = $null
 
+Import-Module (Join-Path $repoRoot '.assets\WinRMDiscovery\WinRMDiscovery.psd1') -Force -ErrorAction Stop
+Set-WinRMDiscoveryStateRoot -Path $script:DeviceCheckCacheRoot
 . (Join-Path $repoRoot 'internal\DeviceCheck\06-RemoteDiscoveryFilters.ps1')
+. (Join-Path $repoRoot 'internal\DeviceCheck\06-RemoteTargetCatalog.ps1')
 . (Join-Path $repoRoot 'internal\DeviceCheck\06-RemoteConnection.ps1')
 
 function Resolve-TestExplorerHostIPv4 {

@@ -78,6 +78,7 @@ $script:ScriptStartTime = Get-Date
 $winRmDiscoveryManifest = Join-Path -Path $script:DeviceCheckRepoRoot -ChildPath '.assets\WinRMDiscovery\WinRMDiscovery.psd1'
 if (Test-Path -LiteralPath $winRmDiscoveryManifest -PathType Leaf) {
     Import-Module -Name $winRmDiscoveryManifest -Force -ErrorAction Stop
+    Set-WinRMDiscoveryStateRoot -Path $script:DeviceCheckCacheRoot
 }
 
 # Load DeviceCheck function groups. These are dot-sourced so existing script-scope state stays shared.
@@ -89,6 +90,7 @@ $deviceCheckModuleFiles = @(
     '04-UiTextFormatting.ps1'
     '05-InventoryAndSnapshots.ps1'
     '06-RemoteDiscoveryFilters.ps1'
+    '06-RemoteTargetCatalog.ps1'
     '06-RemoteConnection.ps1'
     '06-RemoteConnectionOfflineMenu.ps1'
     '07-TreeDetailsAndModels.ps1'
