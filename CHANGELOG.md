@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Isolated the fullscreen `Ctrl+L` target selector in an owned alternate-screen buffer. DeviceCheck keeps its long-lived dashboard in the primary buffer, but maximize/restore can no longer reflow that dashboard or a previous selector frame underneath the modal; every return path restores the preserved dashboard in `finally`.
+- Fixed the Ctrl+L selector across the full maximize/restore/maximize transition: it now reserves all 11 fixed frame rows plus the terminal newline safety row, explicitly requests a destructive redraw on resize, and uses the canonical settled pre-render resize guard so Windows Terminal cannot briefly display an intermediate duplicated frame. Relabeled `R` as the explicit `scan network` action.
+- Updated pinned `WinRMDiscovery` so a different PC reusing an old saved IP no longer inherits the prior PC's historical name and remains a separate discovery row when MAC or hostname evidence conflicts.
 - Reworked `Ctrl+L` around canonical `WinRMDiscovery` 1.4.0: the first selector frame now loads only the local target catalog, saved PCs remain `Not checked` until selected, and full LAN scanning is an explicit `Scan network now`/`R` action.
 - Kept recent discovery snapshots distinct from durable successful-connection history and deferred the large offline hardware-snapshot library until its submenu is selected.
 - Added a 100-record local catalog/secret regression; the measured DeviceCheck pre-selector path improved from `4181 ms` average to `362 ms` average (`91.3%`), with warm runs at `152–162 ms`.

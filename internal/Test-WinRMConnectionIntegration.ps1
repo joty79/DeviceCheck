@@ -11,8 +11,8 @@ $credentialAdapter = Join-Path -Path $PSScriptRoot -ChildPath 'DeviceCheck\01-Mo
 $remoteConnection = Join-Path -Path $PSScriptRoot -ChildPath 'DeviceCheck\06-RemoteConnection.ps1'
 
 $moduleInfo = Test-ModuleManifest -Path $manifest -ErrorAction Stop
-if ($moduleInfo.Version -ne [version]'1.1.0') {
-    throw "Expected canonical WinRMConnection 1.1.0, found $($moduleInfo.Version)."
+if ($moduleInfo.Version -ne [version]'1.2.0') {
+    throw "Expected canonical WinRMConnection 1.2.0, found $($moduleInfo.Version)."
 }
 Import-Module -Name $manifest -Force -ErrorAction Stop
 foreach ($commandName in @('Connect-WinRMSession', 'Get-WinRMConnectionErrorCategory', 'Get-WinRMCredentialProfile', 'Save-WinRMCredentialProfile', 'Remove-WinRMCredentialProfile', 'New-WinRMBlankPasswordCredential')) {

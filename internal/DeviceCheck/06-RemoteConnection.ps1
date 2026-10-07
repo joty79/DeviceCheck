@@ -1109,6 +1109,17 @@ function Get-DeviceCheckTargetStatusPresentation {
     return [PSCustomObject]@{ Kind = 'WinRMDisabled'; Label = 'WinRM Disabled' }
 }
 
+function Get-DeviceCheckConnectionMenuVisibleLineBudget {
+    param([int]$WindowHeight)
+
+    # Six banner rows plus content spacer, above/below indicators, footer spacer,
+    # and footer are fixed. Keep the final terminal row unused because every
+    # Add-UiFrameLine call advances with a newline.
+    $frameHeightBudget = [Math]::Max(1, $WindowHeight - 1)
+    $fixedFrameLines = 11
+    return [Math]::Max(1, $frameHeightBudget - $fixedFrameLines)
+}
+
 function Invoke-ConnectionHistorySelector {
     param(
         [Parameter(Mandatory)]$NetworkInfo,
@@ -1127,6 +1138,7 @@ function Invoke-ConnectionHistorySelector {
     if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = $global:PSScriptRoot }
     if ([string]::IsNullOrWhiteSpace($resolvedScriptRoot)) { $resolvedScriptRoot = "." }
 
+    $enteredModalAlternateScreen = Enter-TuiModalAlternateScreen
     [Console]::CursorVisible = $false
     try {
         $selectedIndex = -1
@@ -1428,9 +1440,9 @@ function Invoke-ConnectionHistorySelector {
             }
 
             try {
-                $maxVisible = [Math]::Max(3, $Host.UI.RawUI.WindowSize.Height - 10)
+                $maxVisible = Get-DeviceCheckConnectionMenuVisibleLineBudget -WindowHeight $Host.UI.RawUI.WindowSize.Height
             } catch {
-                $maxVisible = 10
+                $maxVisible = Get-DeviceCheckConnectionMenuVisibleLineBudget -WindowHeight 22
             }
 
             $viewTop = [Math]::Max(0, [Math]::Min($selectedIndex - [int]($maxVisible / 2), [Math]::Max(0, $items.Count - $maxVisible)))
@@ -1505,7 +1517,7 @@ function Invoke-ConnectionHistorySelector {
                 New-UiShortcutSegment -Text "$(Get-UiGlyph -Name Up)$(Get-UiGlyph -Name Down)" -Color $_C.White
                 New-UiShortcutSegment -Text ' navigate   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'R' -Color $_C.Info
-                New-UiShortcutSegment -Text ' = rescan   ' -Color $_C.Dim
+                New-UiShortcutSegment -Text ' = scan network   ' -Color $_C.Dim
                 New-UiShortcutSegment -Text 'B' -Color $_C.Gold
                 New-UiShortcutSegment -Text " = benchmark ($benchmarkStatus)   " -Color $_C.Dim
                 New-UiShortcutSegment -Text 'Enter' -Color $_C.OK
@@ -1595,7 +1607,10 @@ function Invoke-ConnectionHistorySelector {
                     }
                 }
                 'Escape' { return $null }
-                'ResizeEvent' { continue }
+                'ResizeEvent' {
+                    $script:RequestForceClear = $true
+                    continue
+                }
                 'R' {
                     # Show scanning feedback
                     Clear-TuiScreen
@@ -1710,6 +1725,7 @@ function Invoke-ConnectionHistorySelector {
             $script:BenchmarkLog.Add($logEntry)
         }
     } finally {
+        Exit-TuiModalAlternateScreen -Entered $enteredModalAlternateScreen
         try { [Console]::CursorVisible = $true } catch {}
     }
 }

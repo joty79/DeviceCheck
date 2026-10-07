@@ -39,6 +39,7 @@ This file describes the project as it works now. Completed incidents, old valida
 - Preserve Windows PowerShell 5.1 compatibility for user-facing scripts and WinRM endpoints. Use the global PowerShell workflow for parser/runtime validation and the global TUI workflow for interactive changes.
 - In background runspaces set `$ProgressPreference = 'SilentlyContinue'`; keep cleanup in `try/finally` or guarded `try/catch` and dispose runspaces/sessions deterministically.
 - DeviceCheck intentionally defaults its long-lived dashboard to the primary buffer through the thin script-scoped adapter unless the caller explicitly sets `POWERSHELL_TUI_PRIMARY_BUFFER`.
+- Fullscreen modals such as the `Ctrl+L` target selector must enter the canonical owned alternate-screen boundary and exit it in `finally`. Do not render them directly in DeviceCheck's long-lived primary buffer: Windows Terminal maximize/restore can reflow preserved scrollback and expose a duplicated previous frame even when settled resize detection and destructive clears are present.
 - Full-frame UI changes must pass the sequential VT resize replay `120 -> 101 -> 100 -> 99 -> 98 -> 80 -> 60 -> 120`, with no wrapping, viewport scroll, duplicate header/footer, stale rows, or out-of-bounds output.
 - API keys come only from `GOOGLE_API_KEY`, `GEMINI_API_KEY`, and `OPENROUTER_API_KEY`. Do not store secrets in the repository, discovery snapshots, diagnostics, history, or test fixtures.
 

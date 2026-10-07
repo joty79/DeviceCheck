@@ -132,10 +132,19 @@ foreach ($case in @(
 }
 
 $widthSequence = @(120, 101, 100, 99, 98, 80, 60, 120)
-$terminalHeight = 44
+$viewportSequence = [System.Collections.Generic.List[object]]::new()
+foreach ($width in $widthSequence) {
+    $viewportSequence.Add([pscustomobject]@{ Width = $width; Height = 44 })
+}
+$viewportSequence.Add([pscustomobject]@{ Width = 192; Height = 44 })
+$viewportSequence.Add([pscustomobject]@{ Width = 148; Height = 28 })
+$viewportSequence.Add([pscustomobject]@{ Width = 192; Height = 44 })
+
 $frames = [System.Collections.Generic.List[object]]::new()
-for ($index = 0; $index -lt $widthSequence.Count; $index++) {
-    $terminalWidth = $widthSequence[$index]
+for ($index = 0; $index -lt $viewportSequence.Count; $index++) {
+    $viewport = $viewportSequence[$index]
+    $terminalWidth = $viewport.Width
+    $terminalHeight = $viewport.Height
     $state = $index + 1
     $frames.Add([pscustomobject]@{
             Width = $terminalWidth
@@ -244,7 +253,7 @@ for item in manifest:
         raise SystemExit(f"state {item['state']}: stale selection marker remained")
     previous_marker = marker
 
-print("DeviceCheck pyte resize replay passed: 120->101->100->99->98->80->60->120, zero wraps, zero scrolls, zero stale frames")
+print("DeviceCheck pyte resize replay passed: width thresholds plus 192x44->148x28->192x44, zero wraps, zero scrolls, zero stale frames")
 '@
             $pythonScriptPath = Join-Path $tempRoot 'replay.py'
             [System.IO.File]::WriteAllText($pythonScriptPath, $pythonCode, [System.Text.UTF8Encoding]::new($false))
