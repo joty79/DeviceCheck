@@ -161,6 +161,14 @@ function New-CollectorScriptBlock {
             return [string]$Value
         }
 
+        function ConvertTo-SnapshotProblemCode {
+            param($Value)
+
+            if ($null -eq $Value) { return $null }
+            # PnpDevice exposes an enum: string conversion loses its numeric code.
+            return [int]$Value
+        }
+
         function Get-CimFirstOrNull {
             param([string]$ClassName, [string]$Namespace = 'root\cimv2')
 
@@ -508,7 +516,7 @@ function New-CollectorScriptBlock {
                         Status                    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Status')
                         Problem                   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Problem')
                         ProblemDescription        = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ProblemDescription')
-                        ConfigManagerErrorCode    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ConfigManagerErrorCode')
+                        ConfigManagerErrorCode    = ConvertTo-SnapshotProblemCode (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ConfigManagerErrorCode')
                         Manufacturer              = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Manufacturer')
                         Service                   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Service')
                         HardwareId                = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'HardwareID')
@@ -624,7 +632,7 @@ function New-CollectorScriptBlock {
                     Status                    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Status')
                     Problem                   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Problem')
                     ProblemDescription        = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ProblemDescription')
-                    ConfigManagerErrorCode    = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ConfigManagerErrorCode')
+                    ConfigManagerErrorCode    = ConvertTo-SnapshotProblemCode (Get-ObjectPropertyValue -InputObject $device -PropertyName 'ConfigManagerErrorCode')
                     Manufacturer              = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Manufacturer')
                     Service                   = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'Service')
                     HardwareId                = ConvertTo-PlainSnapshotValue (Get-ObjectPropertyValue -InputObject $device -PropertyName 'HardwareID')

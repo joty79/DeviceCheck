@@ -182,16 +182,20 @@ function Render-FrameLegacy {
 
         $errCode = $selectedRow.Ref.ConfigManagerErrorCode
         $errDesc = switch ($errCode) {
+            -1 { "Problem code unavailable" }
             0  { "Working properly" }
             10 { "Device cannot start (CM_PROB_FAILED_START)" }
             21 { "Device has been uninstalled (CM_PROB_WILL_BE_REMOVED)" }
             22 { "Device is disabled (CM_PROB_DISABLED)" }
             28 { "Drivers not installed (CM_PROB_FAILED_INSTALL)" }
+            32 { "Driver service is disabled (CM_PROB_DISABLED_SERVICE)" }
             43 { "Device reported problems (CM_PROB_FAILED_POST_START)" }
             default { "Unknown problem status" }
         }
 
-        $statusText = $(if ($errCode -eq 0) {
+        $statusText = $(if ($errCode -lt 0) {
+            "$($_C.Warn)Unknown ($errDesc)$($_C.Reset)"
+        } elseif ($errCode -eq 0) {
             "$($_C.OK)OK ($errDesc)$($_C.Reset)"
         } else {
             "$($_C.Fail)Error (Code ${errCode}: $errDesc)$($_C.Reset)"

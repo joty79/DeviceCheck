@@ -80,11 +80,13 @@ function Get-DeviceProblemDescription {
     param([int]$ErrorCode)
 
     switch ($ErrorCode) {
+        -1 { "Problem code unavailable" }
         0  { "Working properly" }
         10 { "Device cannot start (CM_PROB_FAILED_START)" }
         21 { "Device has been uninstalled (CM_PROB_WILL_BE_REMOVED)" }
         22 { "Device is disabled (CM_PROB_DISABLED)" }
         28 { "Drivers not installed (CM_PROB_FAILED_INSTALL)" }
+        32 { "Driver service is disabled (CM_PROB_DISABLED_SERVICE)" }
         43 { "Device reported problems (CM_PROB_FAILED_POST_START)" }
         default { "Unknown problem status" }
     }
@@ -360,7 +362,7 @@ function Get-DetailDisplayLines {
         $errCode = [int]$SelectedRow.Ref.ConfigManagerErrorCode
         $errDesc = Get-DeviceProblemDescription -ErrorCode $errCode
         $statusColor = $(if ($errCode -eq 0) { $_C.OK } else { $_C.Fail })
-        $statusValue = $(if ($errCode -eq 0) { "OK ($errDesc)" } else { "Error (Code ${errCode}: $errDesc)" })
+        $statusValue = $(if ($errCode -lt 0) { "Unknown ($errDesc)" } elseif ($errCode -eq 0) { "OK ($errDesc)" } else { "Error (Code ${errCode}: $errDesc)" })
         Add-KeyValueLines -Lines $lines -Key 'Status' -Value $statusValue -Width $Width -ValueColor $statusColor
 
         $activeSearch = $(if ($script:ActiveSearches.Contains($SelectedRow.Ref.InstanceId)) { $script:ActiveSearches[$SelectedRow.Ref.InstanceId] } else { $null })

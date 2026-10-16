@@ -139,6 +139,44 @@ function Set-SnapshotEvidenceCache {
     }
 }
 
+function Get-SnapshotDeviceProblemCode {
+    param(
+        [Parameter(Mandatory)]$Snapshot,
+        [Parameter(Mandatory)]$Device
+    )
+
+    $propertyMap = Get-SnapshotDevicePropertyMap -Snapshot $Snapshot -InstanceId ([string]$Device.InstanceId)
+    $candidateValues = @(
+        $propertyMap['DEVPKEY_Device_ProblemCode']
+        (Get-NotePropertyValue -Object $Device -Name 'ConfigManagerErrorCode')
+        (Get-NotePropertyValue -Object $Device -Name 'Problem')
+    )
+    foreach ($candidate in $candidateValues) {
+        if ($null -eq $candidate) { continue }
+        if ($candidate -is [System.Enum]) { return [int]$candidate }
+        $numericCode = 0
+        if ([int]::TryParse([string]$candidate, [ref]$numericCode) -and $numericCode -ge 0) {
+            return $numericCode
+        }
+        # Older snapshots stringified these enum values instead of storing numbers.
+        switch ([string]$candidate) {
+            'CM_PROB_NONE' { return 0 }
+            'CM_PROB_FAILED_INSTALL' { return 28 }
+            'CM_PROB_DISABLED_SERVICE' { return 32 }
+        }
+    }
+
+    $description = [string](Get-NotePropertyValue -Object $Device -Name 'ProblemDescription')
+    $codeMatch = [regex]::Match($description, '\bCode\s+(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $numericCode = 0
+    if ($codeMatch.Success -and [int]::TryParse($codeMatch.Groups[1].Value, [ref]$numericCode)) {
+        return $numericCode
+    }
+
+    # Missing or unreadable evidence must never become "Working properly".
+    return -1
+}
+
 function Get-DeviceCategoriesFromSnapshot {
     param([Parameter(Mandatory)]$Snapshot)
 
@@ -153,11 +191,7 @@ function Get-DeviceCategoriesFromSnapshot {
             $className = 'Other devices'
         }
 
-        $errorCodeText = [string](Get-NotePropertyValue -Object $dev -Name 'ConfigManagerErrorCode')
-        $errorCode = 0
-        if (-not [string]::IsNullOrWhiteSpace($errorCodeText)) {
-            try { $errorCode = [int]$errorCodeText } catch { $errorCode = 0 }
-        }
+        $errorCode = Get-SnapshotDeviceProblemCode -Snapshot $Snapshot -Device $dev
 
         $instanceId = [string](Get-NotePropertyValue -Object $dev -Name 'InstanceId')
         $friendlyName = [string](Get-NotePropertyValue -Object $dev -Name 'FriendlyName')
